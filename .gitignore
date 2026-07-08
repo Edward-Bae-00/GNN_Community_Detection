@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS/editor metadata
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local agent/tooling state
+.agents/
+
+# Logs and local scratch outputs
+*.log
+*.tmp
+*.bak
+
+# Local data corpora and calibration inputs
+Documents/Data/synthetic_cbp_graph_corpus_v8/
+Documents/Data/synthetic_cbp_graph_corpus_v9/
+Documents/Data/synthetic_cbp_graph_corpus_v9dev/
+Documents/Data/RealWorld_Data/
+Documents/Data/CAVIAR/
+Documents/GNN/
+
+# Generated dashboards and diagnostics
+Documents/Data/v9_dashboard/
+gnn/diagnostics/
+detection_fusion/diagnostics/

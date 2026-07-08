@@ -1,0 +1,1706 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ER Summer Ideas</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230d1614'/%3E%3Cpath d='M15 18h34v6H15zm0 11h24v6H15zm0 11h34v6H15z' fill='%23eff6e8'/%3E%3Ccircle cx='45' cy='32' r='10' fill='%23e94b35'/%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --ink: #0d1614;
+      --paper: #f4f1e8;
+      --muted: #63706a;
+      --line: #17211e;
+      --mint: #c8f2dd;
+      --blue: #84b7ff;
+      --red: #e94b35;
+      --yellow: #f2c94c;
+      --panel: rgba(244, 241, 232, .94);
+      --shadow: 0 24px 90px rgba(13, 22, 20, .16);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: Optima, Avenir Next, Helvetica Neue, Helvetica, sans-serif;
+      background:
+        radial-gradient(circle at 18% 10%, rgba(132,183,255,.35), transparent 28%),
+        radial-gradient(circle at 76% 12%, rgba(200,242,221,.6), transparent 28%),
+        linear-gradient(120deg, rgba(13,22,20,.045) 1px, transparent 1px),
+        var(--paper);
+      background-size: auto, auto, 42px 42px, auto;
+    }
+    a { color: inherit; }
+    .wrap { max-width: 1480px; margin: 0 auto; padding: 30px; }
+    .hero {
+      min-height: 90vh;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 430px;
+      gap: 44px;
+      align-items: end;
+      border-bottom: 3px solid var(--line);
+      padding: 42px 0;
+    }
+    .tag, .priority, .merge {
+      display: inline-flex;
+      border: 2px solid var(--line);
+      padding: 8px 12px;
+      font-size: 12px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      font-weight: 900;
+    }
+    .tag, .priority { background: var(--mint); }
+    .merge { background: var(--paper); color: var(--muted); }
+    h1 {
+      margin: 30px 0 24px;
+      max-width: 1040px;
+      font-family: Georgia, Times New Roman, serif;
+      font-size: clamp(54px, 9vw, 136px);
+      line-height: .86;
+      letter-spacing: 0;
+    }
+    .lede { max-width: 850px; font-size: clamp(19px, 2vw, 29px); line-height: 1.22; }
+    .hero-aside { border: 2px solid var(--line); background: var(--panel); box-shadow: var(--shadow); padding: 24px; }
+    .hero-aside h2 { margin: 0 0 12px; font-size: 22px; }
+    .hero-aside p { color: #28332f; line-height: 1.5; }
+    .nav { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    .nav a, .chip, .source a {
+      border: 2px solid var(--line);
+      background: var(--paper);
+      padding: 10px 13px;
+      text-decoration: none;
+      font-weight: 900;
+      cursor: pointer;
+      transition: transform .15s ease, background .15s ease, color .15s ease;
+    }
+    .nav a:hover, .chip:hover, .source a:hover { transform: translateY(-2px); background: var(--ink); color: var(--paper); }
+    .reader {
+      border-bottom: 3px solid var(--line);
+      padding: 44px 0 58px;
+    }
+    .reader-kicker {
+      display: inline-flex;
+      border: 2px solid var(--line);
+      background: var(--red);
+      color: var(--paper);
+      padding: 8px 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-size: 12px;
+      font-weight: 900;
+      margin-bottom: 18px;
+    }
+    .reader-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 540px;
+      gap: 34px;
+      align-items: start;
+      margin-bottom: 18px;
+    }
+    .reader h2 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: clamp(42px, 6vw, 86px);
+      line-height: .9;
+      letter-spacing: 0;
+      margin: 0 0 18px;
+    }
+    .reader-lede {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(20px, 2vw, 28px);
+      line-height: 1.24;
+      color: #28332f;
+    }
+    .read-path {
+      border: 2px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+    .read-path h3 { margin: 0 0 14px; font-size: 24px; }
+    .read-path ol { margin: 0; padding-left: 24px; }
+    .read-path li { margin: 0 0 12px; line-height: 1.42; color: #34403c; }
+    .reader-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 22px;
+    }
+    .reader-grid article {
+      border: 2px solid var(--line);
+      background: var(--panel);
+      padding: 16px;
+      min-height: 178px;
+    }
+    .reader-grid span {
+      display: inline-flex;
+      color: var(--red);
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 30px;
+      margin-bottom: 14px;
+    }
+    .reader-grid h3 { margin: 0 0 8px; font-size: 22px; line-height: 1.05; }
+    .reader-grid p { margin: 0; color: #34403c; line-height: 1.4; }
+    .roadmap {
+      border-bottom: 3px solid var(--line);
+      padding: 58px 0;
+    }
+    .road-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .road-card {
+      border: 2px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 18px;
+      min-height: 360px;
+    }
+    .road-card span {
+      display: inline-flex;
+      border: 2px solid var(--line);
+      background: var(--blue);
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 14px;
+    }
+    .road-card h3 { margin: 0 0 10px; font-size: 24px; line-height: 1.05; }
+    .road-card h4 { margin: 0 0 8px; color: #006f68; text-transform: uppercase; letter-spacing: .08em; font-size: 12px; }
+    .road-card p, .road-card dd { margin: 0; color: #34403c; line-height: 1.4; }
+    .road-card dl { margin: 16px 0 0; }
+    .road-card dt { margin-top: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; font-size: 11px; color: var(--red); }
+    .tier-block, .block { border-bottom: 3px solid var(--line); padding: 58px 0; }
+    .tier-head, .section-head {
+      display: grid;
+      grid-template-columns: 410px minmax(0, 1fr);
+      gap: 34px;
+      align-items: baseline;
+      margin-bottom: 24px;
+    }
+    .tier-head h2, .section-head h2 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: clamp(34px, 5vw, 72px);
+      line-height: .92;
+      margin: 0;
+      letter-spacing: 0;
+    }
+    .tier-head p, .section-head p { margin: 0; max-width: 820px; font-size: 18px; line-height: 1.5; color: #34403c; }
+    .idea-list { display: grid; gap: 18px; }
+    .idea {
+      display: grid;
+      grid-template-columns: 106px minmax(0, 1fr);
+      border: 2px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .idea-rail {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 18px;
+      color: var(--paper);
+      background: var(--ink);
+      min-height: 100%;
+    }
+    .idea-rail span { font-family: Georgia, Times New Roman, serif; font-size: 38px; }
+    .idea-rail b { writing-mode: vertical-rl; transform: rotate(180deg); text-transform: uppercase; letter-spacing: .08em; font-size: 12px; }
+    .idea-main { padding: 26px; }
+    .badges { display: flex; flex-wrap: wrap; gap: 8px; }
+    .idea h3 { margin: 14px 0 12px; font-size: clamp(26px, 3.2vw, 48px); line-height: .98; letter-spacing: 0; }
+    .thesis { margin: 0 0 22px; max-width: 980px; font-size: 20px; line-height: 1.38; color: #28332f; }
+    .plain-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 0 0 18px;
+    }
+    .plain-grid section {
+      border: 2px solid var(--line);
+      background: #fffdf6;
+      padding: 14px;
+      min-height: 116px;
+    }
+    .plain-grid h4 {
+      margin: 0 0 8px;
+      color: var(--red);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-size: 12px;
+    }
+    .plain-grid p { margin: 0; color: #27332f; line-height: 1.38; font-weight: 700; }
+    .idea-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      margin-bottom: 18px;
+    }
+    .idea-grid section { background: var(--paper); padding: 16px; min-height: 164px; }
+    .idea-grid h4 { margin: 0 0 8px; text-transform: uppercase; letter-spacing: .08em; color: #006f68; font-size: 12px; }
+    .idea-grid p { margin: 0; line-height: 1.42; color: #34403c; }
+    .signals, .source-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .signals span { display: inline-flex; min-height: 32px; align-items: center; padding: 6px 10px; border: 2px solid var(--line); background: var(--yellow); font-weight: 800; }
+    .chip { display: inline-flex; min-height: 34px; align-items: center; background: #e5efe7; }
+    .chip.muted { color: var(--muted); background: transparent; }
+    .answer-grid, .source-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .answer, .source { border: 2px solid var(--line); background: var(--panel); padding: 18px; box-shadow: var(--shadow); }
+    .answer span { color: var(--red); font-family: Georgia, Times New Roman, serif; font-size: 34px; }
+    .answer h3, .source h3 { margin: 0 0 10px; font-size: 22px; line-height: 1.1; }
+    .answer p, .source p { color: #34403c; line-height: 1.45; }
+    @media (max-width: 1050px) {
+      .hero, .tier-head, .section-head, .reader-layout { grid-template-columns: 1fr; }
+      .idea-grid, .source-grid, .answer-grid, .reader-grid, .plain-grid, .road-grid { grid-template-columns: 1fr; }
+      .idea { grid-template-columns: 1fr; }
+      .idea-rail { min-height: auto; flex-direction: row; align-items: center; }
+      .idea-rail b { writing-mode: horizontal-tb; transform: none; }
+    }
+    @media (max-width: 680px) { .wrap { padding: 18px; } .hero { min-height: auto; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <div>
+        <span class="tag">Summer portfolio • entity resolution</span>
+        <h1>ER Summer Ideas</h1>
+        <p class="lede">A consolidated portfolio of 30 ideas for determining whether two person records refer to the same human when name is primary, secondary fields are partial, and the search space can be millions of records.</p>
+        <nav class="nav">
+          <a href="#reader-guide">Read guide</a>
+          <a href="#high-level-plan">High-level plan</a>
+          <a href="#tier-1---the-spine">Spine</a>
+          <a href="#new-area---candidate-retrieval-at-scale">Candidate retrieval</a>
+          <a href="#tier-2---name-intelligence">Name intelligence</a>
+          <a href="#research-track---graph-learning">Graph learning</a>
+          <a href="#sensitive---decide-posture-before-build">Sensitive</a>
+          <a href="#answers">Strategic answers</a>
+          <a href="#sources">Sources</a>
+        </nav>
+      </div>
+      <aside class="hero-aside">
+        <h2>Read this first</h2>
+        <p><strong>This is a menu, not a backlog.</strong> The immediate build is the spine, base-rate evaluation, a candidate-retrieval layer for 7M-record lookup, and the M19 improvement cadence. M20/M30 are controlled gray-zone stretches once a baseline exists.</p>
+        <p><strong>Core principle:</strong> do not abandon name matching. Make name evidence smarter, calibrated, and explainable.</p>
+        <p><strong>Review ask:</strong> decide what belongs in the first prototype, what is roadmap, and what requires governance before build.</p>
+      </aside>
+    </section>
+    
+    <section class="reader" id="reader-guide">
+      <div class="reader-kicker">Read this first</div>
+      <div class="reader-layout">
+        <div>
+          <h2>What You Are About To Read</h2>
+          <p class="reader-lede">This is a decision menu for identity-resolution work, not a commitment to build 30 separate projects. The point is to separate the durable core from the retrieval layer, research bets, sensitive concepts, and later enterprise paths.</p>
+        </div>
+        <div class="read-path">
+          <h3>Fast path for review</h3>
+          <ol>
+            <li><strong>Start with Tier 1.</strong> That is the spine: synthetic gold, evidence scoring, learned scorer, explanations, and benchmark lane.</li>
+            <li><strong>Use the High-Level Plan.</strong> It explains the work in five plain steps: gold set, retrieval, scoring, challengers, outputs.</li>
+            <li><strong>Then read Candidate Retrieval.</strong> That is how one person gets searched against millions of records before pairwise scoring begins.</li>
+            <li><strong>Then read M19.</strong> That is the operating cadence: every two weeks, customize one matcher slice and compare against baseline, gold data, and new inflow.</li>
+            <li><strong>Read M20/M30 as a controlled stretch.</strong> LLM review belongs only on failure-typed or statistically uncertain cases, with conformal abstention controlling the gray-zone budget.</li>
+            <li><strong>Read Graph Learning as a challenger lane.</strong> M23/M24/M25 are useful only if graph structure beats simpler baselines.</li>
+            <li><strong>Scan Tiers 2-5.</strong> These are modular upgrades: smarter names, policy modes, graph context, review loops, and operations.</li>
+            <li><strong>Treat Sensitive as posture-only.</strong> M17 and M18 should not move without lead/compliance framing.</li>
+            <li><strong>End with Strategic Answers.</strong> That section translates the menu into decisions, risks, and prototype-vs-roadmap boundaries.</li>
+          </ol>
+        </div>
+      </div>
+      <div class="reader-grid">
+        <article>
+          <span>01</span>
+          <h3>The Plan</h3>
+          <p>Build the spine first, then add candidate retrieval so the scorer sees plausible records from a millions-scale index.</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h3>The Scoreboard</h3>
+          <p>Success means beating the baseline at a realistic base rate, then proving net-new true positives without creating unacceptable false positives or review volume.</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h3>The Review Lens</h3>
+          <p>Look for which ideas are near-term, which need governance, and which are interesting but too heavy for the first build.</p>
+        </article>
+        <article>
+          <span>04</span>
+          <h3>The Non-Negotiable</h3>
+          <p>Do not optimize the same test set until it lies. Use frozen holdouts, slice metrics, and predeclared sprint hypotheses.</p>
+        </article>
+      </div>
+    </section>
+    
+    <section class="roadmap" id="high-level-plan">
+      <div class="section-head">
+        <h2>High-Level Plan</h2>
+        <p>Read the cards through this lens: first build the measurement set, then retrieve candidates, then score and explain them, then test advanced challengers only when they beat the baseline.</p>
+      </div>
+      <div class="road-grid">
+      <article class="road-card">
+        <span>Step 1</span>
+        <h3>Build The Gold Set</h3>
+        <h4>Why?</h4>
+        <p>Without labels, every matcher looks better than it really is. The first job is to create known true/false pairs so we can measure recall, precision, false positives, and false negatives.</p>
+        <dl>
+          <dt>From / Options</dt>
+          <dd>From synthetic traveler records, controlled corruptions, small public samples, OpenSanctions Pairs for learning/benchmarking, and any later properly licensed/program-approved gold labels.</dd>
+          <dt>Output</dt>
+          <dd>A versioned evaluation set with slices plus M26 prior-shift views: transliteration, DOB errors, document conflicts, common names, rare names, missing fields, cross-script names, and expected alerts per million.</dd>
+        </dl>
+      </article>
+      <article class="road-card">
+        <span>Step 2</span>
+        <h3>Find Candidates</h3>
+        <h4>What are the options?</h4>
+        <p>Given one person, retrieve the most plausible records from a large population before scoring. Start with OpenSearch/Postgres/Solr-style retrieval, then compare fuzzy, phonetic, vector, and graph-assisted expansion.</p>
+        <dl>
+          <dt>From / Options</dt>
+          <dd>M21/M22 are the main lane. M25 is the research lane for graph-assisted retrieval.</dd>
+          <dt>Output</dt>
+          <dd>Recall@10/50/100, candidate volume, latency, and a log explaining why each candidate was retrieved.</dd>
+        </dl>
+      </article>
+      <article class="road-card">
+        <span>Step 3</span>
+        <h3>Score And Explain</h3>
+        <h4>What happens after retrieval?</h4>
+        <p>Each candidate pair gets scored using name similarity, DOB/document/country evidence, rarity weights, transliteration normalization, and learned scoring. The reviewer sees a waterfall explanation, not just a black-box score.</p>
+        <dl>
+          <dt>From / Options</dt>
+          <dd>M01/M03/M04/M06/M10/M11/M29 form the main scoring path. M27 is a stronger transformer challenger after the baseline exists.</dd>
+          <dt>Output</dt>
+          <dd>A candidate list with calibrated scores, reasons, conflicts, recommended review priority, and recall-at-fixed-precision metrics.</dd>
+        </dl>
+      </article>
+      <article class="road-card">
+        <span>Step 4</span>
+        <h3>Run Challenger Lanes</h3>
+        <h4>Where do advanced ideas fit?</h4>
+        <p>Once the baseline exists, test optional challengers against the same gold set: LLM failure-type review, conformal abstention, GNN reranking, graph-assisted retrieval, hard-positive and hard-negative mining, active learning, and cluster consistency checks.</p>
+        <dl>
+          <dt>From / Options</dt>
+          <dd>M12/M13/M15/M20/M23/M24/M25/M27/M28/M30 are challenger lanes. They do not replace the baseline unless they beat it.</dd>
+          <dt>Output</dt>
+          <dd>A champion/challenger board showing incremental true positives, new false positives, lost true positives, and which slice improved.</dd>
+        </dl>
+      </article>
+      <article class="road-card">
+        <span>Step 5</span>
+        <h3>Package The Brief</h3>
+        <h4>What do we show at the end?</h4>
+        <p>The end product is not just code. It is a working demo plus evidence that the approach beats a baseline and that each optional idea has a measured reason to exist.</p>
+        <dl>
+          <dt>From / Options</dt>
+          <dd>M05/M16/M19/M26 define the reporting and operating cadence.</dd>
+          <dt>Output</dt>
+          <dd>Demo, metrics report, base-rate alert-volume report, slice analysis, data provenance, risk guardrails, and a recommendation on what to build next.</dd>
+        </dl>
+      </article></div>
+    </section>
+    
+      <section class="tier-block" id="tier-1---the-spine">
+        <div class="tier-head">
+          <h2>Tier 1 - The Spine</h2>
+          <p>Build this first: manufacture gold, define the evidence stack, learn the scorer, explain it, and measure it on a real benchmark.</p>
+        </div>
+        <div class="idea-list">
+  <article class="idea" data-category="Core" data-tier="Tier 1 - The Spine">
+    <div class="idea-rail">
+      <span>M01</span>
+      <b>Core</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BUILD FIRST</span>
+      </div>
+      <h3>Name-First Triage with Secondary-Evidence Scoring</h3>
+      <p class="thesis">Keep name similarity as the anchor; score every supporting field as a structured contributor in a transparent waterfall, not a brittle pass/fail rule.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Score one possible match using names plus secondary evidence.</p></section>
+        <section><h4>Why it matters</h4><p>Names alone create too many false alarms and miss hard variants.</p></section>
+        <section><h4>Value</h4><p>Reviewers see a clear, field-by-field reason for each score.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>This is the difference between a fuzzy-string toy and real screening. Secondary identifiers are never guaranteed complete or correct, so they must strengthen or conflict with a name match rather than gate it.</p></section>
+        <section><h4>Potential impact</h4><p>Cuts false positives without hiding why someone was flagged or cleared, and directly attacks the common-name alert flood.</p></section>
+        <section><h4>Demo path</h4><p>Synthetic/public pair set; each pair gets a waterfall: name weight, DOB agreement, passport-country agreement, citizenship, conflict penalty, final disposition. Interactive scorecard degrades as fields drop out.</p></section>
+        <section><h4>Open-source path</h4><p>Splink waterfall charts and term-frequency adjustments; recordlinkage comparisons; RapidFuzz/jellyfish for name similarity.</p></section>
+        <section><h4>Enterprise path</h4><p>AWS Entity Resolution or SageMaker/DataRobot field-aware classifier later; first demo stays local and explainable.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Secondary identifiers can be wrong. Treat conflicts as evidence, not automatic elimination, unless policy says otherwise.</p></section>
+      </div>
+      <div class="signals"><span>Full name</span><span>Name parts</span><span>DOB/year</span><span>Passport country</span><span>Citizenship</span><span>Place of birth</span><span>Document number</span></div>
+      <div class="source-row"><a class="chip" href="https://docs.oracle.com/en/industries/financial-services/ofs-analytical-applications/customer-screening/8.1.2.9.0/csomg/matching.html" target="_blank" rel="noreferrer">Oracle Customer Screening matching guide</a><a class="chip" href="https://moj-analytical-services.github.io/splink/topic_guides/comparisons/term-frequency.html" target="_blank" rel="noreferrer">Splink term-frequency adjustments</a><a class="chip" href="https://recordlinkage.readthedocs.io/en/stable/" target="_blank" rel="noreferrer">Python Record Linkage Toolkit</a><a class="chip" href="https://aws.amazon.com/documentation-overview/entity-resolution/" target="_blank" rel="noreferrer">AWS Entity Resolution docs</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Synthetic Data" data-tier="Tier 1 - The Spine">
+    <div class="idea-rail">
+      <span>M02</span>
+      <b>Synthetic Data</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BUILD FIRST</span>
+      </div>
+      <h3>Synthetic Traveler Lab + Controlled Corruption</h3>
+      <p class="thesis">Build a synthetic identity generator that emits records with labeled corruptions and known true/false match IDs.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Create fake-but-realistic records where we know the right answer.</p></section>
+        <section><h4>Why it matters</h4><p>We need labeled examples before we can measure anything honestly.</p></section>
+        <section><h4>Value</h4><p>Gives us a safe regression set for typos, transliteration, DOB errors, and missing fields.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>No synthetic gold means no training data, no benchmark, no learned scorer. A reproducible synthetic lab sidesteps provenance problems while making error modes visible.</p></section>
+        <section><h4>Potential impact</h4><p>Turns vague quality claims into diagnostics such as recovery by transliteration, DOB transposition, dropped surname, or missing field.</p></section>
+        <section><h4>Demo path</h4><p>Generate around 500 synthetic identities with controlled corruptions and known true IDs; add a corruption-dial UI showing matcher accuracy degrade by corruption type.</p></section>
+        <section><h4>Open-source path</h4><p>Faker, FEBRL concepts, custom generator, NetworkX for synthetic co-travel edges.</p></section>
+        <section><h4>Enterprise path</h4><p>Permanent regression suite gating every future matcher release.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Synthetic data is too clean by default. Deliberately inject missingness, conflicts, cultural name variation, and inconsistent transliteration or the numbers will lie.</p></section>
+      </div>
+      <div class="signals"><span>Generated names</span><span>DOBs</span><span>Passport country</span><span>Citizenship</span><span>Place of birth</span><span>Travel party</span><span>Itinerary</span><span>Known true ID</span></div>
+      <div class="source-row"><a class="chip" href="https://users.cecs.anu.edu.au/~Peter.Christen/Febrl/febrl-0.3/febrldoc-0.3/manual.html" target="_blank" rel="noreferrer">FEBRL generator</a><a class="chip" href="https://faker.readthedocs.io/" target="_blank" rel="noreferrer">Faker</a><a class="chip" href="https://recordlinkage.readthedocs.io/en/stable/" target="_blank" rel="noreferrer">Python Record Linkage Toolkit</a><a class="chip" href="https://arxiv.org/abs/1807.06657" target="_blank" rel="noreferrer">Airline PNR generation using GANs</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Learning" data-tier="Tier 1 - The Spine">
+    <div class="idea-rail">
+      <span>M03</span>
+      <b>Learning</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BUILD FIRST</span>
+      </div>
+      <h3>Gold-Positive Learned Scorer</h3>
+      <p class="thesis">Train a classifier on proven true positives so the model learns real matching behavior, including pairs where names are not visually close because stronger identity evidence proves identity.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Train a simple model on known true/false pairs.</p></section>
+        <section><h4>Why it matters</h4><p>Rules are a baseline; learned scoring can use many weak signals together.</p></section>
+        <section><h4>Value</h4><p>Produces calibrated scores we can compare against the baseline.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>This is the core strategic opportunity. OpenSanctions already demonstrates a production baseline using logistic regression on entity fields; the benchmark paper reports 91.33% F1 for that baseline and higher LLM challengers.</p></section>
+        <section><h4>Potential impact</h4><p>Turns adjudication history into a measurable, calibrated model instead of tribal knowledge. Calibrated probabilities enable defensible thresholds.</p></section>
+        <section><h4>Demo path</h4><p>Train logistic regression and gradient boosting on OpenSanctions Pairs or synthetic gold; compare against rules-only; show SHAP attribution per decision.</p></section>
+        <section><h4>Open-source path</h4><p>scikit-learn, XGBoost, Splink feature exports, nomenklatura regression model as reference, Zingg labeling concepts.</p></section>
+        <section><h4>Enterprise path</h4><p>SageMaker/DataRobot with monitored training, drift reports, threshold governance, retrained on properly licensed/program data.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Gold is only gold if the source is trustworthy; historical decisions encode bias/policy drift. Avoid leakage: do not train on the same strong identifier you are predicting from. OpenSanctions Pairs is CC-BY-NC-4.0/non-commercial. Use it for learning, benchmark design, and method exploration only; businesses need a data license, and trained artifacts should not transfer into commercial/operational work without a license conversation.</p></section>
+      </div>
+      <div class="signals"><span>Biometric/passport-confirmed labels</span><span>Prior TP/FP</span><span>Name-distance features</span><span>Field-agreement features</span><span>Rarity features</span></div>
+      <div class="source-row"><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a><a class="chip" href="https://huggingface.co/datasets/sanctions-er-anon/opensanctions_pairs" target="_blank" rel="noreferrer">OpenSanctions Pairs dataset card</a><a class="chip" href="https://github.com/opensanctions/nomenklatura" target="_blank" rel="noreferrer">OpenSanctions nomenklatura</a><a class="chip" href="https://sites.lsa.umich.edu/mgms/wp-content/uploads/sites/283/2021/11/entity_resolution_20210628.pdf" target="_blank" rel="noreferrer">Biometrically Linked Administrative Data paper</a><a class="chip" href="https://scikit-learn.org/stable/" target="_blank" rel="noreferrer">scikit-learn</a><a class="chip" href="https://github.com/zinggAI/zingg" target="_blank" rel="noreferrer">Zingg</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Explainability" data-tier="Tier 1 - The Spine">
+    <div class="idea-rail">
+      <span>M04</span>
+      <b>Explainability</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BUILD FIRST</span>
+      </div>
+      <h3>Decision Waterfall &amp; Reviewer Explanation</h3>
+      <p class="thesis">Every candidate emits a human-readable rationale built from real features: positive evidence, negative evidence, and uncertainty.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Turn each score into a short evidence explanation.</p></section>
+        <section><h4>Why it matters</h4><p>A match score is not useful if no one can understand why it happened.</p></section>
+        <section><h4>Value</h4><p>Makes the demo credible for reviewers and easier to audit.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>For watchlist-style screening, explainability is how reviewers know why a candidate deserves attention and why a false positive was cleared.</p></section>
+        <section><h4>Potential impact</h4><p>Cuts adjudication time, builds trust, and creates an audit trail.</p></section>
+        <section><h4>Demo path</h4><p>Side-by-side candidate card with contribution bars and a one-sentence templated explanation generated from actual feature values.</p></section>
+        <section><h4>Open-source path</h4><p>Splink waterfall concepts, local template explanations, SHAP for the learned scorer.</p></section>
+        <section><h4>Enterprise path</h4><p>Maps to case management: why flagged, why cleared, and what evidence was missing.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Explanation must reflect actual feature contributions, never post-hoc invented prose.</p></section>
+      </div>
+      <div class="signals"><span>Name similarity</span><span>Rare-token weight</span><span>DOB evidence</span><span>Country evidence</span><span>Document evidence</span><span>Model disagreement</span><span>Graph evidence</span></div>
+      <div class="source-row"><a class="chip" href="https://moj-analytical-services.github.io/splink/" target="_blank" rel="noreferrer">Splink</a><a class="chip" href="https://moj-analytical-services.github.io/splink/topic_guides/comparisons/term-frequency.html" target="_blank" rel="noreferrer">Splink term-frequency adjustments</a><a class="chip" href="https://docs.oracle.com/en/industries/financial-services/ofs-analytical-applications/customer-screening/8.1.2.9.0/csomg/matching.html" target="_blank" rel="noreferrer">Oracle Customer Screening matching guide</a><a class="chip" href="https://shap.readthedocs.io/" target="_blank" rel="noreferrer">SHAP</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Benchmark" data-tier="Tier 1 - The Spine">
+    <div class="idea-rail">
+      <span>M05</span>
+      <b>Benchmark</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BUILD FIRST</span>
+      </div>
+      <h3>Open Watchlist Benchmark Lane</h3>
+      <p class="thesis">Use OpenSanctions Pairs and official public screening feeds as the domain-relevant evaluation lane.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Use public watchlist-style benchmark data for evaluation.</p></section>
+        <section><h4>Why it matters</h4><p>We need a realistic external test lane before any program data is involved.</p></section>
+        <section><h4>Value</h4><p>Creates a leaderboard for rules, search, learned scoring, embeddings, LLM, and graph ideas.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>It is the closest public proxy to the real problem: sanctions/OSINT data, noisy attributes, multilingual names, cross-script variation, and analyst dedup judgments.</p></section>
+        <section><h4>Potential impact</h4><p>Creates a credible current leaderboard across rules, Splink, embeddings, trained classifiers, and optional LLM challengers without touching operational data. F1 remains a paper-comparison metric; the operating metric is recall at fixed high precision or review-volume at fixed recall.</p></section>
+        <section><h4>Demo path</h4><p>Start with the 1,000-pair sample, scale to the full 755,540 pairs, compute baseline features, and reproduce a rules-vs-modern-model leaderboard. Then report recall at target precision and expected review volume.</p></section>
+        <section><h4>Open-source path</h4><p>OpenSanctions Pairs, Hugging Face datasets, Splink, scikit-learn, sentence-transformers, nomenklatura.</p></section>
+        <section><h4>Enterprise path</h4><p>Same lane can later benchmark SageMaker/DataRobot/LLM approaches against properly licensed or program data.</p></section>
+        <section><h4>Risk / guardrail</h4><p>OpenSanctions Pairs has 755,540 labeled pairs; the 1,000-pair file is only a representative sample. OpenSanctions Pairs is CC-BY-NC-4.0/non-commercial. Use it for learning, benchmark design, and method exploration only; businesses need a data license, and trained artifacts should not transfer into commercial/operational work without a license conversation.</p></section>
+      </div>
+      <div class="signals"><span>Pair label</span><span>Entity type</span><span>Aliases</span><span>Dates</span><span>Countries</span><span>Identifiers</span><span>Source datasets</span></div>
+      <div class="source-row"><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a><a class="chip" href="https://huggingface.co/datasets/sanctions-er-anon/opensanctions_pairs" target="_blank" rel="noreferrer">OpenSanctions Pairs dataset card</a><a class="chip" href="https://www.opensanctions.org/docs/opensource/pairs/" target="_blank" rel="noreferrer">OpenSanctions Pairs docs</a><a class="chip" href="https://api.opensanctions.org/docs" target="_blank" rel="noreferrer">OpenSanctions matching API docs</a><a class="chip" href="https://ofac.treasury.gov/sanctions-list-service" target="_blank" rel="noreferrer">OFAC Sanctions List Service</a><a class="chip" href="https://data.commerce.gov/consolidated-screening-list-api" target="_blank" rel="noreferrer">Consolidated Screening List API</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Benchmark" data-tier="Tier 1 - The Spine">
+    <div class="idea-rail">
+      <span>M26</span>
+      <b>Benchmark</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BUILD FIRST</span>
+      </div>
+      <h3>Base-Rate / Prior-Shift Evaluation</h3>
+      <p class="thesis">Evaluate every matcher under realistic deployment base rates, not only balanced pair distributions, because precision is base-rate dependent and balanced benchmarks systematically overstate it.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Re-score models when true matches are rare.</p></section>
+        <section><h4>Why it matters</h4><p>Balanced benchmarks overstate precision in real screening.</p></section>
+        <section><h4>Value</h4><p>Shows expected alert volume and precision before deployment surprises.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>OpenSanctions Pairs and most ER benchmarks are roughly balanced. Real screening is closer to a rare-match haystack. False positives scale with the size of the negative class, so the headline F1 from a benchmark paper does not transfer cleanly to deployment.</p></section>
+        <section><h4>Potential impact</h4><p>Turns optimistic benchmark numbers into honest operating numbers, makes threshold selection defensible, and shows expected review volume before anyone is surprised in production.</p></section>
+        <section><h4>Demo path</h4><p>Take the trained scorer from M03, hold the gold labels fixed, then resample evaluation across base-rate sweeps such as 1:100, 1:10k, and 1:1M. Plot precision, recall, and expected reviewer alert volume at each prevalence and fixed threshold; show the precision cliff and the threshold needed to hold a target review budget.</p></section>
+        <section><h4>Open-source path</h4><p>scikit-learn metrics with stratified resampling; precision-recall under prior correction; simple Monte Carlo over M21/M22 candidate-retrieval output.</p></section>
+        <section><h4>Enterprise path</h4><p>Standing prior-shift report in the M19 board, with threshold governance tied to a declared review-capacity budget.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Resampling assumes score distributions are stable across prevalence. Validate against the true retrieval-stage negative distribution from M21/M22, not synthetic negatives only. Report assumed base rate with every precision number.</p></section>
+      </div>
+      <div class="signals"><span>Assumed base rate</span><span>Threshold</span><span>Precision at prevalence</span><span>Recall at prevalence</span><span>Expected alerts per 1M</span><span>Review-budget breach flag</span></div>
+      <div class="source-row"><a class="chip" href="https://scikit-learn.org/stable/modules/generated/sklearn.metrics.precision_recall_curve.html" target="_blank" rel="noreferrer">scikit-learn precision-recall</a><a class="chip" href="https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0118432" target="_blank" rel="noreferrer">Saito &amp; Rehmsmeier PR vs ROC</a><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a></div>
+    </div>
+  </article></div>
+      </section>
+      <section class="tier-block" id="new-area---candidate-retrieval-at-scale">
+        <div class="tier-head">
+          <h2>New Area - Candidate Retrieval at Scale</h2>
+          <p>Find the plausible candidates first. This is the open-source replacement lane for Elasticsearch-style lookup over millions of records.</p>
+        </div>
+        <div class="idea-list">
+  <article class="idea" data-category="Search / Blocking" data-tier="New Area - Candidate Retrieval at Scale">
+    <div class="idea-rail">
+      <span>M21</span>
+      <b>Search / Blocking</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BUILD SUPPORT</span>
+      </div>
+      <h3>Open Candidate Retrieval Layer for 7M-Record Search</h3>
+      <p class="thesis">Separate candidate retrieval from final matching: use open-source search/blocking indexes to turn one person query against 7 million records into a small candidate set for the scorer.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Find the small set of plausible records before scoring.</p></section>
+        <section><h4>Why it matters</h4><p>At millions of records, pairwise scoring everything is impossible.</p></section>
+        <section><h4>Value</h4><p>Turns one-person lookup into top-K candidates the scorer can handle.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Pairwise matching is useless if the system cannot find plausible candidates quickly. The retrieval layer should use DOB, document IDs, country fields, phonetic/name keys, n-grams, and alias fields to reduce 7 million records to top-K candidates before M01/M03 score them.</p></section>
+        <section><h4>Potential impact</h4><p>Replaces proprietary Elasticsearch dependency in the prototype path and makes the August demo more operationally realistic: query one person, retrieve candidates, score, explain, and compare to baseline.</p></section>
+        <section><h4>Demo path</h4><p>Index synthetic/public records at 7M-scale or sampled scale; enter one person; show retrieval passes: exact document/DOB filters, phonetic or n-gram name search, alias expansion, top-K candidate list, then final score waterfall.</p></section>
+        <section><h4>Open-source path</h4><p>OpenSearch for closest Elasticsearch-style replacement; Apache Solr/Lucene for mature open search; PostgreSQL pg_trgm for a simple local SQL lane; Typesense/Meilisearch for lightweight typo-tolerant prototypes.</p></section>
+        <section><h4>Enterprise path</h4><p>Candidate-retrieval service with index governance, query audit, latency SLOs, and A/B comparison against the current Elasticsearch baseline.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Retrieval mistakes create invisible false negatives. Never rely on one strict filter. Use multiple retrieval passes, union candidate sets, log why each candidate was retrieved, and measure recall-at-K against gold data.</p></section>
+      </div>
+      <div class="signals"><span>Query person</span><span>DOB</span><span>DOB year</span><span>Document number</span><span>Issuing country</span><span>Name n-grams</span><span>Phonetic keys</span><span>Alias tokens</span><span>Candidate rank</span><span>Retrieval pass</span></div>
+      <div class="source-row"><a class="chip" href="https://opensearch.org/about/" target="_blank" rel="noreferrer">OpenSearch</a><a class="chip" href="https://solr.apache.org/guide/solr/latest/query-guide/standard-query-parser.html" target="_blank" rel="noreferrer">Apache Solr fuzzy query parser</a><a class="chip" href="https://www.postgresql.org/docs/17/pgtrgm.html" target="_blank" rel="noreferrer">PostgreSQL pg_trgm</a><a class="chip" href="https://typesense.org/docs/28.0/api/search.html" target="_blank" rel="noreferrer">Typesense search API</a><a class="chip" href="https://www.meilisearch.com/docs/reference/api/search" target="_blank" rel="noreferrer">Meilisearch search API</a><a class="chip" href="https://moj-analytical-services.github.io/splink/demos/tutorials/03_Blocking.html" target="_blank" rel="noreferrer">Splink blocking tutorial</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Search / Blocking" data-tier="New Area - Candidate Retrieval at Scale">
+    <div class="idea-rail">
+      <span>M22</span>
+      <b>Search / Blocking</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BUILD SUPPORT</span>
+      </div>
+      <h3>Multi-Pass Blocking Cascade: Exact, Fuzzy, Phonetic, Vector</h3>
+      <p class="thesis">Use a cascade of cheap-to-expensive retrieval passes: exact document/DOB matches first, then DOB-year/name keys, phonetic aliases, trigram/fuzzy search, and optional vector search for hard name variation.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Use several retrieval passes instead of one fragile search.</p></section>
+        <section><h4>Why it matters</h4><p>Exact document, DOB, fuzzy name, phonetic, and vector methods catch different cases.</p></section>
+        <section><h4>Value</h4><p>Improves recall while keeping candidate volume measurable.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>A single query strategy will miss people. Document filters are precise but brittle; DOB is strong but dirty; names are noisy; embeddings can help but should not own the whole retrieval problem.</p></section>
+        <section><h4>Potential impact</h4><p>Improves recall at practical latency by giving each signal a chance to retrieve candidates while keeping the expensive scorer focused on a small set.</p></section>
+        <section><h4>Demo path</h4><p>Show a Sankey-style funnel from 7M records to candidate sets by pass: document hit, DOB+surname block, DOB-year+phonetic block, trigram name hit, vector hit. Then report recall@10, recall@50, and candidate volume.</p></section>
+        <section><h4>Open-source path</h4><p>Splink/recordlinkage blocking rules, Postgres B-tree plus pg_trgm indexes, OpenSearch/Solr filter queries, Qdrant/OpenSearch k-NN for optional filtered vector retrieval.</p></section>
+        <section><h4>Enterprise path</h4><p>Retrieval playbook with pass-level metrics, per-pass latency, pass-level false-negative audits, and promotion rules for new retrieval passes.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Too-loose retrieval floods the scorer; too-tight retrieval misses true matches. Track marginal candidates and marginal true positives per pass, then prune passes that add noise without recoveries.</p></section>
+      </div>
+      <div class="signals"><span>Exact document match</span><span>DOB exact/partial</span><span>DOB year</span><span>Surname key</span><span>Given-name key</span><span>Soundex/phonetic code</span><span>Trigram similarity</span><span>Embedding neighbor</span><span>Recall@K</span><span>Candidate volume</span></div>
+      <div class="source-row"><a class="chip" href="https://moj-analytical-services.github.io/splink/demos/tutorials/03_Blocking.html" target="_blank" rel="noreferrer">Splink blocking tutorial</a><a class="chip" href="https://recordlinkage.readthedocs.io/en/stable/" target="_blank" rel="noreferrer">Python Record Linkage Toolkit</a><a class="chip" href="https://www.postgresql.org/docs/17/pgtrgm.html" target="_blank" rel="noreferrer">PostgreSQL pg_trgm</a><a class="chip" href="https://docs.opensearch.org/docs/2.11/search-plugins/knn/filter-search-knn/" target="_blank" rel="noreferrer">OpenSearch k-NN with filters</a><a class="chip" href="https://qdrant.tech/documentation/concepts/filtering/" target="_blank" rel="noreferrer">Qdrant filtering</a><a class="chip" href="https://solr.apache.org/guide/solr/latest/query-guide/standard-query-parser.html" target="_blank" rel="noreferrer">Apache Solr fuzzy query parser</a></div>
+    </div>
+  </article></div>
+      </section>
+      <section class="tier-block" id="tier-2---name-intelligence">
+        <div class="tier-head">
+          <h2>Tier 2 - Name Intelligence</h2>
+          <p>Roadmap and upside ideas that become stronger after the spine exists.</p>
+        </div>
+        <div class="idea-list">
+  <article class="idea" data-category="Name Intelligence" data-tier="Tier 2 - Name Intelligence">
+    <div class="idea-rail">
+      <span>M06</span>
+      <b>Name Intelligence</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Rare/Common-Name Frequency Weighting</h3>
+      <p class="thesis">Agreement on rare tokens is stronger evidence than agreement on common tokens; near-misses on rare tokens deserve review.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Give rare names more weight than common names.</p></section>
+        <section><h4>Why it matters</h4><p>Matching on Smith is weaker evidence than matching on a rare surname.</p></section>
+        <section><h4>Value</h4><p>Reduces common-name false positives and highlights rare-name near misses.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Splink term-frequency adjustment formalizes the idea and makes the name-trends instinct measurable instead of hand-wavy.</p></section>
+        <section><h4>Potential impact</h4><p>Improves precision on common names and triage on rare-name collisions.</p></section>
+        <section><h4>Demo path</h4><p>Show two pairs with identical string similarity but different rarity profiles, then run weighted-vs-unweighted ablation.</p></section>
+        <section><h4>Open-source path</h4><p>Splink TF adjustments, SSA/Census frequency tables, per-population token-frequency profiles.</p></section>
+        <section><h4>Enterprise path</h4><p>Calibrated rarity feature inside the broader model.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Frequency tables are population-specific. Using the wrong reference population distorts scores.</p></section>
+      </div>
+      <div class="signals"><span>First-name frequency</span><span>Surname frequency</span><span>Watchlist token frequency</span><span>Traveler-population token frequency</span><span>Particles/honorifics</span></div>
+      <div class="source-row"><a class="chip" href="https://moj-analytical-services.github.io/splink/topic_guides/comparisons/term-frequency.html" target="_blank" rel="noreferrer">Splink term-frequency adjustments</a><a class="chip" href="https://moj-analytical-services.github.io/splink/" target="_blank" rel="noreferrer">Splink</a><a class="chip" href="https://www.ssa.gov/OACT/babynames/" target="_blank" rel="noreferrer">SSA baby names</a><a class="chip" href="https://www.census.gov/topics/population/genealogy/data.html" target="_blank" rel="noreferrer">US Census surnames</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Name Intelligence" data-tier="Tier 2 - Name Intelligence">
+    <div class="idea-rail">
+      <span>M29</span>
+      <b>Name Intelligence</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Transliteration &amp; Romanization Normalization</h3>
+      <p class="thesis">Make script normalization a first-class measured pipeline stage feeding every matcher, rather than an implicit assumption buried inside cross-script rule routing.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Normalize names across scripts before matching.</p></section>
+        <section><h4>Why it matters</h4><p>Raw spelling misses romanization and transliteration variants.</p></section>
+        <section><h4>Value</h4><p>Improves cross-script recall for every downstream matcher.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Transliteration is foundational. The same Arabic, Cyrillic, or CJK name can romanize many ways across sources; without a normalization stage every downstream matcher inherits that inconsistency.</p></section>
+        <section><h4>Potential impact</h4><p>Cheap, broad recall improvement on the cross-script slice, plus a clean ablation showing lift attributable to normalization alone.</p></section>
+        <section><h4>Demo path</h4><p>Run the cross-script slice through uroman/ICU romanization plus a learned transliteration-variant option. Compare matcher recall with normalization on versus off, report per-script lift, and show any precision cost from over-collapsing distinct names.</p></section>
+        <section><h4>Open-source path</h4><p>uroman, ICU4C/PyICU transliteration, unidecode as a weak baseline, optional learned transliteration variants from M02 synthetic corruptions.</p></section>
+        <section><h4>Enterprise path</h4><p>Shared normalization service with per-script versioning and a normalization-quality dashboard.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Aggressive normalization can collapse genuinely different names. Keep original strings as parallel features, never discard them, and measure precision cost per script.</p></section>
+      </div>
+      <div class="signals"><span>Source script</span><span>Romanized form</span><span>Transliteration variant set</span><span>Per-script recall lift</span><span>Collapse-collision flag</span></div>
+      <div class="source-row"><a class="chip" href="https://github.com/isi-nlp/uroman" target="_blank" rel="noreferrer">uroman</a><a class="chip" href="https://unicode-org.github.io/icu/userguide/transforms/general/" target="_blank" rel="noreferrer">ICU transliteration</a><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Name Intelligence" data-tier="Tier 2 - Name Intelligence">
+    <div class="idea-rail">
+      <span>M07</span>
+      <b>Name Intelligence</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Cross-Script Stress Lane + Culture-Aware Rule Routing</h3>
+      <p class="thesis">Detect a name's structural or orthographic profile and route it to the matching ruleset built for that pattern.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Route different name structures through better rules.</p></section>
+        <section><h4>Why it matters</h4><p>Spanish compound surnames, Arabic names, and East Asian name order fail differently.</p></section>
+        <section><h4>Value</h4><p>Improves recall for names generic English rules handle poorly.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Cross-script and multilingual names are documented difficulties. One ruleset cannot fit Spanish compound surnames, Arabic components, and East-Asian order simultaneously.</p></section>
+        <section><h4>Potential impact</h4><p>Improves recall in the zones generic matchers often miss.</p></section>
+        <section><h4>Demo path</h4><p>Small cross-script challenge set; compare phonetic, edit-distance, embedding, and rule-pack candidates; ablate a Spanish slice with and without a rule pack.</p></section>
+        <section><h4>Open-source path</h4><p>OpenSanctions Pairs sample, unidecode/ICU transliteration, sentence-transformers, RapidFuzz.</p></section>
+        <section><h4>Enterprise path</h4><p>Language-specific match packs plus per-script performance dashboards.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Frame strictly as matching behavior and text normalization, not identity or nationality inference. If using OpenSanctions examples: OpenSanctions Pairs is CC-BY-NC-4.0/non-commercial. Use it for learning, benchmark design, and method exploration only; businesses need a data license, and trained artifacts should not transfer into commercial/operational work without a license conversation.</p></section>
+      </div>
+      <div class="signals"><span>Script</span><span>Romanized variants</span><span>Transliteration family</span><span>Language/country context</span><span>Alias list</span><span>Token order</span></div>
+      <div class="source-row"><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a><a class="chip" href="https://huggingface.co/datasets/sanctions-er-anon/opensanctions_pairs" target="_blank" rel="noreferrer">OpenSanctions Pairs dataset card</a><a class="chip" href="https://docs.oracle.com/en/industries/financial-services/ofs-analytical-applications/customer-screening/8.1.2.9.0/csomg/matching.html" target="_blank" rel="noreferrer">Oracle Customer Screening matching guide</a><a class="chip" href="https://www.sbert.net/docs/sentence_transformer/usage/semantic_textual_similarity.html" target="_blank" rel="noreferrer">Sentence Transformers</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Name Intelligence" data-tier="Tier 2 - Name Intelligence">
+    <div class="idea-rail">
+      <span>M08</span>
+      <b>Name Intelligence</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Nickname &amp; Diminutive Equivalence</h3>
+      <p class="thesis">Explicitly model nickname/diminutive equivalence that edit distance and phonetics cannot catch.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Teach the system nickname and diminutive relationships.</p></section>
+        <section><h4>Why it matters</h4><p>Bob and Robert are close in identity space but not string space.</p></section>
+        <section><h4>Value</h4><p>Recovers matches edit distance will never find.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Bob/Robert, Pepe/Jose, Sasha/Alexander and similar patterns are guaranteed false negatives for pure string metrics.</p></section>
+        <section><h4>Potential impact</h4><p>Recovers otherwise guaranteed misses in given-name matching.</p></section>
+        <section><h4>Demo path</h4><p>Integrate a nickname lookup and show which benchmark true positives are newly caught.</p></section>
+        <section><h4>Open-source path</h4><p>Public nickname/diminutive datasets and per-language extension tables.</p></section>
+        <section><h4>Enterprise path</h4><p>Curated multilingual nickname knowledge base maintained alongside rule packs.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Nickname maps are ambiguous and culture-specific; keep them probabilistic, not one-to-one.</p></section>
+      </div>
+      <div class="signals"><span>Given-name variants</span><span>Diminutive families</span><span>Language context</span><span>Formal/informal pairs</span></div>
+      <div class="source-row"><a class="chip" href="https://docs.oracle.com/en/industries/financial-services/ofs-analytical-applications/customer-screening/8.1.2.9.0/csomg/matching.html" target="_blank" rel="noreferrer">Oracle Customer Screening matching guide</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Advanced / Research" data-tier="Tier 2 - Name Intelligence">
+    <div class="idea-rail">
+      <span>M09</span>
+      <b>Advanced / Research</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">RESEARCH</span>
+      </div>
+      <h3>Contrastive Name Embeddings + ANN Candidate Generation</h3>
+      <p class="thesis">Train a contrastive model that maps names into a vector space where variants cluster and unrelated names separate, then index with Faiss.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Learn name embeddings for difficult variants.</p></section>
+        <section><h4>Why it matters</h4><p>Some transliteration and cross-script matches are not obvious by spelling.</p></section>
+        <section><h4>Value</h4><p>Adds a research path for hard name retrieval and candidate generation.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>This is how frontier systems can capture cross-lingual and cross-script variation that string metrics cannot reach.</p></section>
+        <section><h4>Potential impact</h4><p>Catches true positives that score low on every string metric and improves candidate generation at scale.</p></section>
+        <section><h4>Demo path</h4><p>sentence-transformers plus triplet loss on synthetic variants; Faiss nearest-neighbor retrieval for misspelled/transliterated inputs.</p></section>
+        <section><h4>Open-source path</h4><p>sentence-transformers, Faiss, synthetic-gold pairs from M02.</p></section>
+        <section><h4>Enterprise path</h4><p>Production ANN index over the full watchlist with periodic re-embedding.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Lead/research track, not a first build. Embeddings can encode spurious similarity and need explainable scoring for disposition.</p></section>
+      </div>
+      <div class="signals"><span>Name string</span><span>Script</span><span>Romanized variants</span><span>Embedding vector</span><span>ANN neighbor distance</span></div>
+      <div class="source-row"><a class="chip" href="https://www.sbert.net/docs/sentence_transformer/usage/semantic_textual_similarity.html" target="_blank" rel="noreferrer">Sentence Transformers</a><a class="chip" href="https://github.com/facebookresearch/faiss" target="_blank" rel="noreferrer">Faiss</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Advanced / Learning" data-tier="Tier 2 - Name Intelligence">
+    <div class="idea-rail">
+      <span>M27</span>
+      <b>Advanced / Learning</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">RESEARCH</span>
+      </div>
+      <h3>Cross-Encoder Name Matcher</h3>
+      <p class="thesis">Fine-tune a small multilingual cross-encoder that takes a name pair plus minimal allowed context and outputs a calibrated match probability.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Train a compact transformer to score two names together.</p></section>
+        <section><h4>Why it matters</h4><p>Cross-encoders model interactions that bi-encoders and string metrics miss.</p></section>
+        <section><h4>Value</h4><p>A strong challenger between cheap string scoring and expensive LLM reasoning.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Bi-encoders are useful for retrieval because they encode each name independently, but a cross-encoder scores both names together and can model token interaction directly. It is the modern middle ground between cheap string metrics and full LLM reasoning.</p></section>
+        <section><h4>Potential impact</h4><p>A calibrated learned scorer could lift hard cross-script, transliteration, nickname, and token-order cases without the cost and governance burden of a general LLM.</p></section>
+        <section><h4>Demo path</h4><p>Fine-tune a MiniLM, char-aware, or multilingual cross-encoder on OpenSanctions Pairs, M02 synthetic gold, and M28 hard negatives. Compare against logistic/XGBoost and M09 bi-encoder on recall-at-fixed-precision; calibrate the output and test whether attention or feature attribution can support M04 explanations.</p></section>
+        <section><h4>Open-source path</h4><p>Sentence Transformers cross-encoders, Hugging Face transformers, char-level or byte-level multilingual backbones, scikit-learn calibration.</p></section>
+        <section><h4>Enterprise path</h4><p>Distilled or quantized cross-encoder served behind the candidate-retrieval or gray-band queue, versioned in a model registry with drift tracking.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Easy to leak strong identifiers into the text input. Restrict to name plus minimal allowed context, hold out by source/time, and use only as a reranker over retrieved candidates because it is too slow for all-pairs search.</p></section>
+      </div>
+      <div class="signals"><span>Name pair tokens</span><span>Script/context tokens</span><span>Cross-encoder probability</span><span>Calibration bin</span><span>Attention/feature attribution</span></div>
+      <div class="source-row"><a class="chip" href="https://sbert.net/docs/cross_encoder/training_overview.html" target="_blank" rel="noreferrer">Sentence Transformers cross-encoders</a><a class="chip" href="https://arxiv.org/abs/2004.00584" target="_blank" rel="noreferrer">Ditto deep entity matching</a><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a></div>
+    </div>
+  </article></div>
+      </section>
+      <section class="tier-block" id="tier-3---scoring-&amp;-policy">
+        <div class="tier-head">
+          <h2>Tier 3 - Scoring &amp; Policy</h2>
+          <p>Roadmap and upside ideas that become stronger after the spine exists.</p>
+        </div>
+        <div class="idea-list">
+  <article class="idea" data-category="Scoring" data-tier="Tier 3 - Scoring &amp; Policy">
+    <div class="idea-rail">
+      <span>M10</span>
+      <b>Scoring</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Conflict-Aware Scoring with Policy Modes</h3>
+      <p class="thesis">Expose policy modes: high-recall, balanced, and tight-review. The same candidate can land differently under different human-owned risk postures.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Show how policy thresholds change match decisions.</p></section>
+        <section><h4>Why it matters</h4><p>High-recall screening and tight-review screening are not the same problem.</p></section>
+        <section><h4>Value</h4><p>Makes risk appetite explicit instead of hidden in one threshold.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Risk appetite should be explicit instead of buried in one opaque threshold.</p></section>
+        <section><h4>Potential impact</h4><p>Aligns the system to the program's real risk posture and makes that posture auditable.</p></section>
+        <section><h4>Demo path</h4><p>Run three policy modes over the same candidate set; show disposition shifts and alert volume per mode.</p></section>
+        <section><h4>Open-source path</h4><p>Configurable Python scoring rules; Splink match-weight visualization.</p></section>
+        <section><h4>Enterprise path</h4><p>Policy modes map to operational queues and thresholds.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Humans own risk appetite; the model scores, ranks, and explains. It does not decide policy.</p></section>
+      </div>
+      <div class="signals"><span>DOB exact/partial/conflict</span><span>Passport-country conflict</span><span>Citizenship match/conflict</span><span>POB match/conflict</span><span>Name strength</span></div>
+      <div class="source-row"><a class="chip" href="https://docs.oracle.com/en/industries/financial-services/ofs-analytical-applications/customer-screening/8.1.2.9.0/csomg/matching.html" target="_blank" rel="noreferrer">Oracle Customer Screening matching guide</a><a class="chip" href="https://moj-analytical-services.github.io/splink/" target="_blank" rel="noreferrer">Splink</a><a class="chip" href="https://aws.amazon.com/documentation-overview/entity-resolution/" target="_blank" rel="noreferrer">AWS Entity Resolution docs</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Document &amp; Date Signals" data-tier="Tier 3 - Scoring &amp; Policy">
+    <div class="idea-rail">
+      <span>M11</span>
+      <b>Document &amp; Date Signals</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Strong-Identifier Modeling: DOB &amp; Documents Done Right</h3>
+      <p class="thesis">Treat DOB as a graded signal and passport/document records as first-class entities with lifecycle and error modes.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Model DOB and document fields as noisy but powerful evidence.</p></section>
+        <section><h4>Why it matters</h4><p>Strong identifiers still have typos, lifecycle changes, and partial conflicts.</p></section>
+        <section><h4>Value</h4><p>Improves both true-match recovery and false-positive clearing.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>DOB and document fields are often treated as perfect string-equality checks, throwing away structured failure modes.</p></section>
+        <section><h4>Potential impact</h4><p>Improves handling of high-value signals without pretending they are flawless.</p></section>
+        <section><h4>Demo path</h4><p>DOB-comparison function scored on date-corruption slices; synthetic document lifecycle with renewal, typo, conflicting country, and name-order variation.</p></section>
+        <section><h4>Open-source path</h4><p>Rules and feature engineering; optional MRZ parsing only on public/example records.</p></section>
+        <section><h4>Enterprise path</h4><p>Document identity graph linked to people, cases, and adjudications.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Passport/document data is sensitive. Use synthetic or explicitly public/example records only.</p></section>
+      </div>
+      <div class="signals"><span>Passport number</span><span>Issuing country</span><span>Issue/expiry dates</span><span>MRZ-normalized name</span><span>Document history</span><span>DOB</span><span>Place of birth</span></div>
+      <div class="source-row"><a class="chip" href="https://aws.amazon.com/documentation-overview/entity-resolution/" target="_blank" rel="noreferrer">AWS Entity Resolution docs</a><a class="chip" href="https://docs.oracle.com/en/industries/financial-services/ofs-analytical-applications/customer-screening/8.1.2.9.0/csomg/matching.html" target="_blank" rel="noreferrer">Oracle Customer Screening matching guide</a><a class="chip" href="https://www.tsa.gov/news/press/factsheets/facial-comparison-technology" target="_blank" rel="noreferrer">TSA facial-comparison fact sheet</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Scoring" data-tier="Tier 3 - Scoring &amp; Policy">
+    <div class="idea-rail">
+      <span>M12</span>
+      <b>Scoring</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">USEFUL STRETCH</span>
+      </div>
+      <h3>Matcher Disagreement as a Signal</h3>
+      <p class="thesis">Run multiple matchers and treat disagreement as a review-priority signal.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Compare multiple matchers and use disagreement as a signal.</p></section>
+        <section><h4>Why it matters</h4><p>Different methods fail in different ways.</p></section>
+        <section><h4>Value</h4><p>Finds valuable edge cases for review and future tuning.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Rules, probabilistic linkage, embeddings, and LLM reasoners fail differently. Disagreement surfaces high-value edge cases.</p></section>
+        <section><h4>Potential impact</h4><p>Creates a champion/challenger framework that catches cases a single algorithm would miss.</p></section>
+        <section><h4>Demo path</h4><p>Matrix of cases found by one matcher versus many; inspect which buckets hold real true positives.</p></section>
+        <section><h4>Open-source path</h4><p>RapidFuzz, Splink, sentence-transformers, optional local LLM reason-code prototype.</p></section>
+        <section><h4>Enterprise path</h4><p>Formal champion/challenger matching pipeline with metrics.</p></section>
+        <section><h4>Risk / guardrail</h4><p>More matchers mean more noise unless disagreement is tied to review and metrics. If OpenSanctions is used: OpenSanctions Pairs is CC-BY-NC-4.0/non-commercial. Use it for learning, benchmark design, and method exploration only; businesses need a data license, and trained artifacts should not transfer into commercial/operational work without a license conversation.</p></section>
+      </div>
+      <div class="signals"><span>Rule score</span><span>Probabilistic score</span><span>Embedding score</span><span>Reason-code score</span><span>Field conflicts</span><span>Cluster context</span></div>
+      <div class="source-row"><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a><a class="chip" href="https://www.sbert.net/docs/sentence_transformer/usage/semantic_textual_similarity.html" target="_blank" rel="noreferrer">Sentence Transformers</a><a class="chip" href="https://moj-analytical-services.github.io/splink/" target="_blank" rel="noreferrer">Splink</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="LLM / Ensemble" data-tier="Tier 3 - Scoring &amp; Policy">
+    <div class="idea-rail">
+      <span>M20</span>
+      <b>LLM / Ensemble</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">USEFUL STRETCH</span>
+      </div>
+      <h3>Failure-Typed LLM Ensemble for Gray-Zone Matches</h3>
+      <p class="thesis">Use an LLM only for pre-registered failure types and conformal abstentions, not as a generic judge over every uncertain score.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Use an LLM only on predeclared failure slices or abstentions.</p></section>
+        <section><h4>Why it matters</h4><p>LLMs should handle language-heavy edge cases, not judge every pair.</p></section>
+        <section><h4>Value</h4><p>Controls cost while generating useful votes, variants, hard negatives, and feature-grounded explanations.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Very bad and very good matches do not need an expensive model. The value is in the middle: transliteration ambiguity, vowel movement, token-order shifts, repeated tokens, nickname/diminutive hints, and conflicting secondary evidence. M30 should set the abstention budget; this card defines what the LLM is allowed to do.</p></section>
+        <section><h4>Potential impact</h4><p>Adds targeted true-positive recovery and better failure analysis while controlling cost, latency, and hallucination risk.</p></section>
+        <section><h4>Demo path</h4><p>Pre-register one failure slice, expected recall/F1 lift, and max cost/latency multiple. Route only conformal abstentions or failure-typed candidates to a local/private LLM. Compare LLM vote, LLM-generated variants/hard negatives, and feature-grounded explanations against the baseline and M27 cross-encoder.</p></section>
+        <section><h4>Open-source path</h4><p>Local LLM via Ollama for laptop demos or vLLM for heavier serving; structured JSON prompts; scikit-learn stacking/calibration; MLflow prompt/version tracking.</p></section>
+        <section><h4>Enterprise path</h4><p>Governed failure-type reranker and data-generator lane with prompt/version audit, fixed temperature, private inference, and human disposition.</p></section>
+        <section><h4>Risk / guardrail</h4><p>LLMs can hallucinate fluent explanations and can generate misleading variants. Keep outputs structured, ground explanations only in real feature values, never let LLM prose override feature evidence, and report cost/latency and gray-band precision/recall separately.</p></section>
+      </div>
+      <div class="signals"><span>Failure type</span><span>Conformal abstention flag</span><span>Baseline score</span><span>LLM vote</span><span>LLM reason code</span><span>Generated alias/variant</span><span>Generated hard negative</span><span>Prompt version</span><span>Cost/latency multiple</span><span>Human disposition</span></div>
+      <div class="source-row"><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a><a class="chip" href="https://docs.ollama.com/" target="_blank" rel="noreferrer">Ollama documentation</a><a class="chip" href="https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html" target="_blank" rel="noreferrer">vLLM OpenAI-compatible server</a><a class="chip" href="https://sklearn.org/stable/modules/generated/sklearn.ensemble.StackingClassifier.html" target="_blank" rel="noreferrer">scikit-learn StackingClassifier</a><a class="chip" href="https://www.mlflow.org/docs/latest/ml/tracking" target="_blank" rel="noreferrer">MLflow Tracking</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="LLM / Ensemble" data-tier="Tier 3 - Scoring &amp; Policy">
+    <div class="idea-rail">
+      <span>M30</span>
+      <b>LLM / Ensemble</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">USEFUL STRETCH</span>
+      </div>
+      <h3>Conformal Abstention Band for Principled Gray-Zone Routing</h3>
+      <p class="thesis">Define the gray band with conformal prediction so abstain/escalate decisions have a statistical error target instead of a hand-tuned score window.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Use conformal prediction to decide what is too uncertain.</p></section>
+        <section><h4>Why it matters</h4><p>A fixed score window is arbitrary and drifts as models change.</p></section>
+        <section><h4>Value</h4><p>Gives a defensible abstention band for LLM or human review.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>A fixed score window is arbitrary and shifts whenever the model changes. Conformal prediction targets a chosen error rate and emits prediction sets, making uncertainty routing more defensible and budgetable.</p></section>
+        <section><h4>Potential impact</h4><p>Creates predictable LLM/human-review volume, calibrated error guarantees on confident auto-decisions, and a cleaner separation between confident decisions and escalations.</p></section>
+        <section><h4>Demo path</h4><p>Wrap the M03 or M27 scorer in a split-conformal layer on a calibration set; choose a target error rate; route abstentions to M20 or human review; report coverage, abstention rate, gray-band precision/recall, and review volume separately from global metrics.</p></section>
+        <section><h4>Open-source path</h4><p>MAPIE or crepes for conformal classification, scikit-learn calibration, MLflow run tracking.</p></section>
+        <section><h4>Enterprise path</h4><p>Governed abstention thresholds tied to review-capacity budgets, with conformal coverage monitored in the M19 board.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Conformal guarantees assume calibration and deployment data are exchangeable. Prior shift breaks this, so pair with M26, use prevalence-aware or group-conditional/Mondrian conformal where possible, re-calibrate on representative data, and report empirical coverage.</p></section>
+      </div>
+      <div class="signals"><span>Nonconformity score</span><span>Target error rate</span><span>Prediction set</span><span>Abstention flag</span><span>Empirical coverage</span><span>Gray-band volume</span></div>
+      <div class="source-row"><a class="chip" href="https://mapie.readthedocs.io/en/latest/generated/mapie.classification.SplitConformalClassifier.html" target="_blank" rel="noreferrer">MAPIE conformal classification</a><a class="chip" href="https://arxiv.org/abs/2107.07511" target="_blank" rel="noreferrer">Angelopoulos &amp; Bates conformal intro</a><a class="chip" href="https://crepes.readthedocs.io/en/latest/crepes.html" target="_blank" rel="noreferrer">crepes conformal prediction</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Learning" data-tier="Tier 3 - Scoring &amp; Policy">
+    <div class="idea-rail">
+      <span>M13</span>
+      <b>Learning</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Hard-Match Mining: Learn Where Names Look Weak</h3>
+      <p class="thesis">Mine proven matches with low name similarity to discover transliteration, alias, patronymic, compound-surname, and document-field patterns.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Study true matches where names look weak.</p></section>
+        <section><h4>Why it matters</h4><p>Those cases reveal where the current matcher breaks.</p></section>
+        <section><h4>Value</h4><p>Turns errors into specific rule, feature, or data improvements.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>The most valuable examples are not the obvious ones; a proven match with weak names shows exactly where traditional matching breaks.</p></section>
+        <section><h4>Potential impact</h4><p>Improves recall on the cases a pure name matcher misses.</p></section>
+        <section><h4>Demo path</h4><p>Surprise-positives report: true positives sorted by lowest name similarity, grouped by failure reason, then fed into M07/M08.</p></section>
+        <section><h4>Open-source path</h4><p>OpenSanctions Pairs, Splink charts, RapidFuzz, optional local LLM reason-code tagging.</p></section>
+        <section><h4>Enterprise path</h4><p>Adjudication analytics dashboard fed by operational outcomes.</p></section>
+        <section><h4>Risk / guardrail</h4><p>If the strong identifier is noisy, the model learns bad exceptions. Validate the label source first. OpenSanctions Pairs is CC-BY-NC-4.0/non-commercial. Use it for learning, benchmark design, and method exploration only; businesses need a data license, and trained artifacts should not transfer into commercial/operational work without a license conversation.</p></section>
+      </div>
+      <div class="signals"><span>Low name similarity</span><span>Strong document match</span><span>Strong DOB/POB match</span><span>Alias fields</span><span>Cross-script names</span><span>Name-order changes</span></div>
+      <div class="source-row"><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a><a class="chip" href="https://huggingface.co/datasets/sanctions-er-anon/opensanctions_pairs" target="_blank" rel="noreferrer">OpenSanctions Pairs dataset card</a><a class="chip" href="https://moj-analytical-services.github.io/splink/topic_guides/comparisons/term-frequency.html" target="_blank" rel="noreferrer">Splink term-frequency adjustments</a><a class="chip" href="https://docs.oracle.com/en/industries/financial-services/ofs-analytical-applications/customer-screening/8.1.2.9.0/csomg/matching.html" target="_blank" rel="noreferrer">Oracle Customer Screening matching guide</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Learning" data-tier="Tier 3 - Scoring &amp; Policy">
+    <div class="idea-rail">
+      <span>M28</span>
+      <b>Learning</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Hard-Negative Mining for Precision</h3>
+      <p class="thesis">Mine confusing true non-matches and train on them explicitly, because hard negatives move precision on the common-name alert flood.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Find pairs that look like matches but are not.</p></section>
+        <section><h4>Why it matters</h4><p>False positives often come from hard negative patterns, not random noise.</p></section>
+        <section><h4>Value</h4><p>Improves precision on common-name and shared-DOB collisions.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>M13 mines hard positives to lift recall. This is the other half: pairs that look like matches but are not. Most false positives come from a few hard-negative patterns, not random noise, and precision is the cost driver in screening.</p></section>
+        <section><h4>Potential impact</h4><p>Fewer false positives at the same recall, especially on common names, shared DOB-year, same-country collisions, and near-duplicate aliases.</p></section>
+        <section><h4>Demo path</h4><p>Use M21/M22 retrieval to surface near-miss non-matches, confirm labels through gold data, add them to training at controlled ratios, and compare PR movement against a model trained on random negatives.</p></section>
+        <section><h4>Open-source path</h4><p>Retrieval-based negative sampling from M21/M22, scikit-learn/XGBoost, RapidFuzz difficulty scoring, Sentence Transformers hard-negative tooling, optional LLM reason tagging.</p></section>
+        <section><h4>Enterprise path</h4><p>Continuous hard-negative harvest from adjudicated false positives feeding the M19 retraining cadence.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Over-weighting hard negatives can suppress true positives. Tune the negative ratio, track lost true positives in M19, and confirm negatives are truly non-matches rather than unadjudicated cases.</p></section>
+      </div>
+      <div class="signals"><span>Near-miss negative</span><span>Name similarity</span><span>Shared DOB-year</span><span>Same country/different person</span><span>Negative difficulty score</span><span>Negative sampling ratio</span></div>
+      <div class="source-row"><a class="chip" href="https://moj-analytical-services.github.io/splink/topic_guides/comparisons/term-frequency.html" target="_blank" rel="noreferrer">Splink term-frequency adjustments</a><a class="chip" href="https://www.sbert.net/docs/package_reference/util/hard_negatives.html" target="_blank" rel="noreferrer">Sentence Transformers hard negatives</a><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a></div>
+    </div>
+  </article></div>
+      </section>
+      <section class="tier-block" id="tier-4---structure-&amp;-context">
+        <div class="tier-head">
+          <h2>Tier 4 - Structure &amp; Context</h2>
+          <p>Roadmap and upside ideas that become stronger after the spine exists.</p>
+        </div>
+        <div class="idea-list">
+  <article class="idea" data-category="Graph" data-tier="Tier 4 - Structure &amp; Context">
+    <div class="idea-rail">
+      <span>M14</span>
+      <b>Graph</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">ROADMAP</span>
+      </div>
+      <h3>Identity Evidence Graph + Collective Resolution</h3>
+      <p class="thesis">Represent candidate evidence as a graph, and optionally resolve clusters using weighted pairwise edges.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Represent identity evidence as a graph.</p></section>
+        <section><h4>Why it matters</h4><p>Records, aliases, documents, and sources often make more sense as connected evidence.</p></section>
+        <section><h4>Value</h4><p>Helps reviewers see support, conflicts, and cluster structure.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Evidence graphs make reviewer decisions auditable; collective resolution can resolve contradictions pairwise matching cannot.</p></section>
+        <section><h4>Potential impact</h4><p>Better accuracy on messy multi-source data, cleaner explanations, and consolidated identity clusters.</p></section>
+        <section><h4>Demo path</h4><p>One ambiguous candidate evidence graph; separate NetworkX community detection collapsing record clusters.</p></section>
+        <section><h4>Open-source path</h4><p>NetworkX, Cytoscape.js, local JSON graph. No Neo4j required for demo.</p></section>
+        <section><h4>Enterprise path</h4><p>Neptune, Neo4j, or GNN later.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Graph scope sprawls fast. Keep relation types tiny and separate evidence from conclusions.</p></section>
+      </div>
+      <div class="signals"><span>Name/document/DOB/country nodes</span><span>Alias edges</span><span>Source edges</span><span>Adjudication edges</span><span>Pairwise score edge weights</span></div>
+      <div class="source-row"><a class="chip" href="https://aws.amazon.com/documentation-overview/entity-resolution/" target="_blank" rel="noreferrer">AWS Entity Resolution docs</a><a class="chip" href="https://networkx.org/" target="_blank" rel="noreferrer">NetworkX</a><a class="chip" href="https://js.cytoscape.org/" target="_blank" rel="noreferrer">Cytoscape.js</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Human Loop" data-tier="Tier 4 - Structure &amp; Context">
+    <div class="idea-rail">
+      <span>M15</span>
+      <b>Human Loop</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">HIGH VALUE</span>
+      </div>
+      <h3>Active-Learning Review Queue</h3>
+      <p class="thesis">Ask humans for labels where labels teach the model most: uncertain, rare-name, cross-script, conflict, and cluster-bridge cases.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Ask humans to label the most informative cases.</p></section>
+        <section><h4>Why it matters</h4><p>Review time is limited, so labels should teach the model.</p></section>
+        <section><h4>Value</h4><p>Improves the model faster with fewer labels.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Turns analyst attention into training data and bridges scarce gold to a continuously improving model.</p></section>
+        <section><h4>Potential impact</h4><p>Review labor compounds into model improvement; repeated false positives decline over time.</p></section>
+        <section><h4>Demo path</h4><p>Queue top-N informative pairs; plot accuracy versus number of labels to show early gain.</p></section>
+        <section><h4>Open-source path</h4><p>scikit-learn active-learning patterns, Zingg labeling flow, Streamlit/Gradio review UI.</p></section>
+        <section><h4>Enterprise path</h4><p>SageMaker/DataRobot human-in-the-loop with audit trails.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Inconsistent reviewers teach inconsistency. Add reviewer guidance and inter-annotator agreement. If seeded with OpenSanctions: OpenSanctions Pairs is CC-BY-NC-4.0/non-commercial. Use it for learning, benchmark design, and method exploration only; businesses need a data license, and trained artifacts should not transfer into commercial/operational work without a license conversation.</p></section>
+      </div>
+      <div class="signals"><span>Score uncertainty</span><span>Matcher disagreement</span><span>Rare-token conflicts</span><span>Cluster-bridge pairs</span><span>High-impact candidate</span></div>
+      <div class="source-row"><a class="chip" href="https://github.com/zinggAI/zingg" target="_blank" rel="noreferrer">Zingg</a><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a><a class="chip" href="https://aws.amazon.com/documentation-overview/entity-resolution/" target="_blank" rel="noreferrer">AWS Entity Resolution docs</a></div>
+    </div>
+  </article></div>
+      </section>
+      <section class="tier-block" id="research-track---graph-learning">
+        <div class="tier-head">
+          <h2>Research Track - Graph Learning</h2>
+          <p>A bounded GNN challenger lane: valuable if relational evidence improves results, not a replacement for the matching spine.</p>
+        </div>
+        <div class="idea-list">
+  <article class="idea" data-category="Graph Learning" data-tier="Research Track - Graph Learning">
+    <div class="idea-rail">
+      <span>M23</span>
+      <b>Graph Learning</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">RESEARCH CHALLENGER</span>
+      </div>
+      <h3>GNN Candidate Reranker / Link Predictor</h3>
+      <p class="thesis">After candidate retrieval creates a manageable candidate set, build a heterogeneous evidence graph and train a GNN to rerank candidate edges as true or false identity links.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Use a GNN to rerank candidate match edges.</p></section>
+        <section><h4>Why it matters</h4><p>Graph neighborhoods may reveal evidence a pairwise row cannot see.</p></section>
+        <section><h4>Value</h4><p>Tests whether graph context improves gray-band true-match recovery.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>This is the cleanest GNN touchpoint because it turns ER into link prediction. A normal edge-feature model only sees pair A-B; a GNN can also see the neighborhood around A and B: shared aliases, shared DOB/year nodes, document lifecycle nodes, repeated source patterns, and whether a candidate edge is consistent with nearby evidence.</p></section>
+        <section><h4>Potential impact</h4><p>Potentially improves gray-band recall and reduces false positives where pairwise scores are ambiguous but graph context is informative. The practical win would be finding true matches just below the baseline threshold without flooding reviewers.</p></section>
+        <section><h4>Demo path</h4><p>Build a graph with record nodes, candidate-match edges from M21/M22, and evidence nodes for normalized name tokens, aliases, DOB/year, country, document IDs, source list, and synthetic true-identity ID. Train a non-graph baseline on edge features first, then train GraphSAGE/R-GCN/GAT-style link prediction with negative sampling. Report recall-at-fixed-precision, PR-AUC, gray-band lift, and examples where graph context changed the ranking.</p></section>
+        <section><h4>Open-source path</h4><p>PyTorch Geometric HeteroData or DGL heterograph/link-prediction tooling; NetworkX for graph construction/debugging; scikit-learn/XGBoost as mandatory baselines; MLflow for run tracking.</p></section>
+        <section><h4>Enterprise path</h4><p>Graph challenger model used only after candidate retrieval and before human review. Log graph version, feature schema, candidate-retrieval pass, model version, calibration, and top evidence nodes that influenced the rerank.</p></section>
+        <section><h4>Risk / guardrail</h4><p>A GNN is not automatically better than XGBoost. Biggest risks are label leakage, bad negative sampling, overfitting to synthetic graph structure, and using the true cluster ID as a shortcut. Split by identity/source/time where possible, hide gold IDs from features, compare to boring baselines, and promote only if it improves blind recall-at-fixed-precision or gray-band true-positive recovery.</p></section>
+      </div>
+      <div class="signals"><span>Record node</span><span>Candidate edge</span><span>Name-token node</span><span>Alias node</span><span>DOB/year node</span><span>Document node</span><span>Source node</span><span>Negative sample</span><span>Edge feature vector</span><span>Graph embedding</span><span>Link probability</span><span>Gray-band lift</span></div>
+      <div class="source-row"><a class="chip" href="https://pytorch-geometric.readthedocs.io/" target="_blank" rel="noreferrer">PyTorch Geometric</a><a class="chip" href="https://www.dgl.ai/dgl_docs/stochastic_training/link_prediction.html" target="_blank" rel="noreferrer">DGL link prediction</a><a class="chip" href="https://ojs.aaai.org/index.php/AAAI/article/download/6330/6186" target="_blank" rel="noreferrer">GraphER paper</a><a class="chip" href="https://networkx.org/" target="_blank" rel="noreferrer">NetworkX</a><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Graph Learning" data-tier="Research Track - Graph Learning">
+    <div class="idea-rail">
+      <span>M24</span>
+      <b>Graph Learning</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">RESEARCH CHALLENGER</span>
+      </div>
+      <h3>GNN Cluster Consistency &amp; Bad-Bridge Detector</h3>
+      <p class="thesis">Use graph learning to identify suspicious edges that incorrectly merge two identity clusters, rather than asking the GNN to own all matching decisions.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Use graph learning to catch bad cluster-merge edges.</p></section>
+        <section><h4>Why it matters</h4><p>One bad bridge can merge two different identities.</p></section>
+        <section><h4>Value</h4><p>Protects golden-record quality and creates a strong visual demo.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Cluster mistakes are operationally costly: one bad bridge can collapse two different people into the same resolved identity. This is a narrow, concrete GNN use case: find edges whose local graph context looks inconsistent with the cluster they create.</p></section>
+        <section><h4>Potential impact</h4><p>Improves precision, reviewer trust, and golden-record quality by flagging high-risk cluster merges before they become canonical. It also gives a visually compelling demo: one edge enters, two identities wrongly merge, the detector calls out the bridge.</p></section>
+        <section><h4>Demo path</h4><p>Create synthetic identity clusters from known true IDs, inject bad bridge edges with plausible names but contradictory DOB/document/country evidence, and compare three detectors: rule heuristics, XGBoost on edge/cluster features, and a GNN edge classifier. Visualize clusters before/after in Cytoscape.js and report cluster purity, bad-bridge recall, review precision, and false split risk.</p></section>
+        <section><h4>Open-source path</h4><p>NetworkX for connected components, bridge/centrality heuristics, and cluster metrics; PyTorch Geometric or DGL for node/edge classification; Cytoscape.js for interactive before/after cluster inspection.</p></section>
+        <section><h4>Enterprise path</h4><p>Cluster-quality monitor downstream of pairwise matching. When a new edge would merge two clusters, score the edge, surface contradictions, and route high-risk bridges to review before canonicalization.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Do not frame graph context as association-based risk. Keep the graph limited to identity evidence and matching edges. Avoid social-network inference. Also watch for false cuts: an overaggressive detector can split a real identity. Require an explanation that points to actual contradictions such as DOB conflict, document conflict, or isolated bridge topology.</p></section>
+      </div>
+      <div class="signals"><span>Cluster ID</span><span>Bridge edge</span><span>Edge confidence</span><span>Contradictory DOB</span><span>Contradictory document</span><span>Country conflict</span><span>Shared alias</span><span>Component merge</span><span>Bridge centrality</span><span>Cluster purity</span><span>Bad-bridge recall</span><span>False split risk</span></div>
+      <div class="source-row"><a class="chip" href="https://arxiv.org/abs/2105.05957" target="_blank" rel="noreferrer">GNN inconsistent-cluster detection</a><a class="chip" href="https://arxiv.org/abs/2410.04783" target="_blank" rel="noreferrer">GDD plus GNN property-graph ER</a><a class="chip" href="https://pytorch-geometric.readthedocs.io/" target="_blank" rel="noreferrer">PyTorch Geometric</a><a class="chip" href="https://www.dgl.ai/dgl_docs/stochastic_training/link_prediction.html" target="_blank" rel="noreferrer">DGL link prediction</a><a class="chip" href="https://js.cytoscape.org/" target="_blank" rel="noreferrer">Cytoscape.js</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Graph Retrieval" data-tier="Research Track - Graph Learning">
+    <div class="idea-rail">
+      <span>M25</span>
+      <b>Graph Retrieval</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">RESEARCH CHALLENGER</span>
+      </div>
+      <h3>GNN-Assisted Candidate Retrieval: Seed, Expand, Retrieve</h3>
+      <p class="thesis">Use graph learning to help candidate retrieval by starting with normal search hits, expanding through an evidence graph, and retrieving graph-similar records that text search alone may miss.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Use graph learning to find candidates search missed.</p></section>
+        <section><h4>Why it matters</h4><p>Some records are connected indirectly through evidence even when text search is weak.</p></section>
+        <section><h4>Value</h4><p>Measures whether graph expansion adds true candidates without flooding the scorer.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>OpenSearch-style retrieval is strongest when the query shares obvious text or structured fields. A graph can help when the right candidate is connected indirectly: same rare alias family, related document history, shared source cluster, repeated DOB/year neighborhood, or name-token pattern that does not look close by edit distance.</p></section>
+        <section><h4>Potential impact</h4><p>Could recover candidates that never enter the scorer today. The value is not replacing OpenSearch; it is adding a second retrieval lane whose incremental recall@K can be measured against the existing retrieval baseline.</p></section>
+        <section><h4>Demo path</h4><p>Run M21/M22 first to get seed candidates. Build a record-evidence graph, learn record embeddings with GraphSAGE/R-GCN or start with Personalized PageRank as a no-neural baseline, then retrieve second-hop or embedding-nearest records. Union those with OpenSearch candidates, score them, and report incremental true matches found, extra candidates added, latency, and false-positive burden.</p></section>
+        <section><h4>Open-source path</h4><p>NetworkX Personalized PageRank as baseline; PyTorch Geometric or DGL for graph embeddings; Qdrant/Faiss/OpenSearch k-NN for indexing learned record embeddings; MLflow for retrieval-run comparison.</p></section>
+        <section><h4>Enterprise path</h4><p>Graph-assisted retrieval lane that sits beside OpenSearch. It emits why a candidate was retrieved: search hit, graph expansion, graph embedding neighbor, or both.</p></section>
+        <section><h4>Risk / guardrail</h4><p>This can explode candidate volume if graph expansion is too loose. Keep hop limits, require evidence-type allowlists, cap top-K per retrieval lane, and judge the lane by incremental recall per extra candidate. Never use social association edges; only identity-evidence edges.</p></section>
+      </div>
+      <div class="signals"><span>Seed candidate</span><span>Evidence graph neighbor</span><span>Personalized PageRank score</span><span>Graph embedding</span><span>ANN neighbor</span><span>Retrieval lane</span><span>Incremental recall@K</span><span>Extra candidate volume</span><span>Latency</span><span>Evidence path</span></div>
+      <div class="source-row"><a class="chip" href="https://pytorch-geometric.readthedocs.io/" target="_blank" rel="noreferrer">PyTorch Geometric</a><a class="chip" href="https://www.dgl.ai/dgl_docs/stochastic_training/link_prediction.html" target="_blank" rel="noreferrer">DGL link prediction</a><a class="chip" href="https://networkx.org/" target="_blank" rel="noreferrer">NetworkX</a><a class="chip" href="https://qdrant.tech/documentation/search/" target="_blank" rel="noreferrer">Qdrant search</a><a class="chip" href="https://github.com/facebookresearch/faiss" target="_blank" rel="noreferrer">Faiss</a><a class="chip" href="https://docs.opensearch.org/docs/2.11/search-plugins/knn/filter-search-knn/" target="_blank" rel="noreferrer">OpenSearch k-NN with filters</a></div>
+    </div>
+  </article></div>
+      </section>
+      <section class="tier-block" id="tier-5---operations">
+        <div class="tier-head">
+          <h2>Tier 5 - Operations</h2>
+          <p>Roadmap and upside ideas that become stronger after the spine exists.</p>
+        </div>
+        <div class="idea-list">
+  <article class="idea" data-category="Operations" data-tier="Tier 5 - Operations">
+    <div class="idea-rail">
+      <span>M16</span>
+      <b>Operations</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">OPERATIONS</span>
+      </div>
+      <h3>Scheduled Watchlist Monitor / Diff Agent</h3>
+      <p class="thesis">Use a scheduled daily job over public source updates, not an always-on agent with no demoable feed.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Rerun screening when public lists change.</p></section>
+        <section><h4>Why it matters</h4><p>Watchlists and source records are living data.</p></section>
+        <section><h4>Value</h4><p>Produces an operational diff report instead of a one-time demo.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Real watchlist systems must handle new designations and updates. A scheduled diff report is concrete and reviewable.</p></section>
+        <section><h4>Potential impact</h4><p>Turns matching from one-shot batch into a living monitor.</p></section>
+        <section><h4>Demo path</h4><p>Cron over OFAC SDN or CSL feed; re-screen on update; post a diff showing new designations and match scores.</p></section>
+        <section><h4>Open-source path</h4><p>OFAC Sanctions List Service, Consolidated Screening List API, scheduler, M01 scorer.</p></section>
+        <section><h4>Enterprise path</h4><p>Event-driven re-screening pipeline integrated with case management.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Keep it scheduled, not always-on. Respect source feed terms and rate limits.</p></section>
+      </div>
+      <div class="signals"><span>New designations</span><span>Changed records</span><span>Delta vs prior run</span><span>Match score</span><span>Source timestamp</span></div>
+      <div class="source-row"><a class="chip" href="https://ofac.treasury.gov/sanctions-list-service" target="_blank" rel="noreferrer">OFAC Sanctions List Service</a><a class="chip" href="https://data.commerce.gov/consolidated-screening-list-api" target="_blank" rel="noreferrer">Consolidated Screening List API</a><a class="chip" href="https://api.opensanctions.org/docs" target="_blank" rel="noreferrer">OpenSanctions matching API docs</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Evaluation Ops" data-tier="Tier 5 - Operations">
+    <div class="idea-rail">
+      <span>M19</span>
+      <b>Evaluation Ops</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">BIWEEKLY CADENCE</span>
+      </div>
+      <h3>Biweekly Matcher Sprint &amp; Champion/Challenger Board</h3>
+      <p class="thesis">Every two weeks, ship one focused matcher experiment against a frozen baseline, then score it on the gold dataset and the newest record inflow.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Run a measured matcher improvement every two weeks.</p></section>
+        <section><h4>Why it matters</h4><p>Algorithm tuning needs a cadence and a scoreboard.</p></section>
+        <section><h4>Value</h4><p>Shows whether each change beats the baseline or just adds noise.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>This converts algorithm customization from vibes into evidence. Each sprint attacks one failure slice such as transliteration, ae/ai vowel movement, repeated token pairs, token-order swaps, or dropped surname patterns.</p></section>
+        <section><h4>Potential impact</h4><p>First measure: beat the baseline. Second measure: quantify net-new true positives, new false positives, lost true positives, alert-volume change, and which slices improved or regressed.</p></section>
+        <section><h4>Demo path</h4><p>A comparison board: Baseline vs Candidate, gold-set metrics, new-inflow review outcomes, PR curve movement, and slice cards for transliteration, vowel movement, repeated-token pairs, token swaps, nicknames, and DOB/document conflicts.</p></section>
+        <section><h4>Open-source path</h4><p>scikit-learn metrics, MLflow run tracking, DVC versioned datasets/models, Evidently drift checks, pytest regression fixtures.</p></section>
+        <section><h4>Enterprise path</h4><p>Champion/challenger release governance, model registry, threshold approval, drift review, and recurring matching-performance board.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Biweekly tuning can become p-hacking if the team keeps chasing the same holdout. Freeze a true test set, predeclare the target slice and success metric, evaluate against new inflow only after adjudication, and keep the baseline fixed unless a lead approves promotion.</p></section>
+      </div>
+      <div class="signals"><span>Baseline score</span><span>Candidate score</span><span>Gold labels</span><span>New inflow</span><span>Net-new true positives</span><span>New false positives</span><span>Lost true positives</span><span>Slice tag</span><span>Drift stats</span><span>Release decision</span></div>
+      <div class="source-row"><a class="chip" href="https://scikit-learn.org/stable/" target="_blank" rel="noreferrer">scikit-learn</a><a class="chip" href="https://www.mlflow.org/docs/latest/ml/tracking" target="_blank" rel="noreferrer">MLflow Tracking</a><a class="chip" href="https://dvc.org/doc/use-cases/versioning-data-and-models" target="_blank" rel="noreferrer">DVC data and model versioning</a><a class="chip" href="https://docs.evidentlyai.com/metrics/explainer_drift" target="_blank" rel="noreferrer">Evidently data drift</a><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a></div>
+    </div>
+  </article></div>
+      </section>
+      <section class="tier-block" id="sensitive---decide-posture-before-build">
+        <div class="tier-head">
+          <h2>Sensitive - Decide Posture Before Build</h2>
+          <p>Concept-only until posture is decided. These carry real privacy, fairness, or governance implications.</p>
+        </div>
+        <div class="idea-list">
+  <article class="idea" data-category="Context - Sensitive" data-tier="Sensitive - Decide Posture Before Build">
+    <div class="idea-rail">
+      <span>M17</span>
+      <b>Context - Sensitive</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">DECIDE POSTURE FIRST</span>
+      </div>
+      <h3>Travel-Party Context as Weak Evidence</h3>
+      <p class="thesis">Recurring co-travel can be a weak same-person disambiguator, never primary identity evidence and never association-based risk inference.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Explore travel-party context only as a governed concept.</p></section>
+        <section><h4>Why it matters</h4><p>Relational context is powerful but sensitive.</p></section>
+        <section><h4>Value</h4><p>Keeps the idea visible without building it prematurely.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Relational context can disambiguate identities, but it carries serious fairness and privacy exposure.</p></section>
+        <section><h4>Potential impact</h4><p>Could prioritize review queues for ambiguous identities if framed narrowly and governed carefully.</p></section>
+        <section><h4>Demo path</h4><p>Synthetic PNR-style data only; show how a low-confidence name candidate shifts when the same companion group recurs.</p></section>
+        <section><h4>Open-source path</h4><p>Synthetic PNR generation and NetworkX co-travel edges. No real traveler data.</p></section>
+        <section><h4>Enterprise path</h4><p>Graph platforms only after strong privacy/legal review.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Association is not identity. Lead and compliance must decide framing before code. Keep it synthetic-only and disambiguation-only.</p></section>
+      </div>
+      <div class="signals"><span>Same booking reference</span><span>Same itinerary</span><span>Repeated co-travel</span><span>Shared contact/address if available</span><span>Seat adjacency if appropriate</span></div>
+      <div class="source-row"><a class="chip" href="https://www.cbp.gov/travel/clearing-cbp/passenger-name-record" target="_blank" rel="noreferrer">CBP PNR overview</a><a class="chip" href="https://arxiv.org/abs/1305.4429" target="_blank" rel="noreferrer">Inferring High-Quality Co-Travel Networks</a><a class="chip" href="https://arxiv.org/abs/1807.06657" target="_blank" rel="noreferrer">Airline PNR generation using GANs</a></div>
+    </div>
+  </article>
+  <article class="idea" data-category="Gold Data - Governance" data-tier="Sensitive - Decide Posture Before Build">
+    <div class="idea-rail">
+      <span>M18</span>
+      <b>Gold Data - Governance</b>
+    </div>
+    <div class="idea-main">
+      <div class="badges">
+        <span class="priority">GOVERNANCE-GATED</span>
+      </div>
+      <h3>Biometric-Confirmed Labels for Text Matching</h3>
+      <p class="thesis">Use biometric/photo/fingerprint-confirmed matches as labels to train text-only matchers, without putting biometrics into the deployed text matcher.</p>
+      
+      <div class="plain-grid">
+        <section><h4>What we do</h4><p>Use biometric-confirmed identity only as governed labels.</p></section>
+        <section><h4>Why it matters</h4><p>Strong labels can teach text matching, but biometric data is sensitive.</p></section>
+        <section><h4>Value</h4><p>Captures the concept while keeping it out of the open prototype.</p></section>
+      </div>
+      <div class="idea-grid">
+        <section><h4>Why interesting</h4><p>Biometric-linked administrative-data research shows the power of high-confidence ground truth; this is the disciplined way to harness it.</p></section>
+        <section><h4>Potential impact</h4><p>The text model learns from the hardest proven cases where names diverge but identity is confirmed.</p></section>
+        <section><h4>Demo path</h4><p>Concept/simulation only: on OpenSanctions true pairs, treat one field as a strong label source and train a text matcher on held-out name/DOB/country features.</p></section>
+        <section><h4>Open-source path</h4><p>scikit-learn, OpenSanctions Pairs, Splink features.</p></section>
+        <section><h4>Enterprise path</h4><p>Adjudicated biometric/photo matches as gold under governance.</p></section>
+        <section><h4>Risk / guardrail</h4><p>Biometric data does not enter this open project. Concept and synthetic/public labels only. OpenSanctions Pairs is CC-BY-NC-4.0/non-commercial. Use it for learning, benchmark design, and method exploration only; businesses need a data license, and trained artifacts should not transfer into commercial/operational work without a license conversation.</p></section>
+      </div>
+      <div class="signals"><span>Photo/face match label</span><span>Fingerprint label</span><span>Passport/document label</span><span>Name features</span><span>DOB/place/country features</span></div>
+      <div class="source-row"><a class="chip" href="https://sites.lsa.umich.edu/mgms/wp-content/uploads/sites/283/2021/11/entity_resolution_20210628.pdf" target="_blank" rel="noreferrer">Biometrically Linked Administrative Data paper</a><a class="chip" href="https://pages.nist.gov/frvt/html/frvt11.html" target="_blank" rel="noreferrer">NIST FRTE 1:1</a><a class="chip" href="https://www.tsa.gov/news/press/factsheets/facial-comparison-technology" target="_blank" rel="noreferrer">TSA facial-comparison fact sheet</a><a class="chip" href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">OpenSanctions Pairs benchmark</a></div>
+    </div>
+  </article></div>
+      </section>
+    <section class="block" id="answers">
+      <div class="section-head">
+        <h2>Strategic Answers</h2>
+        <p>How to separate near-term prototype work from research bets and governance-gated ideas.</p>
+      </div>
+      <div class="answer-grid">
+      <article class="answer">
+        <span>01</span>
+        <h3>Strongest 3-5 for an open-source/local, name-first prototype</h3>
+        <p>Build the spine in order: M02 synthetic gold, M01 evidence stack, M03 learned scorer, M04 explanations, M05 benchmark lane, and M26 base-rate evaluation. Add M21/M22 as the candidate-retrieval layer for realistic 7M-record lookup, plus M06/M29 for the cheapest high-value name upgrades.</p>
+      </article>
+      <article class="answer">
+        <span>02</span>
+        <h3>Too risky, speculative, or sensitive-data-dependent</h3>
+        <p>M17 travel-party and M18 biometric-label concepts require lead/compliance posture before any build. M09 embeddings, M23/M24/M25 GNN work, and the collective half of M14 are high-ceiling research bets. OpenSanctions non-commercial licensing is a near-term risk to actively manage.</p>
+      </article>
+      <article class="answer">
+        <span>03</span>
+        <h3>Evaluation design that makes the strong ideas credible</h3>
+        <p>Use OpenSanctions Pairs plus synthetic gold, then apply M26 prior-shift evaluation. The primary operating metric should be recall at fixed high precision, or review-volume at fixed recall. F1 stays as a secondary paper-comparison metric. Slice by name group, script, corruption type, retrieval lane, and sprint target.</p>
+      </article>
+      <article class="answer">
+        <span>04</span>
+        <h3>Using gold positives without overfitting to historical bias</h3>
+        <p>Tier labels by provenance, hold out by time and source, audit label provenance, measure inter-annotator agreement, slice errors by name group/script, keep humans on disposition, and avoid leakage from strong identifiers used as labels.</p>
+      </article>
+      <article class="answer">
+        <span>05</span>
+        <h3>Additional public/open datasets and benchmarks</h3>
+        <p>OpenSanctions Pairs, OpenSanctions API, OFAC SDN, Consolidated Screening List API, SSA baby names, US Census surnames, GeoNames, FEBRL, DBLP-ACM/Amazon-Google, Wikidata aliases, nickname/diminutive datasets, nomenklatura training data and regression model.</p>
+      </article>
+      <article class="answer">
+        <span>06</span>
+        <h3>Near-term prototype vs later enterprise-grade</h3>
+        <p>Near-term: M01-M05 plus M26, M21/M22 for candidate retrieval, M06/M29, M07 light, M08, M11, M13/M28, M15, M16, and M19 as the operating cadence. M20/M30 are controlled stretches after the baseline exists. Research: M09, M27, M23/M24/M25 GNN work, and collective M14. Enterprise/governed: M03 under SageMaker/DataRobot, M14 graph platforms, M17 after policy review, M18 under biometric governance.</p>
+      </article>
+      <article class="answer">
+        <span>07</span>
+        <h3>Biweekly algorithm customization cadence</h3>
+        <p>Every two weeks, choose one target failure slice, write the hypothesis before coding, implement one candidate matcher change, and compare it against the frozen baseline on gold data plus newly adjudicated inflow. The review board should show baseline beat/no-beat, net-new true positives, new false positives, lost true positives, alert-volume delta, and whether the candidate should ship, hold, or become a research branch.</p>
+      </article>
+      <article class="answer">
+        <span>08</span>
+        <h3>Where LLMs fit without taking over matching</h3>
+        <p>Use LLMs on pre-registered failure types or M30 conformal abstentions, not as a generic judge. Clear matches and clear nonmatches should stay with cheaper deterministic/probabilistic methods. Higher-leverage LLM uses include alias/transliteration variant generation, hard-negative generation, and feature-grounded explanation drafts constrained to actual evidence.</p>
+      </article>
+      <article class="answer">
+        <span>09</span>
+        <h3>Open alternatives to Elasticsearch-style candidate search</h3>
+        <p>Treat this as candidate retrieval, not final matching. OpenSearch is the closest open Elasticsearch-style path; Solr/Lucene is mature and Apache-licensed; Postgres with pg_trgm is a strong local/simple prototype lane; Typesense or Meilisearch can support lightweight typo-tolerant demos; vector stores such as Qdrant belong only where embeddings add recoveries. Whatever engine is used, measure recall@K and false-negative misses before scoring.</p>
+      </article>
+      <article class="answer">
+        <span>10</span>
+        <h3>Where GNNs fit without derailing the project</h3>
+        <p>Use GNNs as a challenger around retrieval and graph consistency, not as the core matching spine. M25 is the candidate-retrieval version: seed with normal search, expand through an evidence graph, and measure incremental recall@K. M23 reranks candidate edges and M24 detects bad cluster bridges. All three must beat simpler baselines before they become more than a research track.</p>
+      </article></div>
+    </section>
+    <section class="block" id="sources">
+      <div class="section-head">
+        <h2>Resource Anchors</h2>
+        <p>Sources used to ground the report and provide implementation pathways.</p>
+      </div>
+      <div class="source-grid">
+      <article class="source">
+        <h3>OpenSanctions Pairs benchmark</h3>
+        <p>2026 paper: 755,540 labeled pairs, 293 sources, 31 countries, multilingual/cross-script names, production baseline 91.33% F1.</p>
+        <a href="https://arxiv.org/abs/2603.11051" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>OpenSanctions Pairs dataset card</h3>
+        <p>Dataset card: full pairs corpus, 1,000-pair sample, snapshot date, schema, CC-BY-NC-4.0/non-commercial license.</p>
+        <a href="https://huggingface.co/datasets/sanctions-er-anon/opensanctions_pairs" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>OpenSanctions Pairs docs</h3>
+        <p>Canonical OpenSanctions documentation for the cross-referencing training data.</p>
+        <a href="https://www.opensanctions.org/docs/opensource/pairs/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>OpenSanctions matching API docs</h3>
+        <p>Entity graph, match/search API concepts for sanctions, PEP, and watchlist-style data.</p>
+        <a href="https://api.opensanctions.org/docs" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>OpenSanctions yente</h3>
+        <p>MIT-licensed API server for search and bulk matching; commercial OpenSanctions data use may require data license.</p>
+        <a href="https://github.com/opensanctions/yente" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>OpenSanctions nomenklatura</h3>
+        <p>MIT-licensed entity data integration framework used in OpenSanctions matching workflows.</p>
+        <a href="https://github.com/opensanctions/nomenklatura" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Oracle Customer Screening matching guide</h3>
+        <p>Sanctions/PEP/watchlist matching concepts, name variants, secondary identifiers, token commonality, conflict logic.</p>
+        <a href="https://docs.oracle.com/en/industries/financial-services/ofs-analytical-applications/customer-screening/8.1.2.9.0/csomg/matching.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Splink</h3>
+        <p>Open-source probabilistic linkage, match weights, waterfall charts, and explainable comparisons.</p>
+        <a href="https://moj-analytical-services.github.io/splink/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Splink blocking tutorial</h3>
+        <p>Explains candidate generation through blocking rules before pairwise scoring.</p>
+        <a href="https://moj-analytical-services.github.io/splink/demos/tutorials/03_Blocking.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Splink term-frequency adjustments</h3>
+        <p>Formalizes rare-token/common-token weighting for matching.</p>
+        <a href="https://moj-analytical-services.github.io/splink/topic_guides/comparisons/term-frequency.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Python Record Linkage Toolkit</h3>
+        <p>Blocking, comparison, classification, and evaluation toolkit.</p>
+        <a href="https://recordlinkage.readthedocs.io/en/stable/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>scikit-learn precision-recall</h3>
+        <p>Precision, recall, and threshold tooling for prevalence-aware evaluation.</p>
+        <a href="https://scikit-learn.org/stable/modules/generated/sklearn.metrics.precision_recall_curve.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Saito &amp; Rehmsmeier PR vs ROC</h3>
+        <p>Classic paper explaining why precision-recall plots are more informative for imbalanced datasets.</p>
+        <a href="https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0118432" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>AWS Entity Resolution docs</h3>
+        <p>Managed ER patterns: rules, ML, fuzzy matching, schema mapping, incremental workflows.</p>
+        <a href="https://aws.amazon.com/documentation-overview/entity-resolution/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>OpenSearch</h3>
+        <p>Community-driven open-source search and analytics suite released under Apache 2.0.</p>
+        <a href="https://opensearch.org/about/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>OpenSearch k-NN with filters</h3>
+        <p>OpenSearch supports filtered k-NN search, useful for hybrid name-vector retrieval with DOB/document filters.</p>
+        <a href="https://docs.opensearch.org/docs/2.11/search-plugins/knn/filter-search-knn/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Apache Solr fuzzy query parser</h3>
+        <p>Solr's standard query parser supports edit-distance fuzzy searches.</p>
+        <a href="https://solr.apache.org/guide/solr/latest/query-guide/standard-query-parser.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>PostgreSQL pg_trgm</h3>
+        <p>Postgres extension for trigram similarity and indexes for fast similar-string search.</p>
+        <a href="https://www.postgresql.org/docs/17/pgtrgm.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Typesense search API</h3>
+        <p>Open-source typo-tolerant search with filters, facets, ranking controls, and typo parameters.</p>
+        <a href="https://typesense.org/docs/28.0/api/search.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Meilisearch search API</h3>
+        <p>Open-source search API with prefix search, typo tolerance, filters, and ranking score details.</p>
+        <a href="https://www.meilisearch.com/docs/reference/api/search" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Qdrant filtering</h3>
+        <p>Open-source vector search with payload filters for metadata-constrained nearest-neighbor search.</p>
+        <a href="https://qdrant.tech/documentation/concepts/filtering/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Qdrant search</h3>
+        <p>Vector nearest-neighbor search, grouping, recommendation, and filtered retrieval concepts.</p>
+        <a href="https://qdrant.tech/documentation/search/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Zingg</h3>
+        <p>Open-source ER pipeline for labeling, training, matching, clustering.</p>
+        <a href="https://github.com/zinggAI/zingg" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>scikit-learn</h3>
+        <p>Local baseline models: logistic regression, gradient boosting, calibration, metrics.</p>
+        <a href="https://scikit-learn.org/stable/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>XGBoost</h3>
+        <p>Gradient-boosted tree model for feature-rich matching experiments.</p>
+        <a href="https://xgboost.readthedocs.io/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>SHAP</h3>
+        <p>Feature attribution for learned scoring explanations.</p>
+        <a href="https://shap.readthedocs.io/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>MLflow Tracking</h3>
+        <p>Open-source experiment tracking for runs, parameters, metrics, and artifacts.</p>
+        <a href="https://www.mlflow.org/docs/latest/ml/tracking" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>DVC data and model versioning</h3>
+        <p>Version data, models, and pipeline artifacts alongside Git-tracked code.</p>
+        <a href="https://dvc.org/doc/use-cases/versioning-data-and-models" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Evidently data drift</h3>
+        <p>Open-source data drift checks comparing reference and current datasets.</p>
+        <a href="https://docs.evidentlyai.com/metrics/explainer_drift" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Ollama documentation</h3>
+        <p>Local LLM runtime option for laptop-scale gray-band experiments.</p>
+        <a href="https://docs.ollama.com/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>vLLM OpenAI-compatible server</h3>
+        <p>Open-source LLM serving layer for governed local or private inference experiments.</p>
+        <a href="https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>scikit-learn StackingClassifier</h3>
+        <p>Stacking/ensemble classifier reference for combining matcher outputs.</p>
+        <a href="https://sklearn.org/stable/modules/generated/sklearn.ensemble.StackingClassifier.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>MAPIE conformal classification</h3>
+        <p>Split conformal classifier for prediction sets and abstention-style uncertainty.</p>
+        <a href="https://mapie.readthedocs.io/en/latest/generated/mapie.classification.SplitConformalClassifier.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Angelopoulos &amp; Bates conformal intro</h3>
+        <p>Gentle introduction to conformal prediction and distribution-free uncertainty quantification.</p>
+        <a href="https://arxiv.org/abs/2107.07511" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>crepes conformal prediction</h3>
+        <p>Conformal classifiers/regressors including Mondrian category support.</p>
+        <a href="https://crepes.readthedocs.io/en/latest/crepes.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Faker</h3>
+        <p>Synthetic identity generation.</p>
+        <a href="https://faker.readthedocs.io/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>FEBRL generator</h3>
+        <p>Classic synthetic record-linkage data generator concepts.</p>
+        <a href="https://users.cecs.anu.edu.au/~Peter.Christen/Febrl/febrl-0.3/febrldoc-0.3/manual.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>SSA baby names</h3>
+        <p>Public first-name frequency by year.</p>
+        <a href="https://www.ssa.gov/OACT/babynames/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>US Census surnames</h3>
+        <p>Official surname frequency tables.</p>
+        <a href="https://www.census.gov/topics/population/genealogy/data.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>uroman</h3>
+        <p>Universal romanizer for converting many scripts into Latin script.</p>
+        <a href="https://github.com/isi-nlp/uroman" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>ICU transliteration</h3>
+        <p>Industry-standard Unicode transform and transliteration framework.</p>
+        <a href="https://unicode-org.github.io/icu/userguide/transforms/general/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Sentence Transformers</h3>
+        <p>Local embedding similarity features.</p>
+        <a href="https://www.sbert.net/docs/sentence_transformer/usage/semantic_textual_similarity.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Sentence Transformers cross-encoders</h3>
+        <p>Training docs for pairwise cross-encoder models.</p>
+        <a href="https://sbert.net/docs/cross_encoder/training_overview.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Sentence Transformers hard negatives</h3>
+        <p>Utility for mining hard negatives for contrastive and pairwise training.</p>
+        <a href="https://www.sbert.net/docs/package_reference/util/hard_negatives.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Ditto deep entity matching</h3>
+        <p>Transformer-based deep entity matching reference approach.</p>
+        <a href="https://arxiv.org/abs/2004.00584" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Faiss</h3>
+        <p>Approximate nearest-neighbor search for embedding candidate generation.</p>
+        <a href="https://github.com/facebookresearch/faiss" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>NetworkX</h3>
+        <p>Local graph modeling and community detection.</p>
+        <a href="https://networkx.org/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Cytoscape.js</h3>
+        <p>Browser graph visualization.</p>
+        <a href="https://js.cytoscape.org/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>PyTorch Geometric</h3>
+        <p>PyTorch-based library for graph neural networks, including heterogeneous graph support.</p>
+        <a href="https://pytorch-geometric.readthedocs.io/" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>DGL link prediction</h3>
+        <p>Deep Graph Library tutorial for scalable GNN link prediction with edge minibatching.</p>
+        <a href="https://www.dgl.ai/dgl_docs/stochastic_training/link_prediction.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>GraphER paper</h3>
+        <p>Token-centric entity resolution with graph convolutional neural networks.</p>
+        <a href="https://ojs.aaai.org/index.php/AAAI/article/download/6330/6186" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>GNN inconsistent-cluster detection</h3>
+        <p>Uses GNNs to detect inconsistent clusters in incremental entity resolution.</p>
+        <a href="https://arxiv.org/abs/2105.05957" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>GDD plus GNN property-graph ER</h3>
+        <p>Knowledge-guided GNN approach for entity resolution in property graphs.</p>
+        <a href="https://arxiv.org/abs/2410.04783" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>OFAC Sanctions List Service</h3>
+        <p>Official downloadable sanctions-list data source.</p>
+        <a href="https://ofac.treasury.gov/sanctions-list-service" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Consolidated Screening List API</h3>
+        <p>Official consolidated export-screening API.</p>
+        <a href="https://data.commerce.gov/consolidated-screening-list-api" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>CBP PNR overview</h3>
+        <p>Public description of Passenger Name Record use and data handling.</p>
+        <a href="https://www.cbp.gov/travel/clearing-cbp/passenger-name-record" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Inferring High-Quality Co-Travel Networks</h3>
+        <p>Research on co-travel networks inferred from PNR-style data.</p>
+        <a href="https://arxiv.org/abs/1305.4429" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Airline PNR generation using GANs</h3>
+        <p>Synthetic PNR generation direction for privacy-preserving experiments.</p>
+        <a href="https://arxiv.org/abs/1807.06657" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>Biometrically Linked Administrative Data paper</h3>
+        <p>Biometric-linked labels for person-level entity resolution.</p>
+        <a href="https://sites.lsa.umich.edu/mgms/wp-content/uploads/sites/283/2021/11/entity_resolution_20210628.pdf" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>NIST FRTE 1:1</h3>
+        <p>Independent face verification evaluation context.</p>
+        <a href="https://pages.nist.gov/frvt/html/frvt11.html" target="_blank" rel="noreferrer">Open source</a>
+      </article>
+      <article class="source">
+        <h3>TSA facial-comparison fact sheet</h3>
+        <p>Public description of face-to-ID identity verification and safeguards.</p>
+        <a href="https://www.tsa.gov/news/press/factsheets/facial-comparison-technology" target="_blank" rel="noreferrer">Open source</a>
+      </article></div>
+    </section>
+  </main>
+</body>
+</html>
