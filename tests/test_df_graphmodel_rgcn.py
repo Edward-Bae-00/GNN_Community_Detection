@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 import torch
 from gnn import graphmodel_rgcn as gm
+from gnn.learned_cell import build_caught_times
 
 def _toy():
     # A-B co-travel early; C-D co-travel late; A,C also each have a RESIDENCE edge.
@@ -75,6 +76,37 @@ def test_build_person_graph_typed_smoke():
     assert len(node_ids) > 0 and len(edges) > 0
     assert set(edges["rel"].unique()) <= {0,1}
     assert (edges["rel"]==0).any()  # some COTRAVEL edges exist
+
+
+def test_build_caught_times_uses_earliest_label_availability(tmp_path):
+    pd.DataFrame(
+        {
+            "event_id": ["e1", "e2", "e3", "e4"],
+            "detected_flag": [True, True, True, True],
+        }
+    ).to_csv(tmp_path / "event_ground_truth.csv", index=False)
+    pd.DataFrame(
+        {
+            "event_id": ["e1", "e2", "e3", "e4"],
+            "observed_person_record_id": ["r1", "r1", "r2", "unmapped"],
+            "event_timestamp_utc": [
+                "2024-01-01T00:00:00Z",
+                "2024-01-02T00:00:00Z",
+                "2024-01-03T00:00:00Z",
+                "2024-01-04T00:00:00Z",
+            ],
+            "label_available_time_utc": [
+                "2024-01-03T00:00:00Z",
+                "2024-01-04T00:00:00Z",
+                pd.NA,
+                "2024-01-05T00:00:00Z",
+            ],
+        }
+    ).to_csv(tmp_path / "crossing_events.csv", index=False)
+
+    caught_times = build_caught_times(tmp_path, {"r1": "p1", "r2": "p2"})
+
+    assert caught_times == {"p1": pd.Timestamp("2024-01-03T00:00:00Z")}
 
 
 def test_hot_plate_waits_for_official_label_availability(tmp_path):

@@ -10,6 +10,9 @@ import json
 import os
 import re
 import sys
+import csv
+from collections import Counter
+from datetime import datetime
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +28,59 @@ def p(*args):
     print(*args, flush=True)
 
 
+def _normalize_v9_template(html: str) -> str:
+    """Remove stale V7 renderers and duplicate Explorer CSS from the template."""
+    html = re.sub(
+        r"(?ms)^[ \t]*entityResolution:\{rendered:false,render\(\)\{.*?^\}\},[ \t]*\n",
+        "",
+        html,
+    )
+
+    style_start = html.find("<style")
+    style_end = html.find("</style>", style_start)
+    marker = "/* ---- Community Explorer ---- */"
+    if style_start < 0 or style_end < 0:
+        return html
+
+    style = html[style_start:style_end]
+    markers = list(re.finditer(re.escape(marker), style))
+    if len(markers) > 1:
+        style = style[:markers[0].start()] + style[markers[-1].start():]
+        html = html[:style_start] + style + html[style_end:]
+    return html
+
+
+def _daily_crossing_series(corpus_dir):
+    """Return actual crossing-event volume for each V9 test-window day."""
+    split_path = os.path.join(corpus_dir, "train_valid_test_splits.csv")
+    events_path = os.path.join(corpus_dir, "crossing_events.csv")
+    test_ids = set()
+    with open(split_path, newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("split") == "test":
+                test_ids.add(row.get("entity_id"))
+
+    counts = Counter()
+    with open(events_path, newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("event_id") not in test_ids:
+                continue
+            timestamp = row.get("event_timestamp_utc", "")
+            if not timestamp:
+                continue
+            try:
+                day = datetime.fromisoformat(
+                    timestamp.replace("Z", "+00:00")
+                ).date().isoformat()
+            except ValueError:
+                day = timestamp[:10]
+            counts[day] += 1
+    return [
+        {"date": day, "crossings": counts[day]}
+        for day in sorted(counts)
+    ]
+
+
 def _load_v9_data() -> dict:
     if not os.path.exists(V9_DATA):
         p(f"[v9-dashboard] ERROR: {V9_DATA} not found.")
@@ -33,12 +89,73 @@ def _load_v9_data() -> dict:
         sys.exit(1)
     with open(V9_DATA) as f:
         data = json.load(f)
+    data["v9DailyCrossings"] = _daily_crossing_series(V9_CORPUS)
     if os.path.exists(V9_DEMO):
         with open(V9_DEMO) as f:
             data["v9Demo"] = json.load(f)
     else:
         p(f"[v9-dashboard] WARNING: {V9_DEMO} not found; V9 Results tab will be sparse.")
+
     return data
+
+
+def _embed_dashboard_data(html: str, data: dict) -> str:
+    """Replace the template data blob with a self-contained V9 data blob."""
+    data_start = html.find("const DATA = ")
+    iife_start = html.find("\n(async function(){", data_start)
+    if data_start < 0 or iife_start < 0:
+        raise ValueError("dashboard template is missing its DATA/IIFE boundary")
+    blob = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+    # Prevent a data string from prematurely closing the surrounding script.
+    blob = blob.replace("<", "\\u003c")
+    return (
+        html[:data_start]
+        + "\nlet DATA = " + blob + ";\nlet D = DATA;\n"
+        + html[iife_start:]
+    )
+
+
+def _make_d3_optional(html: str) -> str:
+    """Keep V9 tab bootstrapping alive when the optional D3 CDN is unavailable."""
+    old = """const tip=d3.select('body').append('div').attr('class','tooltip');
+function showTip(e,html){
+  tip.html(html).style('opacity',1);
+  const b=tip.node().getBoundingClientRect();
+  let x=e.clientX+14,y=e.clientY-12;
+  if(x+b.width>window.innerWidth-10)x=e.clientX-b.width-14;
+  if(y+b.height>window.innerHeight-10)y=e.clientY-b.height-10;
+  if(y<6)y=6;
+  tip.style('left',x+'px').style('top',y+'px');
+}
+function hideTip(){tip.style('opacity',0)}"""
+    new = """const tip=document.createElement('div');
+tip.className='tooltip';
+document.body.appendChild(tip);
+function showTip(e,html){
+  tip.innerHTML=html;
+  tip.style.opacity='1';
+  const b=tip.getBoundingClientRect();
+  let x=e.clientX+14,y=e.clientY-12;
+  if(x+b.width>window.innerWidth-10)x=e.clientX-b.width-14;
+  if(y+b.height>window.innerHeight-10)y=e.clientY-b.height-10;
+  if(y<6)y=6;
+  tip.style.left=x+'px';
+  tip.style.top=y+'px';
+}
+function hideTip(){tip.style.opacity='0'}"""
+    if old not in html:
+        raise ValueError("dashboard template is missing its tooltip bootstrap")
+    return html.replace(old, new, 1)
+
+
+def _inject_dashboard_tab_scripts(html, helper_js, renderer_js):
+    """Place helpers before ``Tabs`` and renderers inside its object literal."""
+    tabs_marker = "const Tabs={"
+    explorer_marker = "explorer:{rendered:false,render(){"
+    if tabs_marker not in html or explorer_marker not in html:
+        raise ValueError("dashboard template is missing its tab registry markers")
+    html = html.replace(tabs_marker, helper_js + "\n" + tabs_marker, 1)
+    return html.replace(explorer_marker, renderer_js + explorer_marker, 1)
 
 
 def main():
@@ -56,11 +173,11 @@ def main():
 
     with open(tmpl_path) as f:
         html = f.read()
+    html = _normalize_v9_template(html)
 
-    # 1. Strip inline DATA blob
-    data_start = html.find("const DATA = ")
-    iife_start = html.find("\n(async function(){", data_start)
-    html = html[:data_start] + "\nlet DATA = null;\nlet D = null;\n" + html[iife_start:]
+    # 1. Keep the generated dashboard self-contained so it also works when
+    # opened directly as a file, while retaining data_v9.json for inspection.
+    html = _embed_dashboard_data(html, data)
 
     # 2. Replace the fetch block in IIFE
     iife_cleanup = re.search(
@@ -88,43 +205,31 @@ def main():
     )
 
     html = html.replace(
-        '  <button data-tab="explorer">Community Explorer</button>\n',
-        '  <button data-tab="explorer">Community Explorer</button>\n' + V9_RESULTS_NAV_BTN
+        '    <!-- V9_NAV_TABS -->\n',
+        '    ' + V9_RESULTS_NAV_BTN,
     )
     html = html.replace(
-        '  <section id="tab-explorer" class="tab-content"></section>\n',
-        '  <section id="tab-explorer" class="tab-content"></section>\n' + V9_RESULTS_SECTION
+        '  <!-- V9_TAB_SECTIONS -->\n',
+        V9_RESULTS_SECTION,
     )
-    html = html.replace(
-        "explorer:{rendered:false,render(){",
-        V9_RESULTS_JS + "explorer:{rendered:false,render(){"
-    )
+    html = _inject_dashboard_tab_scripts(html, "", V9_RESULTS_JS)
     html = html.replace("</style>", V9_RESULTS_CSS + "\n</style>", 1)
+    html = _make_d3_optional(html)
 
-    # 4. Update titles
+    # 4. Remove Entity Resolution if present
+    html = html.replace('  <button data-tab="entityResolution">Entity Resolution</button>\n', '')
+    html = html.replace('  <section id="tab-entityResolution" class="tab-content"></section>\n', '')
+
+    # 5. Update titles
     html = re.sub(r"<title>[^<]*</title>", "<title>CBP Graph Corpus Explorer - V9</title>", html, count=1)
     html = re.sub(r"<h1>[^<]*</h1>", "<h1>CBP Graph Corpus Explorer &middot; V9</h1>", html, count=1)
 
-    # 5. Inject new fetch loader
-    loader_idx = html.find("(async function(){\n") + 19
-    loader_js = """
-  try {
-    const resp = await fetch('data_v9.json');
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    DATA = await resp.json();
-    D = DATA;
-  } catch (e) {
-    console.error('Failed to load V9 dashboard data', e);
-    return;
-  }
-"""
-    html = html[:loader_idx] + loader_js + html[loader_idx:]
-
+    # 5. DATA is already embedded above; no local fetch is needed.
     out_html = os.path.join(OUT_DIR, "index.html")
     with open(out_html, "w") as f:
         f.write(html)
     p(f"[v9-dashboard] wrote {out_html} ({os.path.getsize(out_html)/1e6:.2f} MB)")
-    p("[v9-dashboard] open v9_dashboard/index.html through a local HTTP server.")
+    p("[v9-dashboard] open v9_dashboard/index.html directly or through a local HTTP server.")
 
 
 if __name__ == "__main__":

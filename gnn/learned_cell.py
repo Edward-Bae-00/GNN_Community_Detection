@@ -78,16 +78,18 @@ def _pool_by_roots_torch(z, roots):
 
 
 def build_caught_times(corpus_dir, obs_to_identity) -> dict:
-    """identity -> earliest DETECTED-crossing timestamp (tz-aware). This is the
-    persistent 'ever caught' boundary; a scoring time T uses caught_time[id] < T,
-    so only catches strictly before T ever raise risk (as-of, no future peek)."""
+    """identity -> earliest official DETECTED-label availability (tz-aware).
+    This is the persistent 'ever caught' boundary; a scoring time T uses
+    caught_time[id] < T, so only officially available catches strictly before T
+    ever raise risk (as-of, no future peek)."""
     egt = pd.read_csv(corpus_dir / "event_ground_truth.csv",
                       usecols=["event_id", "detected_flag"])
     ev = pd.read_csv(corpus_dir / "crossing_events.csv",
-                     usecols=["event_id", "observed_person_record_id", "event_timestamp_utc"])
+                     usecols=["event_id", "observed_person_record_id",
+                              "label_available_time_utc"])
     det = egt[egt.detected_flag.fillna(False).astype(bool)].merge(ev, on="event_id")
     det["identity"] = det["observed_person_record_id"].map(obs_to_identity)
-    det["_t"] = pd.to_datetime(det["event_timestamp_utc"], utc=True, errors="coerce")
+    det["_t"] = pd.to_datetime(det["label_available_time_utc"], utc=True, errors="coerce")
     det = det.dropna(subset=["identity", "_t"])
     return det.groupby("identity")["_t"].min().to_dict()
 
@@ -138,7 +140,7 @@ def _asof_x_caught(node_ids, node_feat, active_edges, caught_time, T, num_rel=NU
 
 def _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool,
                        obs_to_identity, train_labels, *, seed, epochs, lr,
-                       train_cutoff, train_bucket, num_rel=NUM_REL):
+                       train_cutoff, train_bucket, num_rel=NUM_REL, model_cls=_RGCN):
     """Per-event supervision, time-bucketed for speed. Each train crossing keeps its
     OWN detected label; features/edges are as-of the bucket start (strictly < bucket).
     Gradients flow enc -> torch cell-pool -> head (no numpy detour)."""
@@ -151,7 +153,7 @@ def _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool
     tr["_lab"] = np.asarray(train_labels, dtype=float)
     tr = tr[tr["identity"].isin(index) & tr["_t"].notna() & (tr["_t"] < cutoff)].copy()
     if len(tr) == 0:
-        return _RGCN(_asof_x_caught(node_ids, node_feat, edges_typed.iloc[0:0],
+        return model_cls(_asof_x_caught(node_ids, node_feat, edges_typed.iloc[0:0],
                                     caught_time, cutoff, num_rel=num_rel).shape[1],
                      num_relations=num_rel)
     tr["_bucket"] = (tr["_t"].dt.to_period(train_bucket).dt.start_time
@@ -159,7 +161,7 @@ def _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool
 
     in_dim = _asof_x_caught(node_ids, node_feat, edges_typed.iloc[0:0],
                             caught_time, cutoff, num_rel=num_rel).shape[1]
-    model = _RGCN(in_dim, num_relations=num_rel)
+    model = model_cls(in_dim, num_relations=num_rel)
     npos = float(tr["_lab"].sum()); nneg = float(len(tr)) - npos
     loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([nneg / max(npos, 1.0)]))
     opt = torch.optim.Adam(model.parameters(), lr=lr)
@@ -181,21 +183,11 @@ def _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool
     return model
 
 
-def rgcn_cell_score(edges_typed, node_ids, node_feat, caught_time, train_pool,
-                    test_pool, obs_to_identity, train_labels, *, seed=0, epochs=30,
-                    lr=1e-2, train_cutoff="2024-01-01", train_bucket="M",
-                    num_rel=NUM_REL) -> np.ndarray:
-    model = _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool,
-                               obs_to_identity, train_labels, seed=seed, epochs=epochs,
-                               lr=lr, train_cutoff=train_cutoff, train_bucket=train_bucket,
-                               num_rel=num_rel)
-    index = {p: i for i, p in enumerate(node_ids)}
-    rows = test_pool.reset_index(drop=True).copy()
+def _score_pool(model, pool, obs_to_identity, edges_typed, node_ids, node_feat,
+                caught_time, index, *, num_rel=NUM_REL):
+    """Score a pool of crossing events with a trained caught-propagation model."""
+    rows = pool.reset_index(drop=True).copy()
     rows["identity"] = rows["primary_obs_id"].map(obs_to_identity)
-    # Day-bucket scoring times (established repo convention, materialize_risk_rgcn.py):
-    # ~all pool timestamps are unique, so grouping by exact time = one RGCN forward per
-    # event (intractable). Flooring to day gives one forward per day and is STRICTLY
-    # leak-free (an event on day D is scored using only edges/catches before D's start).
     rows["_t"] = pd.to_datetime(rows["t"], utc=True, errors="coerce").dt.floor("D")
     out = np.zeros(len(rows))
     with torch.no_grad():
@@ -209,3 +201,55 @@ def rgcn_cell_score(edges_typed, node_ids, node_feat, caught_time, train_pool,
             for ridx, ident in zip(grp.index, grp["identity"]):
                 out[ridx] = prob[index[ident]] if ident in index else 0.0
     return out
+
+
+def rgcn_cell_score(edges_typed, node_ids, node_feat, caught_time, train_pool,
+                    test_pool, obs_to_identity, train_labels, *, seed=0, epochs=30,
+                    lr=1e-2, train_cutoff="2024-01-01", train_bucket="M",
+                    num_rel=NUM_REL, model_cls=_RGCN) -> np.ndarray:
+    """Train a caught-propagation RGCN and return test-pool risk scores."""
+    model = _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool,
+                               obs_to_identity, train_labels, seed=seed, epochs=epochs,
+                               lr=lr, train_cutoff=train_cutoff, train_bucket=train_bucket,
+                               num_rel=num_rel, model_cls=model_cls)
+    index = {p: i for i, p in enumerate(node_ids)}
+    return _score_pool(model, test_pool, obs_to_identity, edges_typed, node_ids,
+                       node_feat, caught_time, index, num_rel=num_rel)
+
+
+def rgcn_oof_train_scores(edges_typed, node_ids, node_feat, caught_time,
+                          train_pool, obs_to_identity, train_labels, *,
+                          seed=0, epochs=30, lr=1e-2, train_cutoff="2024-01-01",
+                          train_bucket="M", num_rel=NUM_REL, model_cls=_RGCN,
+                          n_folds=3) -> np.ndarray:
+    """K-fold out-of-fold GNN scores for training rows (leak-free for hybrid).
+
+    Each training row is scored by a model that was NOT trained on that row,
+    preventing the in-sample overfitting that would inflate the hybrid arm.
+    """
+    from sklearn.model_selection import KFold
+
+    oof = np.zeros(len(train_pool))
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    labels_arr = np.asarray(train_labels)
+    index = {p: i for i, p in enumerate(node_ids)}
+
+    for fold_train_idx, fold_val_idx in kf.split(train_pool):
+        fold_tp = train_pool.iloc[fold_train_idx].reset_index(drop=True)
+        fold_tl = labels_arr[fold_train_idx]
+        fold_vp = train_pool.iloc[fold_val_idx].reset_index(drop=True)
+
+        model = _train_caught_rgcn(
+            edges_typed, node_ids, node_feat, caught_time,
+            fold_tp, obs_to_identity, fold_tl,
+            seed=seed, epochs=epochs, lr=lr,
+            train_cutoff=train_cutoff, train_bucket=train_bucket,
+            num_rel=num_rel, model_cls=model_cls,
+        )
+
+        oof[fold_val_idx] = _score_pool(
+            model, fold_vp, obs_to_identity, edges_typed,
+            node_ids, node_feat, caught_time, index, num_rel=num_rel,
+        )
+
+    return oof

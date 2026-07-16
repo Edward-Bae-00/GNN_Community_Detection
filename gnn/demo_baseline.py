@@ -28,13 +28,15 @@ FEATURE_NAMES = _ASOF + _JSON + _DEMO + _CTX
 
 
 def _asof_history(corpus_dir, obs_to_identity) -> dict:
-    """resolved identity -> (sorted times, prefix-sum arrays for secondary/seizure/arrest).
-    prefix[k] = count over the identity's first k (strictly-prior) crossings."""
+    """resolved identity -> event times, label times, and outcome flags."""
     ce = pd.read_csv(corpus_dir / "crossing_events.csv",
                      usecols=["event_timestamp_utc", "observed_person_record_id",
+                              "label_available_time_utc",
                               "secondary_referral_flag", "seizure_flag", "arrest_flag"])
     ce["identity"] = ce["observed_person_record_id"].map(obs_to_identity)
     ce["t"] = pd.to_datetime(ce["event_timestamp_utc"], utc=True, errors="coerce")
+    ce["label_available"] = pd.to_datetime(
+        ce["label_available_time_utc"], utc=True, errors="coerce")
     ce = ce.dropna(subset=["identity", "t"]).sort_values("t")
     for c in ["secondary_referral_flag", "seizure_flag", "arrest_flag"]:
         ce[c] = ce[c].astype(str).str.lower().eq("true").astype(int)
@@ -42,9 +44,10 @@ def _asof_history(corpus_dir, obs_to_identity) -> dict:
     for ident, g in ce.groupby("identity", sort=False):
         hist[ident] = (
             g["t"].values.astype("datetime64[ns]"),
-            np.concatenate([[0], np.cumsum(g["secondary_referral_flag"].values)]),
-            np.concatenate([[0], np.cumsum(g["seizure_flag"].values)]),
-            np.concatenate([[0], np.cumsum(g["arrest_flag"].values)]))
+            g["label_available"].values.astype("datetime64[ns]"),
+            g["secondary_referral_flag"].values,
+            g["seizure_flag"].values,
+            g["arrest_flag"].values)
     return hist
 
 
@@ -95,12 +98,13 @@ def build_baseline_features(rows: pd.DataFrame, corpus_dir, obs_to_identity):
         T = np.datetime64(pd.Timestamp(row["t"]).tz_convert(None))
         h = hist.get(ident)
         if h is not None:
-            t, c_sec, c_seiz, c_arr = h
+            t, label_available, c_sec, c_seiz, c_arr = h
             k = int(np.searchsorted(t, T, side="left"))  # # strictly-prior crossings
             X[r, col["prior_crossings"]] = k
-            X[r, col["prior_secondary"]] = c_sec[k]
-            X[r, col["prior_seizure"]] = c_seiz[k]
-            X[r, col["prior_arrests"]] = c_arr[k]
+            available = label_available[:k] < T
+            X[r, col["prior_secondary"]] = c_sec[:k][available].sum()
+            X[r, col["prior_seizure"]] = c_seiz[:k][available].sum()
+            X[r, col["prior_arrests"]] = c_arr[:k][available].sum()
         d = js.get(eid, {})
         X[r, col["hour"]] = float(d.get("hour", 0) or 0)
         if obs_id in demo.index:
