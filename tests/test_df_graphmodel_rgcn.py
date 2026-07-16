@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import pytest
+import torch
 from gnn import graphmodel_rgcn as gm
 
 def _toy():
@@ -12,6 +14,35 @@ def _toy():
     node_ids = ["A","B","C","D","E","F"]
     node_feat = {p: np.array([1.0]) for p in node_ids}
     return edges, node_ids, node_feat
+
+
+def _write_plate_corpus(corpus_dir, rows):
+    frame = pd.DataFrame(rows)
+    observed = frame[
+        [
+            "observed_person_record_id",
+            "event_id",
+            "event_timestamp_utc",
+        ]
+    ].copy()
+    observed["observed_residence_location_id"] = pd.NA
+    observed.to_csv(corpus_dir / "observed_person_records.csv", index=False)
+
+    crossing = frame[
+        [
+            "event_id",
+            "observed_person_record_id",
+            "vehicle_id",
+            "event_timestamp_utc",
+            "seizure_flag",
+            "label_available_time_utc",
+        ]
+    ]
+    crossing.to_csv(corpus_dir / "crossing_events.csv", index=False)
+
+    return dict(
+        zip(frame["observed_person_record_id"], frame["canonical_person_id"])
+    )
 
 def test_asof_masks_future_edges():
     edges, node_ids, node_feat = _toy()
@@ -46,50 +77,158 @@ def test_build_person_graph_typed_smoke():
     assert (edges["rel"]==0).any()  # some COTRAVEL edges exist
 
 
-def test_build_anchor_graph_shares_plate_only_after_known_seizure(tmp_path):
-    corpus_dir = tmp_path
-    obs = pd.DataFrame(
+def test_hot_plate_waits_for_official_label_availability(tmp_path):
+    rows = [
         {
-            "observed_person_record_id": ["r1", "r2", "r3"],
-            "event_id": ["e1", "e2", "e3"],
-            "event_timestamp_utc": [
-                "2024-01-01T00:00:00Z",
-                "2024-01-02T00:00:00Z",
-                "2024-01-03T00:00:00Z",
-            ],
-            "observed_residence_location_id": [pd.NA, pd.NA, pd.NA],
-        }
-    )
-    obs.to_csv(corpus_dir / "observed_person_records.csv", index=False)
-
-    ce = pd.DataFrame(
+            "event_id": "e1",
+            "observed_person_record_id": "r1",
+            "canonical_person_id": "p1",
+            "vehicle_id": "veh-1",
+            "event_timestamp_utc": "2024-01-01T00:00:00Z",
+            "seizure_flag": "false",
+            "label_available_time_utc": None,
+        },
         {
-            "observed_person_record_id": ["r1", "r2", "r3"],
-            "vehicle_id": ["veh-1", "veh-1", "veh-1"],
-            "event_timestamp_utc": [
-                "2024-01-01T00:00:00Z",
-                "2024-01-02T00:00:00Z",
-                "2024-01-03T00:00:00Z",
-            ],
-            "seizure_flag": ["false", "false", "true"],
-        }
-    )
-    ce.to_csv(corpus_dir / "crossing_events.csv", index=False)
-
-    obs_to_person = {"r1": "p1", "r2": "p2", "r3": "p3"}
-    edges = gm.build_anchor_graph(obs_to_person, corpus_dir, include_plate=True)
-
-    early = edges[
-        (edges["u"] == "p1")
-        & (edges["v"] == "p2")
-        & (edges["avail_time"] == pd.Timestamp("2024-01-02T00:00:00Z"))
+            "event_id": "e2",
+            "observed_person_record_id": "r2",
+            "canonical_person_id": "p2",
+            "vehicle_id": "veh-1",
+            "event_timestamp_utc": "2024-01-03T00:00:00Z",
+            "seizure_flag": "true",
+            "label_available_time_utc": "2024-01-10T00:00:00Z",
+        },
+        {
+            "event_id": "e3",
+            "observed_person_record_id": "r3",
+            "canonical_person_id": "p3",
+            "vehicle_id": "veh-1",
+            "event_timestamp_utc": "2024-01-08T00:00:00Z",
+            "seizure_flag": "false",
+            "label_available_time_utc": None,
+        },
+        {
+            "event_id": "e4",
+            "observed_person_record_id": "r4",
+            "canonical_person_id": "p4",
+            "vehicle_id": "veh-1",
+            "event_timestamp_utc": "2024-01-11T00:00:00Z",
+            "seizure_flag": "false",
+            "label_available_time_utc": None,
+        },
     ]
-    late = edges[
+    obs_to_person = _write_plate_corpus(tmp_path, rows)
+
+    edges = gm.build_anchor_graph(obs_to_person, tmp_path, include_plate=True)
+
+    before_label = edges[
         (edges["u"] == "p2")
         & (edges["v"] == "p3")
-        & (edges["avail_time"] == pd.Timestamp("2024-01-03T00:00:00Z"))
+        & (edges["avail_time"] == pd.Timestamp("2024-01-08T00:00:00Z"))
     ]
-    assert len(early) == 1
-    assert len(late) == 1
-    assert early.iloc[0]["edge_type"] == "SHARED_PLATE"
-    assert late.iloc[0]["edge_type"] == "SHARED_PLATE_HOT"
+    after_label = edges[
+        (edges["u"] == "p2")
+        & (edges["v"] == "p4")
+        & (edges["avail_time"] == pd.Timestamp("2024-01-11T00:00:00Z"))
+    ]
+    assert len(before_label) == 1
+    assert len(after_label) == 1
+    assert before_label.iloc[0]["edge_type"] == "SHARED_PLATE"
+    assert after_label.iloc[0]["edge_type"] == "SHARED_PLATE_HOT"
+
+
+def test_hot_plate_at_label_timestamp_is_typed_but_not_active(tmp_path):
+    label_time = pd.Timestamp("2024-01-10T00:00:00Z")
+    rows = [
+        {
+            "event_id": "e1",
+            "observed_person_record_id": "r1",
+            "canonical_person_id": "p1",
+            "vehicle_id": "veh-1",
+            "event_timestamp_utc": "2024-01-03T00:00:00Z",
+            "seizure_flag": "true",
+            "label_available_time_utc": label_time.isoformat(),
+        },
+        {
+            "event_id": "e2",
+            "observed_person_record_id": "r2",
+            "canonical_person_id": "p2",
+            "vehicle_id": "veh-1",
+            "event_timestamp_utc": label_time.isoformat(),
+            "seizure_flag": "false",
+            "label_available_time_utc": None,
+        },
+    ]
+    obs_to_person = _write_plate_corpus(tmp_path, rows)
+
+    edges = gm.build_anchor_graph(obs_to_person, tmp_path, include_plate=True)
+
+    follow_up = edges[
+        (edges["u"] == "p1")
+        & (edges["v"] == "p2")
+        & (edges["avail_time"] == label_time)
+    ]
+    assert len(follow_up) == 1
+    assert follow_up.iloc[0]["edge_type"] == "SHARED_PLATE_HOT"
+
+    typed_edges = edges[edges["edge_type"].isin(gm.REL_PLATE)].copy()
+    typed_edges["rel"] = typed_edges["edge_type"].map(gm.REL_PLATE)
+    node_ids = sorted(set(typed_edges["u"]) | set(typed_edges["v"]))
+    node_feat = {person_id: np.array([1.0]) for person_id in node_ids}
+
+    class RecordingModel:
+        def __init__(self):
+            self.edge_counts = []
+
+        def eval(self):
+            return self
+
+        def __call__(self, x, edge_index, edge_type):
+            self.edge_counts.append(edge_index.shape[1])
+            return torch.zeros(x.shape[0])
+
+    model = RecordingModel()
+    gm.asof_risk_rgcn(
+        model,
+        typed_edges[["u", "v", "avail_time", "rel"]],
+        node_ids,
+        node_feat,
+        pd.DataFrame({"person_id": ["p2"], "t": [label_time]}),
+    )
+    assert model.edge_counts == [0]
+
+
+@pytest.mark.parametrize("label_available_time", [None, "not-a-time"])
+def test_unavailable_hot_plate_label_never_creates_hot_state(
+    tmp_path, label_available_time
+):
+    rows = [
+        {
+            "event_id": "e1",
+            "observed_person_record_id": "r1",
+            "canonical_person_id": "p1",
+            "vehicle_id": "veh-1",
+            "event_timestamp_utc": "2024-01-03T00:00:00Z",
+            "seizure_flag": "true",
+            "label_available_time_utc": label_available_time,
+        },
+        {
+            "event_id": "e2",
+            "observed_person_record_id": "r2",
+            "canonical_person_id": "p2",
+            "vehicle_id": "veh-1",
+            "event_timestamp_utc": "2024-01-11T00:00:00Z",
+            "seizure_flag": "false",
+            "label_available_time_utc": None,
+        },
+    ]
+    obs_to_person = _write_plate_corpus(tmp_path, rows)
+
+    edges = gm.build_anchor_graph(obs_to_person, tmp_path, include_plate=True)
+
+    shared_plate = edges[
+        (edges["u"] == "p1")
+        & (edges["v"] == "p2")
+        & (edges["avail_time"] == pd.Timestamp("2024-01-11T00:00:00Z"))
+    ]
+    assert len(shared_plate) == 1
+    assert shared_plate.iloc[0]["edge_type"] == "SHARED_PLATE"

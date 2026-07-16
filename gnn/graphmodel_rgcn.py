@@ -46,14 +46,15 @@ def build_anchor_graph(obs_to_person, corpus_dir, include_assoc=False, include_p
     edges.append(merged_res[["identity_x", "identity_y", "avail_time", "edge_type"]].rename(columns={"identity_x": "u", "identity_y": "v"}))
 
     if include_plate:
-        ce = pd.read_csv(corpus_dir / "crossing_events.csv", usecols=["observed_person_record_id", "vehicle_id", "event_timestamp_utc", "seizure_flag"])
+        ce = pd.read_csv(corpus_dir / "crossing_events.csv", usecols=["observed_person_record_id", "vehicle_id", "event_timestamp_utc", "seizure_flag", "label_available_time_utc"])
         ce["identity"] = ce["observed_person_record_id"].map(obs_to_person)
         ce = ce.dropna(subset=["identity", "vehicle_id"])
         ce["avail_time"] = pd.to_datetime(ce["event_timestamp_utc"], utc=True, errors="coerce")
+        ce["label_available_time"] = pd.to_datetime(ce["label_available_time_utc"], utc=True, errors="coerce")
         ce["seizure_flag"] = ce["seizure_flag"].astype(str).str.lower().eq("true")
-        first_seizure_time = (
+        first_observable_seizure_time = (
             ce.loc[ce["seizure_flag"]]
-              .groupby("vehicle_id")["avail_time"]
+              .groupby("vehicle_id")["label_available_time"]
               .min()
         )
         
@@ -61,10 +62,10 @@ def build_anchor_graph(obs_to_person, corpus_dir, include_assoc=False, include_p
         merged_ce = merged_ce[merged_ce["identity_x"] != merged_ce["identity_y"]]
         merged_ce["avail_time"] = merged_ce[["avail_time_x", "avail_time_y"]].max(axis=1)
         merged_ce["edge_type"] = "SHARED_PLATE"
-        merged_ce["first_seizure_time"] = merged_ce["vehicle_id"].map(first_seizure_time)
+        merged_ce["first_observable_seizure_time"] = merged_ce["vehicle_id"].map(first_observable_seizure_time)
         hot_mask = (
-            merged_ce["first_seizure_time"].notna()
-            & (merged_ce["avail_time"] >= merged_ce["first_seizure_time"])
+            merged_ce["first_observable_seizure_time"].notna()
+            & (merged_ce["avail_time"] >= merged_ce["first_observable_seizure_time"])
         )
         merged_ce.loc[hot_mask, "edge_type"] = "SHARED_PLATE_HOT"
         edges.append(merged_ce[["identity_x", "identity_y", "avail_time", "edge_type"]].rename(columns={"identity_x": "u", "identity_y": "v"}))
