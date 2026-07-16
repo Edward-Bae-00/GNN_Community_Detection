@@ -110,17 +110,18 @@ def test_gnn_training_defense_excludes_label_at_cutoff():
 
 
 def test_gnn_score_bundle_retains_seed_models_and_scores(monkeypatch):
-    train_calls = []
-    score_calls = []
+    events = []
+    train_cutoffs = []
     train_cutoff = object()
     pools = [SimpleNamespace(pool_index=0), SimpleNamespace(pool_index=1)]
 
     def fake_train(*args, **kwargs):
-        train_calls.append(kwargs)
+        events.append(("train", kwargs["seed"]))
+        train_cutoffs.append(kwargs["train_cutoff"])
         return SimpleNamespace(seed=kwargs["seed"])
 
     def fake_score(model, pool, *args, **kwargs):
-        score_calls.append((model.seed, pool.pool_index))
+        events.append(("score", model.seed, pool.pool_index))
         return np.array([model.seed + pool.pool_index,
                          model.seed + pool.pool_index + 3.0])
 
@@ -138,11 +139,11 @@ def test_gnn_score_bundle_retains_seed_models_and_scores(monkeypatch):
     assert [bundle.models_by_seed[seed].seed for seed in bundle.seed_order] == [0, 1, 2]
     assert tuple(bundle.scores_by_seed) == bundle.seed_order
     np.testing.assert_array_equal(bundle.ensemble(0), np.array([1.0, 4.0]))
-    assert [call["seed"] for call in train_calls] == [0, 1, 2]
-    assert all(call["train_cutoff"] is train_cutoff for call in train_calls)
-    assert score_calls == [
-        (0, 0), (1, 0), (2, 0),
-        (0, 1), (1, 1), (2, 1),
+    assert all(cutoff is train_cutoff for cutoff in train_cutoffs)
+    assert events == [
+        ("train", 0), ("train", 1), ("train", 2),
+        ("score", 0, 0), ("score", 1, 0), ("score", 2, 0),
+        ("score", 0, 1), ("score", 1, 1), ("score", 2, 1),
     ]
 
 
