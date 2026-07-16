@@ -542,6 +542,18 @@ def test_counterfactual_rejects_wrong_day_row_binding():
         )
 
 
+def test_counterfactual_rejects_candidate_bound_to_a_different_day():
+    engine, _ = _explanation_fixture()
+    bindings = _counterfactual_row_bindings()
+    bindings[2] = ("peer-a", SCORING_DAY + pd.Timedelta(days=1))
+    _bind_matching_reference(engine, row_bindings=bindings)
+
+    with pytest.raises(ValueError, match="candidate row.*scoring_day"):
+        engine.score_counterfactual(
+            _counterfactual_context(), _caught_factor(engine)
+        )
+
+
 def test_counterfactual_rejects_mismatched_frozen_probability():
     engine, _ = _explanation_fixture()
     engine.bind_rank_reference(

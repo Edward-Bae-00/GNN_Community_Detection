@@ -782,6 +782,12 @@ def _validate_bound_counterfactual_context(rank_state, context):
             raise ValueError(
                 "same-day person row binding does not match context scoring_day"
             )
+    for row_index in candidates:
+        _, scoring_day = rank_state.row_bindings[row_index]
+        if scoring_day != context.scoring_day:
+            raise ValueError(
+                "candidate row binding does not match context scoring_day"
+            )
     complete_same_day_rows = tuple(
         row_index
         for row_index, binding in enumerate(rank_state.row_bindings)
