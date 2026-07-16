@@ -1,9 +1,12 @@
 """End-to-end smoke of the V9 baseline-vs-GNN demo on the tiny v9dev corpus.
 See tasks/v9_demo_corpus_plan.md (Task 10)."""
+from dataclasses import FrozenInstanceError
 import pathlib
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import gnn.run_demo as rd
 from gnn import learned_cell as lc
@@ -104,6 +107,145 @@ def test_gnn_training_defense_excludes_label_at_cutoff():
 
     assert eligible_pool["event_id"].tolist() == ["before"]
     assert eligible_labels.tolist() == [1]
+
+
+def test_gnn_score_bundle_retains_seed_models_and_scores(monkeypatch):
+    train_calls = []
+    score_calls = []
+    train_cutoff = object()
+    pools = [SimpleNamespace(pool_index=0), SimpleNamespace(pool_index=1)]
+
+    def fake_train(*args, **kwargs):
+        train_calls.append(kwargs)
+        return SimpleNamespace(seed=kwargs["seed"])
+
+    def fake_score(model, pool, *args, **kwargs):
+        score_calls.append((model.seed, pool.pool_index))
+        return np.array([model.seed + pool.pool_index,
+                         model.seed + pool.pool_index + 3.0])
+
+    monkeypatch.setattr(rd, "_train_caught_rgcn", fake_train)
+    monkeypatch.setattr(rd, "_score_pool", fake_score)
+
+    bundle = rd._gnn_scores(
+        [], ["person"], np.zeros((1, 1)), {}, SimpleNamespace(), np.array([1]),
+        pools, {}, seeds=(0, 1, 2), epochs=1, train_bucket="M",
+        train_cutoff=train_cutoff, model_cls=object, num_rel=4,
+    )
+
+    assert bundle.seed_order == (0, 1, 2)
+    assert tuple(bundle.models_by_seed) == bundle.seed_order
+    assert [bundle.models_by_seed[seed].seed for seed in bundle.seed_order] == [0, 1, 2]
+    assert tuple(bundle.scores_by_seed) == bundle.seed_order
+    np.testing.assert_array_equal(bundle.ensemble(0), np.array([1.0, 4.0]))
+    assert [call["seed"] for call in train_calls] == [0, 1, 2]
+    assert all(call["train_cutoff"] is train_cutoff for call in train_calls)
+    assert score_calls == [
+        (0, 0), (1, 0), (2, 0),
+        (0, 1), (1, 1), (2, 1),
+    ]
+
+
+def test_gnn_scores_rejects_empty_or_duplicate_seed_order():
+    args = ([], [], np.empty((0, 0)), {}, SimpleNamespace(), np.array([]), [], {})
+    kwargs = {
+        "epochs": 1,
+        "train_bucket": "M",
+        "train_cutoff": object(),
+        "model_cls": object,
+        "num_rel": 4,
+    }
+
+    with pytest.raises(ValueError, match="at least one"):
+        rd._gnn_scores(*args, seeds=(), **kwargs)
+    with pytest.raises(ValueError, match="duplicate"):
+        rd._gnn_scores(*args, seeds=(1, "1"), **kwargs)
+
+
+def test_gnn_score_bundle_rejects_invalid_pool_index_and_shapes():
+    bundle = rd.GNNScoreBundle(
+        seed_order=(0, 1),
+        models_by_seed={0: object(), 1: object()},
+        scores_by_seed={
+            0: (np.array([0.1, 0.2]),),
+            1: (np.array([0.3, 0.4]),),
+        },
+    )
+
+    with pytest.raises(IndexError, match="pool_index"):
+        bundle.ensemble(-1)
+    with pytest.raises(IndexError, match="pool_index"):
+        bundle.ensemble(1)
+
+    inconsistent = rd.GNNScoreBundle(
+        seed_order=(0, 1),
+        models_by_seed={0: object(), 1: object()},
+        scores_by_seed={
+            0: (np.array([0.1, 0.2]),),
+            1: (np.array([0.3]),),
+        },
+    )
+    with pytest.raises(ValueError, match="inconsistent shapes"):
+        inconsistent.ensemble(0)
+
+
+def test_gnn_score_bundle_is_defensively_immutable():
+    seed_order = [0, 1]
+    models = {0: SimpleNamespace(seed=0), 1: SimpleNamespace(seed=1)}
+    seed_zero_scores = np.array([0.1, 0.2], dtype=np.float32)
+    scores = {
+        0: [seed_zero_scores],
+        1: [np.array([0.3, 0.4], dtype=np.float32)],
+    }
+    bundle = rd.GNNScoreBundle(seed_order, models, scores)
+
+    seed_order.append(2)
+    models[2] = SimpleNamespace(seed=2)
+    scores[0].append(np.array([9.0, 9.0]))
+    seed_zero_scores[0] = 9.0
+
+    assert bundle.seed_order == (0, 1)
+    np.testing.assert_array_equal(
+        bundle.scores_by_seed[0][0], np.array([0.1, 0.2], dtype=np.float32)
+    )
+    with pytest.raises(TypeError):
+        bundle.models_by_seed[0] = object()
+    with pytest.raises(TypeError):
+        bundle.scores_by_seed[0] = ()
+    with pytest.raises(ValueError, match="read-only"):
+        bundle.scores_by_seed[0][0][0] = 7.0
+    with pytest.raises(FrozenInstanceError):
+        bundle.seed_order = (1, 0)
+
+
+def test_gnn_score_bundle_ensemble_matches_old_mean_for_multiple_pools():
+    scores_by_seed = {
+        7: (
+            np.array([0.15, 0.25, 0.35], dtype=np.float32),
+            np.array([1, 5], dtype=np.int16),
+        ),
+        3: (
+            np.array([0.45, 0.55, 0.65], dtype=np.float32),
+            np.array([3, 7], dtype=np.int16),
+        ),
+        11: (
+            np.array([0.75, 0.85, 0.95], dtype=np.float32),
+            np.array([5, 9], dtype=np.int16),
+        ),
+    }
+    bundle = rd.GNNScoreBundle(
+        seed_order=(7, 3, 11),
+        models_by_seed={seed: object() for seed in scores_by_seed},
+        scores_by_seed=scores_by_seed,
+    )
+
+    for pool_index in range(2):
+        expected = np.mean(np.column_stack([
+            scores_by_seed[seed][pool_index] for seed in bundle.seed_order
+        ]), axis=1)
+        actual = bundle.ensemble(pool_index)
+        np.testing.assert_array_equal(actual, expected)
+        assert actual.dtype == expected.dtype
 
 
 def test_daily_found_mask_stays_aligned_when_scores_reorder_rows():
@@ -315,6 +457,7 @@ def test_run_demo_smoke():
     assert out["model_arms"]["hybrid"]["kind"] == "hybrid"
     assert out["model_arms"]["gnn"]["kind"] == "gnn"
     assert out["hidden_total"] >= 0
+    assert "observability" not in out
     # Hybrid bootstrap comparisons exist
     assert len(out.get("win_hybrid_whole_pool", {})) > 0
     assert len(out.get("win_hybrid_daily", {})) > 0

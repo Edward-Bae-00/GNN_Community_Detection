@@ -8,8 +8,12 @@ significance. Run against V9:
         PYTHONPATH=. python -m gnn.run_demo
 """
 from __future__ import annotations
+from collections.abc import Mapping
+from dataclasses import dataclass
 import json
 import re
+from types import MappingProxyType
+
 import numpy as np
 import pandas as pd
 
@@ -483,30 +487,117 @@ def _pick_fusion_weight(base_valid, gnn_valid, hidden_valid, ks,
     return best_w
 
 
+@dataclass(frozen=True)
+class GNNScoreBundle:
+    """Runtime GNN models and their per-pool scores in deterministic seed order.
+
+    The mapping/tuple structure and detached score arrays are immutable snapshots.
+    Retained PyTorch model objects remain mutable because they are live runtime
+    objects rather than serialized model state.
+    """
+
+    seed_order: tuple[int, ...]
+    models_by_seed: Mapping[int, object]
+    scores_by_seed: Mapping[int, tuple[np.ndarray, ...]]
+
+    def __post_init__(self):
+        seed_order = tuple(int(seed) for seed in self.seed_order)
+        if not seed_order:
+            raise ValueError("seed_order must contain at least one seed")
+        if len(set(seed_order)) != len(seed_order):
+            raise ValueError("seed_order must not contain duplicate seeds")
+
+        models = {int(seed): model for seed, model in self.models_by_seed.items()}
+        raw_scores = {
+            int(seed): tuple(seed_scores)
+            for seed, seed_scores in self.scores_by_seed.items()
+        }
+        missing_models = [seed for seed in seed_order if seed not in models]
+        missing_scores = [seed for seed in seed_order if seed not in raw_scores]
+        if missing_models:
+            raise ValueError(f"models_by_seed is missing seeds: {missing_models}")
+        if missing_scores:
+            raise ValueError(f"scores_by_seed is missing seeds: {missing_scores}")
+
+        retained_scores = {}
+        for seed in seed_order:
+            seed_scores = []
+            for scores in raw_scores[seed]:
+                detached = np.array(scores, copy=True, subok=False)
+                detached.setflags(write=False)
+                seed_scores.append(detached)
+            retained_scores[seed] = tuple(seed_scores)
+
+        object.__setattr__(self, "seed_order", seed_order)
+        object.__setattr__(
+            self,
+            "models_by_seed",
+            MappingProxyType({seed: models[seed] for seed in seed_order}),
+        )
+        object.__setattr__(
+            self,
+            "scores_by_seed",
+            MappingProxyType(retained_scores),
+        )
+
+    def ensemble(self, pool_index):
+        """Return the legacy seed mean for one requested pool."""
+        if not isinstance(pool_index, (int, np.integer)):
+            raise TypeError("pool_index must be an integer")
+        pool_index = int(pool_index)
+        first_pool_count = len(self.scores_by_seed[self.seed_order[0]])
+        if pool_index < 0 or pool_index >= first_pool_count:
+            raise IndexError(
+                f"pool_index {pool_index} is out of range for "
+                f"{first_pool_count} scored pools"
+            )
+
+        scores = []
+        for seed in self.seed_order:
+            seed_scores = self.scores_by_seed[seed]
+            if pool_index >= len(seed_scores):
+                raise IndexError(
+                    f"pool_index {pool_index} is unavailable for seed {seed}"
+                )
+            scores.append(seed_scores[pool_index])
+        shapes = [score.shape for score in scores]
+        if any(shape != shapes[0] for shape in shapes[1:]):
+            raise ValueError(
+                f"inconsistent shapes for pool_index {pool_index}: {shapes}"
+            )
+        return np.mean(np.column_stack(scores), axis=1)
+
+
 def _gnn_scores(edges_typed, node_ids, node_feat, caught_time, train_pool,
                 train_labels, pools, obs2id, *, seeds, epochs, train_bucket,
                 train_cutoff, model_cls, num_rel):
     """Train the caught-propagation GNN once per seed and score each pool in
-    `pools` with the shared, seed-averaged models. Returns one score array per
-    pool (same order as `pools`), so validation and test share identical models."""
+    `pools` once per model, retaining both for later per-seed observability."""
+    seed_order = tuple(int(seed) for seed in seeds)
+    if not seed_order:
+        raise ValueError("seeds must contain at least one seed")
+    if len(set(seed_order)) != len(seed_order):
+        raise ValueError("seeds must not contain duplicate seeds")
+
+    pools = tuple(pools)
     index = {p: i for i, p in enumerate(node_ids)}
-    models = [
-        _train_caught_rgcn(
+    models_by_seed = {}
+    for seed in seed_order:
+        models_by_seed[seed] = _train_caught_rgcn(
             edges_typed, node_ids, node_feat, caught_time, train_pool, obs2id,
-            train_labels, seed=s, epochs=epochs, lr=1e-2,
+            train_labels, seed=seed, epochs=epochs, lr=1e-2,
             train_cutoff=train_cutoff, train_bucket=train_bucket,
             num_rel=num_rel, model_cls=model_cls,
         )
-        for s in seeds
-    ]
-    scored = []
-    for p in pools:
-        scored.append(np.mean(np.column_stack([
-            _score_pool(m, p, obs2id, edges_typed, node_ids, node_feat,
-                        caught_time, index, num_rel=num_rel)
-            for m in models
-        ]), axis=1))
-    return scored
+
+    scores_by_seed = {seed: [] for seed in seed_order}
+    for pool in pools:
+        for seed in seed_order:
+            scores_by_seed[seed].append(_score_pool(
+                models_by_seed[seed], pool, obs2id, edges_typed, node_ids, node_feat,
+                caught_time, index, num_rel=num_rel,
+            ))
+    return GNNScoreBundle(seed_order, models_by_seed, scores_by_seed)
 
 
 def _train_pool_and_labels(corpus_dir, train_cutoff):
@@ -596,12 +687,14 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     edges_typed, node_ids, node_feat = build_person_graph_typed(
         cd, substrate=SUBSTRATE, include_plate=True)
     caught_time = build_caught_times(cd, obs2id)
-    gnn_valid_raw, gnn_test_raw = _gnn_scores(
+    score_bundle = _gnn_scores(
         edges_typed, node_ids, node_feat, caught_time, train_pool, train_labels,
         [valid_pool, pool], obs2id, seeds=seeds, epochs=epochs,
         train_bucket=train_bucket, train_cutoff=train_cutoff,
         model_cls=spec["cls"], num_rel=spec["num_rel"],
     )
+    gnn_valid_raw = score_bundle.ensemble(0)
+    gnn_test_raw = score_bundle.ensemble(1)
     gnn = add_tiebreak(gnn_test_raw, pool)
 
     # --- Hybrid: late rank fusion of baseline + GNN, weight tuned on the held-out
