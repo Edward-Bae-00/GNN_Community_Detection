@@ -21,6 +21,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(DATA_DIR))
 V9_CORPUS = os.path.join(DATA_DIR, "synthetic_cbp_graph_corpus_v9")
 V9_DATA = os.path.join(V9_CORPUS, "dashboard_data.json")
 V9_DEMO = os.path.join(REPO_ROOT, "gnn", "diagnostics", "demo_comparison_v9.json")
+V9_RECOVERY_EXPLANATIONS = os.path.join(
+    REPO_ROOT,
+    "gnn",
+    "diagnostics",
+    "hybrid_recovery_explanations_v9.json",
+)
 OUT_DIR = os.path.join(DATA_DIR, "v9_dashboard")
 
 
@@ -101,6 +107,22 @@ def _is_compatible_v9_demo(demo):
     )
 
 
+def _load_recovery_artifact(path):
+    if not os.path.exists(path):
+        p(f"[v9-dashboard] WARNING: {path} not found; case evidence unavailable.")
+        return None
+    try:
+        with open(path) as handle:
+            artifact = json.load(handle)
+    except (OSError, json.JSONDecodeError) as error:
+        p(f"[v9-dashboard] WARNING: invalid recovery artifact: {error}")
+        return None
+    if not isinstance(artifact, dict) or artifact.get("schema_version") != "1.0":
+        p("[v9-dashboard] WARNING: unsupported recovery artifact schema.")
+        return None
+    return artifact
+
+
 def _load_v9_data() -> dict:
     if not os.path.exists(V9_DATA):
         p(f"[v9-dashboard] ERROR: {V9_DATA} not found.")
@@ -122,6 +144,11 @@ def _load_v9_data() -> dict:
         data.pop("v9Demo", None)
         if candidate_demo is not None:
             p("[v9-dashboard] WARNING: discarded incompatible V9 demo payload.")
+
+    data.pop("v9RecoveryExplainer", None)
+    recovery_artifact = _load_recovery_artifact(V9_RECOVERY_EXPLANATIONS)
+    if recovery_artifact is not None:
+        data["v9RecoveryExplainer"] = recovery_artifact
 
     return data
 
@@ -185,6 +212,38 @@ def _inject_dashboard_tab_scripts(html, helper_js, renderer_js):
     return html.replace(explorer_marker, renderer_js + explorer_marker, 1)
 
 
+def _inject_recovery_assets(html, css, js):
+    """Idempotently place recovery state helpers and styles in the shell."""
+    if not isinstance(css, str) or not css or not isinstance(js, str) or not js:
+        raise ValueError("recovery assets must be non-empty strings")
+    if html.count(css) > 1 or html.count(js) > 1:
+        raise ValueError("dashboard contains duplicate recovery assets")
+
+    style_start = html.find("<style")
+    style_end = html.find("</style>", style_start)
+    if style_start < 0 or style_end < 0:
+        raise ValueError("dashboard template is missing its style boundary")
+    css_index = html.find(css)
+    if css_index >= 0 and not (
+        style_start < css_index and css_index + len(css) <= style_end
+    ):
+        raise ValueError("recovery asset CSS is outside the style boundary")
+
+    tabs_marker = "const Tabs={"
+    tabs_index = html.find(tabs_marker)
+    if tabs_index < 0:
+        raise ValueError("dashboard template is missing its tab registry marker")
+    js_index = html.find(js)
+    if js_index >= tabs_index:
+        raise ValueError("recovery asset JavaScript must precede the tab registry")
+
+    if css not in html:
+        html = html.replace("</style>", css + "\n</style>", 1)
+    if js not in html:
+        html = html.replace(tabs_marker, js + "\n" + tabs_marker, 1)
+    return html
+
+
 def main():
     tmpl_path = os.path.join(V9_CORPUS, "dashboard_standalone.html")
     if not os.path.exists(tmpl_path):
@@ -230,6 +289,10 @@ def main():
         V9_RESULTS_NAV_BTN,
         V9_RESULTS_SECTION,
     )
+    from v9_recovery_explainer_ui import (
+        V9_RECOVERY_EXPLAINER_CSS,
+        V9_RECOVERY_EXPLAINER_JS,
+    )
 
     html = html.replace(
         '    <!-- V9_NAV_TABS -->\n',
@@ -238,6 +301,11 @@ def main():
     html = html.replace(
         '  <!-- V9_TAB_SECTIONS -->\n',
         V9_RESULTS_SECTION,
+    )
+    html = _inject_recovery_assets(
+        html,
+        V9_RECOVERY_EXPLAINER_CSS,
+        V9_RECOVERY_EXPLAINER_JS,
     )
     html = _inject_dashboard_tab_scripts(html, "", V9_RESULTS_JS)
     html = html.replace("</style>", V9_RESULTS_CSS + "\n</style>", 1)

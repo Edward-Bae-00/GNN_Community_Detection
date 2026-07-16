@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = (
     __import__("pathlib").Path(__file__).resolve().parents[1]
@@ -447,3 +449,135 @@ def test_v9_results_injection_contains_simulated_helper_before_renderer_use():
         template, "", V9_UI.V9_RESULTS_JS
     )
     assert injected.index(helper) < injected.index(renderer_use)
+
+
+def _recovery_artifact():
+    return {
+        "schema_version": "1.0",
+        "policy": {
+            "observability_seed": 0,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+            "inspections_per_day": 25,
+        },
+    }
+
+
+def test_load_recovery_artifact_returns_valid_json(tmp_path):
+    artifact = _recovery_artifact()
+    path = tmp_path / "hybrid_recovery_explanations_v9.json"
+    path.write_text(json.dumps(artifact))
+
+    assert BUILDER._load_recovery_artifact(path) == artifact
+
+
+def test_load_recovery_artifact_warns_and_returns_none_when_missing(
+    tmp_path, capsys
+):
+    path = tmp_path / "missing.json"
+
+    assert BUILDER._load_recovery_artifact(path) is None
+    assert "WARNING" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("contents", "warning"),
+    [
+        ("{not-json", "invalid recovery artifact"),
+        (json.dumps([]), "unsupported recovery artifact schema"),
+        (json.dumps({"schema_version": "2.0"}), "unsupported recovery artifact schema"),
+    ],
+)
+def test_load_recovery_artifact_warns_and_returns_none_when_invalid(
+    tmp_path, capsys, contents, warning
+):
+    path = tmp_path / "hybrid_recovery_explanations_v9.json"
+    path.write_text(contents)
+
+    assert BUILDER._load_recovery_artifact(path) is None
+    assert warning in capsys.readouterr().out
+
+
+def test_load_v9_data_uses_only_separate_recovery_artifact(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "dashboard_data.json").write_text(
+        json.dumps({
+            "v9RecoveryExplainer": {"stale": True},
+            "v9Demo": {"recovery_overlap": {"baseline_recovered": 999}},
+        })
+    )
+    _write_csv(tmp_path / "train_valid_test_splits.csv", [
+        {"entity_id": "E1", "split": "test"},
+    ])
+    _write_csv(tmp_path / "crossing_events.csv", [
+        {"event_id": "E1", "event_timestamp_utc": "2025-01-02T03:00:00Z"},
+    ])
+    artifact = _recovery_artifact()
+    artifact_path = tmp_path / "hybrid_recovery_explanations_v9.json"
+    artifact_path.write_text(json.dumps(artifact))
+    monkeypatch.setattr(BUILDER, "V9_DATA", str(tmp_path / "dashboard_data.json"))
+    monkeypatch.setattr(BUILDER, "V9_DEMO", str(tmp_path / "missing_demo.json"))
+    monkeypatch.setattr(BUILDER, "V9_CORPUS", str(tmp_path))
+    monkeypatch.setattr(
+        BUILDER, "V9_RECOVERY_EXPLANATIONS", str(artifact_path)
+    )
+
+    assert BUILDER._load_v9_data()["v9RecoveryExplainer"] == artifact
+
+    artifact_path.unlink()
+    assert "v9RecoveryExplainer" not in BUILDER._load_v9_data()
+
+
+def test_recovery_assets_are_injected_once_before_renderers_and_style_end():
+    template = (
+        "<style>base</style><script>const Tabs={\n"
+        "explorer:{rendered:false,render(){}}\n};</script>"
+    )
+    recovery_js = "function buildRecoveryEvidenceViewModel(){}"
+    recovery_css = ".v9-recovery{}"
+    renderer = "v9Results:{rendered:false,render(){}},\n"
+
+    injected = BUILDER._inject_recovery_assets(
+        template, recovery_css, recovery_js
+    )
+    injected = BUILDER._inject_recovery_assets(
+        injected, recovery_css, recovery_js
+    )
+    injected = BUILDER._inject_dashboard_tab_scripts(injected, "", renderer)
+
+    assert injected.count(recovery_js) == 1
+    assert injected.count(recovery_css) == 1
+    assert injected.index(recovery_js) < injected.index(renderer)
+    assert injected.index(recovery_css) < injected.index("</style>")
+    subprocess.run(
+        ["node", "--check", "-"],
+        input=injected.split("<script>", 1)[1].split("</script>", 1)[0],
+        text=True,
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        (
+            ".v9-recovery{}<style>base</style><script>const Tabs={\n"
+            "explorer:{rendered:false,render(){}}\n};</script>"
+        ),
+        (
+            "<style>base</style><script>const Tabs={\n"
+            "explorer:{rendered:false,render(){}}\n};\n"
+            "function buildRecoveryEvidenceViewModel(){}</script>"
+        ),
+    ],
+    ids=["css-outside-style", "javascript-after-tabs"],
+)
+def test_recovery_assets_reject_existing_assets_in_wrong_boundaries(template):
+    with pytest.raises(ValueError, match="recovery asset"):
+        BUILDER._inject_recovery_assets(
+            template,
+            ".v9-recovery{}",
+            "function buildRecoveryEvidenceViewModel(){}",
+        )
