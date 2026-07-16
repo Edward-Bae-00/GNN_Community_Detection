@@ -229,7 +229,7 @@ def test_community_contains_complete_pool_and_two_hop_provenance():
     assert community["nodes_by_id"]["hop1"]["caught_label_available_time"] == (
         "2025-01-01T23:59:59+00:00"
     )
-    assert "caught_label_available_time" not in community["nodes_by_id"]["future"]
+    assert community["nodes_by_id"]["future"]["caught_label_available_time"] is None
 
     duplicate_edge = next(edge for edge in community["edges"] if edge["edge_id"].startswith("g1:"))
     assert duplicate_edge["source_row_ids"] == ["cot", "cot-duplicate"]
@@ -264,6 +264,13 @@ def test_community_layout_is_deterministic_and_normalized():
         for position in first_positions.values()
         for coordinate in position
     )
+
+
+def test_task5_engine_has_no_counterfactual_scaffolding():
+    engine, _ = _explanation_fixture()
+
+    assert not hasattr(engine, "_counterfactual_cache")
+    assert not hasattr(engine, "score_counterfactual")
 
 
 def test_caught_feature_names_exactly_align_with_feature_width():

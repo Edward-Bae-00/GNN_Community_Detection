@@ -56,7 +56,6 @@ class Seed0ExplanationEngine:
         }
         self.rank_reference = copy.deepcopy(rank_reference)
         self._snapshot_cache: dict[pd.Timestamp, DaySnapshot] = {}
-        self._counterfactual_cache = {}
 
     def snapshot(self, scoring_day) -> DaySnapshot:
         day = _scoring_day(scoring_day)
@@ -205,6 +204,7 @@ def build_complete_community(engine, target_person_id, scoring_day):
             "caught_before_snapshot": (
                 person_id in snapshot.caught_before_snapshot
             ),
+            "caught_label_available_time": None,
         }
         if person_id in snapshot.caught_before_snapshot:
             record["caught_label_available_time"] = engine.caught_time[
