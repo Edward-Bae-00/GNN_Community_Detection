@@ -6,9 +6,118 @@ import numpy as np
 import pandas as pd
 
 import gnn.run_demo as rd
+from gnn import learned_cell as lc
 
 CD = pathlib.Path(__file__).resolve().parents[1] / \
     "Documents/Data/synthetic_cbp_graph_corpus_v9dev"
+
+
+def _write_cutoff_corpus(corpus):
+    cutoff_spec = (
+        "train<2024-01-01; validation<2025-01-01; test>=2025-01-01"
+    )
+    rows = [
+        ("train-before", "train", "2023-12-01T00:00:00Z",
+         "2023-12-31T23:59:59Z", True),
+        ("train-equal", "train", "2023-12-02T00:00:00Z",
+         "2024-01-01T00:00:00Z", True),
+        ("train-after", "train", "2023-12-03T00:00:00Z",
+         "2024-01-02T00:00:00Z", False),
+        ("valid-before", "validation", "2024-12-01T00:00:00Z",
+         "2024-12-31T23:59:59Z", True),
+        ("valid-equal", "validation", "2024-12-02T00:00:00Z",
+         "2025-01-01T00:00:00Z", True),
+        ("valid-after", "validation", "2024-12-03T00:00:00Z",
+         "2025-01-02T00:00:00Z", False),
+    ]
+    pd.DataFrame([
+        {
+            "event_id": event_id,
+            "primary_person_id": f"person-{event_id}",
+            "detected_flag": detected,
+            "false_negative_flag": False,
+        }
+        for event_id, _, _, _, detected in rows
+    ]).to_csv(corpus / "event_ground_truth.csv", index=False)
+    pd.DataFrame([
+        {
+            "entity_id": event_id,
+            "split": split,
+            "temporal_cutoff": cutoff_spec,
+        }
+        for event_id, split, _, _, _ in rows
+    ]).to_csv(corpus / "train_valid_test_splits.csv", index=False)
+    pd.DataFrame([
+        {
+            "event_id": event_id,
+            "event_timestamp_utc": event_time,
+            "observed_person_record_id": f"obs-{event_id}",
+            "label_available_time_utc": label_time,
+        }
+        for event_id, _, event_time, label_time, _ in rows
+    ]).to_csv(corpus / "crossing_events.csv", index=False)
+
+
+def test_training_labels_are_available_strictly_before_declared_cutoff(tmp_path):
+    _write_cutoff_corpus(tmp_path)
+
+    train_cutoff, test_cutoff = rd._split_label_cutoffs(tmp_path)
+    pool, labels = rd._train_pool_and_labels(tmp_path, train_cutoff)
+
+    assert train_cutoff == pd.Timestamp("2024-01-01T00:00:00Z")
+    assert test_cutoff == pd.Timestamp("2025-01-01T00:00:00Z")
+    assert pool["event_id"].tolist() == ["train-before"]
+    assert labels.tolist() == [1]
+
+
+def test_validation_labels_are_available_strictly_before_test_start(tmp_path):
+    _write_cutoff_corpus(tmp_path)
+
+    _, test_cutoff = rd._split_label_cutoffs(tmp_path)
+    valid_pool = rd.load_pool(tmp_path, split="validation")
+    eligible = rd._label_available_before(valid_pool, test_cutoff)
+
+    assert valid_pool.loc[eligible, "event_id"].tolist() == ["valid-before"]
+
+
+def test_gnn_training_defense_excludes_label_at_cutoff():
+    pool = pd.DataFrame({
+        "event_id": ["before", "equal", "after"],
+        "primary_obs_id": ["o1", "o2", "o3"],
+        "t": pd.to_datetime([
+            "2023-12-01T00:00:00Z",
+            "2023-12-02T00:00:00Z",
+            "2023-12-03T00:00:00Z",
+        ]),
+        "label_available_time": pd.to_datetime([
+            "2023-12-31T23:59:59Z",
+            "2024-01-01T00:00:00Z",
+            "2024-01-02T00:00:00Z",
+        ]),
+    })
+
+    eligible_pool, eligible_labels = lc._eligible_training_supervision(
+        pool,
+        np.array([1, 1, 0]),
+        pd.Timestamp("2024-01-01T00:00:00Z"),
+    )
+
+    assert eligible_pool["event_id"].tolist() == ["before"]
+    assert eligible_labels.tolist() == [1]
+
+
+def test_daily_found_mask_stays_aligned_when_scores_reorder_rows():
+    days = pd.to_datetime(["2025-01-01", "2025-01-01"], utc=True)
+
+    found = rd._daily_found_by_k(
+        days,
+        scores=np.array([0.1, 0.9]),
+        hidden=np.array([False, True]),
+        daily_ks=(1,),
+        mask=np.array([False, True]),
+    )
+
+    assert found == {1: 1}
 
 
 def test_evaluate_daily_reports_precision_recall_and_f1():

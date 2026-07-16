@@ -81,6 +81,26 @@ def _daily_crossing_series(corpus_dir):
     ]
 
 
+def _is_compatible_v9_demo(demo):
+    """Return whether demo satisfies the fields dereferenced by V9 Results."""
+    if not isinstance(demo, dict):
+        return False
+    for section in ("overall", "overall_daily", "stratified"):
+        value = demo.get(section)
+        if not isinstance(value, dict):
+            return False
+        for arm in ("baseline", "hybrid"):
+            if not isinstance(value.get(arm), dict):
+                return False
+    for arm in ("baseline", "hybrid"):
+        if not isinstance(demo["stratified"][arm].get("observable"), dict):
+            return False
+    return (
+        isinstance(demo.get("stratum_hidden"), dict)
+        and "hidden_total" in demo
+    )
+
+
 def _load_v9_data() -> dict:
     if not os.path.exists(V9_DATA):
         p(f"[v9-dashboard] ERROR: {V9_DATA} not found.")
@@ -90,11 +110,18 @@ def _load_v9_data() -> dict:
     with open(V9_DATA) as f:
         data = json.load(f)
     data["v9DailyCrossings"] = _daily_crossing_series(V9_CORPUS)
+    candidate_demo = data.get("v9Demo")
     if os.path.exists(V9_DEMO):
         with open(V9_DEMO) as f:
-            data["v9Demo"] = json.load(f)
+            candidate_demo = json.load(f)
     else:
         p(f"[v9-dashboard] WARNING: {V9_DEMO} not found; V9 Results tab will be sparse.")
+    if _is_compatible_v9_demo(candidate_demo):
+        data["v9Demo"] = candidate_demo
+    else:
+        data.pop("v9Demo", None)
+        if candidate_demo is not None:
+            p("[v9-dashboard] WARNING: discarded incompatible V9 demo payload.")
 
     return data
 

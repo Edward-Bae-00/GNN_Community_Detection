@@ -9,6 +9,7 @@ significance. Run against V9:
 """
 from __future__ import annotations
 import json
+import re
 import numpy as np
 import pandas as pd
 
@@ -202,13 +203,69 @@ def add_tiebreak(scores, pool):
 def load_pool(corpus_dir, split="test"):
     egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id", "false_negative_flag"])
     splits = pd.read_csv(corpus_dir / "train_valid_test_splits.csv", usecols=["entity_id", "split"])
-    ev = pd.read_csv(corpus_dir / "crossing_events.csv", usecols=["event_id", "event_timestamp_utc", "observed_person_record_id"])
+    ev = pd.read_csv(
+        corpus_dir / "crossing_events.csv",
+        usecols=[
+            "event_id",
+            "event_timestamp_utc",
+            "observed_person_record_id",
+            "label_available_time_utc",
+        ],
+    )
     df = egt.merge(splits, left_on="event_id", right_on="entity_id", how="inner").merge(ev, on="event_id", how="inner")
     te = df[df.split == split].copy()
     te["t"] = pd.to_datetime(te.event_timestamp_utc, utc=True, errors="coerce")
+    te["label_available_time"] = pd.to_datetime(
+        te.label_available_time_utc, utc=True, errors="coerce"
+    )
     te = te.rename(columns={"observed_person_record_id": "primary_obs_id"})
     te["hidden"] = te["false_negative_flag"].fillna(False).astype(bool)
     return te.reset_index(drop=True)
+
+
+def _label_available_before(pool, cutoff):
+    """Mask rows whose official label exists strictly before cutoff."""
+    cutoff = pd.Timestamp(cutoff)
+    cutoff = (
+        cutoff.tz_localize("UTC")
+        if cutoff.tzinfo is None
+        else cutoff.tz_convert("UTC")
+    )
+    available = pd.to_datetime(
+        pool["label_available_time"], utc=True, errors="coerce"
+    )
+    return available.notna() & (available < cutoff)
+
+
+def _split_label_cutoffs(corpus_dir):
+    """Read train/test-start label cutoffs from the corpus split contract."""
+    specs = pd.read_csv(
+        corpus_dir / "train_valid_test_splits.csv",
+        usecols=["temporal_cutoff"],
+    )["temporal_cutoff"].dropna().astype(str).unique()
+    if len(specs) != 1:
+        raise ValueError("corpus must declare one temporal_cutoff contract")
+    match = re.fullmatch(
+        r"\s*train<([^;]+);\s*validation<([^;]+);\s*test>=([^;]+)\s*",
+        specs[0],
+    )
+    if match is None:
+        raise ValueError(f"unsupported temporal_cutoff contract: {specs[0]!r}")
+
+    def as_utc(value):
+        timestamp = pd.Timestamp(value.strip())
+        return (
+            timestamp.tz_localize("UTC")
+            if timestamp.tzinfo is None
+            else timestamp.tz_convert("UTC")
+        )
+
+    train_cutoff = as_utc(match.group(1))
+    validation_cutoff = as_utc(match.group(2))
+    test_cutoff = as_utc(match.group(3))
+    if validation_cutoff != test_cutoff:
+        raise ValueError("validation cutoff must equal the test deployment start")
+    return train_cutoff, test_cutoff
 
 def _build_oracle(corpus_dir):
     obs = pd.read_csv(corpus_dir / "observed_person_records.csv", usecols=["observed_person_record_id", "canonical_person_id"])
@@ -248,15 +305,19 @@ def paired_event_bootstrap(a, b, hidden, ks, mask=None, n_boot=2000, seed=0):
 
 def _daily_found_by_k(days, scores, hidden, daily_ks, mask=None):
     """Return daily-capacity found counts for one sampled event set."""
-    ranked = pd.DataFrame({
+    data = {
         "_day": days,
         "_s": np.asarray(scores),
         "_hidden": np.asarray(hidden, dtype=bool),
-    }).sort_values(["_day", "_s"], ascending=[True, False], kind="mergesort")
+    }
+    if mask is not None:
+        data["_mask"] = np.asarray(mask, dtype=bool)
+    ranked = pd.DataFrame(data).sort_values(
+        ["_day", "_s"], ascending=[True, False], kind="mergesort"
+    )
     ranked["_day_rank"] = ranked.groupby("_day", sort=False).cumcount()
     selected_mask = np.ones(len(ranked), dtype=bool)
     if mask is not None:
-        ranked["_mask"] = np.asarray(mask, dtype=bool)
         selected_mask &= ranked["_mask"].to_numpy()
     hidden_values = ranked["_hidden"].to_numpy()
     ranks = ranked["_day_rank"].to_numpy()
@@ -315,7 +376,12 @@ from gnn.graphmodel_rgcn import (
     _RGCN,
 )
 from gnn.graphmodel_alt import _SAGE, _GAT, _GIN, _KPIAA
-from gnn.learned_cell import (build_caught_times, _train_caught_rgcn, _score_pool)
+from gnn.learned_cell import (
+    build_caught_times,
+    _eligible_training_supervision,
+    _train_caught_rgcn,
+    _score_pool,
+)
 from scipy.stats import rankdata
 from gnn.detector import fit_predict
 from gnn.demo_baseline import build_baseline_features, FEATURE_NAMES
@@ -419,7 +485,7 @@ def _pick_fusion_weight(base_valid, gnn_valid, hidden_valid, ks,
 
 def _gnn_scores(edges_typed, node_ids, node_feat, caught_time, train_pool,
                 train_labels, pools, obs2id, *, seeds, epochs, train_bucket,
-                model_cls, num_rel):
+                train_cutoff, model_cls, num_rel):
     """Train the caught-propagation GNN once per seed and score each pool in
     `pools` with the shared, seed-averaged models. Returns one score array per
     pool (same order as `pools`), so validation and test share identical models."""
@@ -428,7 +494,7 @@ def _gnn_scores(edges_typed, node_ids, node_feat, caught_time, train_pool,
         _train_caught_rgcn(
             edges_typed, node_ids, node_feat, caught_time, train_pool, obs2id,
             train_labels, seed=s, epochs=epochs, lr=1e-2,
-            train_cutoff="2024-01-01", train_bucket=train_bucket,
+            train_cutoff=train_cutoff, train_bucket=train_bucket,
             num_rel=num_rel, model_cls=model_cls,
         )
         for s in seeds
@@ -443,8 +509,8 @@ def _gnn_scores(edges_typed, node_ids, node_feat, caught_time, train_pool,
     return scored
 
 
-def _train_pool_and_labels(corpus_dir):
-    """Train events = train split, with detected_flag as label."""
+def _train_pool_and_labels(corpus_dir, train_cutoff):
+    """Return train-split supervision available before train_cutoff."""
     egt = pd.read_csv(
         corpus_dir / "event_ground_truth.csv",
         usecols=["event_id", "primary_person_id", "detected_flag"],
@@ -455,18 +521,35 @@ def _train_pool_and_labels(corpus_dir):
     )
     ev = pd.read_csv(
         corpus_dir / "crossing_events.csv",
-        usecols=["event_id", "event_timestamp_utc", "observed_person_record_id"],
+        usecols=[
+            "event_id",
+            "event_timestamp_utc",
+            "observed_person_record_id",
+            "label_available_time_utc",
+        ],
     )
     df = egt.merge(splits, left_on="event_id", right_on="entity_id", how="left").merge(
         ev, on="event_id", how="left"
     )
     tr = df[df.split == "train"].copy()
     tr["t"] = pd.to_datetime(tr.event_timestamp_utc, utc=True, errors="coerce")
+    tr["label_available_time"] = pd.to_datetime(
+        tr.label_available_time_utc, utc=True, errors="coerce"
+    )
     tr = tr.rename(columns={"observed_person_record_id": "primary_obs_id"})
     labels = tr.detected_flag.fillna(False).astype(int).values
-    return (
-        tr[["event_id", "primary_obs_id", "primary_person_id", "t"]].reset_index(drop=True),
+    return _eligible_training_supervision(
+        tr[
+            [
+                "event_id",
+                "primary_obs_id",
+                "primary_person_id",
+                "t",
+                "label_available_time",
+            ]
+        ],
         labels,
+        train_cutoff,
     )
 
 
@@ -474,6 +557,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
          epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS, gnn_arm="sage",
          valid_sample=20000):
     cd = corpus_dir or FC.CORPUS_DIR
+    train_cutoff, test_deployment_cutoff = _split_label_cutoffs(cd)
     obs2id = _build_oracle(cd)
     pool = load_pool(cd)
     valid_pool = load_pool(cd, split="validation")   # held-out slice for fusion tuning
@@ -486,10 +570,13 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     _egt_det = pd.read_csv(cd / "event_ground_truth.csv", usecols=["event_id", "detected_flag"])
     valid_detected = (valid_pool.merge(_egt_det, on="event_id", how="left")["detected_flag"]
                       .fillna(False).astype(bool).values)
+    valid_label_eligible = _label_available_before(
+        valid_pool, test_deployment_cutoff
+    ).to_numpy()
     hidden = pool["hidden"].values.astype(bool)
     strata = stratum_for_pool(pool, cd)
     obs_mask = (strata == "observable").values
-    train_pool, train_labels = _train_pool_and_labels(cd)
+    train_pool, train_labels = _train_pool_and_labels(cd, train_cutoff)
 
     # --- baseline (realistic tabular, NO graph) ---
     Xtr, names = build_baseline_features(
@@ -512,7 +599,8 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     gnn_valid_raw, gnn_test_raw = _gnn_scores(
         edges_typed, node_ids, node_feat, caught_time, train_pool, train_labels,
         [valid_pool, pool], obs2id, seeds=seeds, epochs=epochs,
-        train_bucket=train_bucket, model_cls=spec["cls"], num_rel=spec["num_rel"],
+        train_bucket=train_bucket, train_cutoff=train_cutoff,
+        model_cls=spec["cls"], num_rel=spec["num_rel"],
     )
     gnn = add_tiebreak(gnn_test_raw, pool)
 
@@ -522,12 +610,21 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     # objective and dilutes it; score-level fusion preserves each ranker's
     # ordering and adapts to how much relational signal is present. ---
     # Deployable: tune the blend on CAUGHT labels (what a real deployment has).
-    w_gnn = _pick_fusion_weight(base_valid, gnn_valid_raw, valid_detected, ks)
+    w_gnn = _pick_fusion_weight(
+        base_valid[valid_label_eligible],
+        gnn_valid_raw[valid_label_eligible],
+        valid_detected[valid_label_eligible],
+        ks,
+    )
     hybrid = add_tiebreak(_rank_fuse(base_raw, gnn_test_raw, w_gnn), pool)
     # Ceiling: tune on the MISSED-carrier oracle label. Not deployable; it shows
     # how much the caught-only tuning costs (the biased-proxy gap).
     w_gnn_oracle = _pick_fusion_weight(
-        base_valid, gnn_valid_raw, valid_pool["hidden"].values, ks)
+        base_valid[valid_label_eligible],
+        gnn_valid_raw[valid_label_eligible],
+        valid_pool.loc[valid_label_eligible, "hidden"].values,
+        ks,
+    )
     hybrid_oracle = add_tiebreak(_rank_fuse(base_raw, gnn_test_raw, w_gnn_oracle), pool)
 
     arms = {

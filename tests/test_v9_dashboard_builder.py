@@ -83,6 +83,38 @@ def test_daily_crossing_series_uses_test_split(tmp_path):
     ]
 
 
+def test_direct_file_data_discards_stale_demo_without_current_diagnostic(
+    tmp_path, monkeypatch
+):
+    stale_demo = {
+        "overall": {
+            "baseline": {"found@50": 1},
+            "gnn": {"found@50": 2},
+        },
+    }
+    (tmp_path / "dashboard_data.json").write_text(
+        json.dumps({"v9Demo": stale_demo})
+    )
+    _write_csv(tmp_path / "train_valid_test_splits.csv", [
+        {"entity_id": "E1", "split": "test"},
+    ])
+    _write_csv(tmp_path / "crossing_events.csv", [
+        {"event_id": "E1", "event_timestamp_utc": "2025-01-02T03:00:00Z"},
+    ])
+    monkeypatch.setattr(BUILDER, "V9_DATA", str(tmp_path / "dashboard_data.json"))
+    monkeypatch.setattr(BUILDER, "V9_DEMO", str(tmp_path / "missing_demo.json"))
+    monkeypatch.setattr(BUILDER, "V9_CORPUS", str(tmp_path))
+
+    data = BUILDER._load_v9_data()
+    embedded = BUILDER._embed_dashboard_data(
+        "const DATA = OLD;\n(async function(){\n  if(!D) return;\n",
+        data,
+    )
+
+    assert "v9Demo" not in data
+    assert '"v9Demo"' not in embedded
+
+
 def test_v9_ui_includes_model_daily_catch_chart():
     ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
     ui = ui_path.read_text()

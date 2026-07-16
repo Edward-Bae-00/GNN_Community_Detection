@@ -94,6 +94,34 @@ def build_caught_times(corpus_dir, obs_to_identity) -> dict:
     return det.groupby("identity")["_t"].min().to_dict()
 
 
+def _eligible_training_supervision(train_pool, train_labels, train_cutoff):
+    """Return event/label pairs available strictly before train_cutoff."""
+    rows = train_pool.reset_index(drop=True).copy()
+    labels = np.asarray(train_labels)
+    if len(rows) != len(labels):
+        raise ValueError("train_pool and train_labels must have equal length")
+    if "label_available_time" not in rows.columns:
+        raise ValueError("train_pool must include label_available_time")
+
+    cutoff = pd.Timestamp(train_cutoff)
+    cutoff = (
+        cutoff.tz_localize("UTC")
+        if cutoff.tzinfo is None
+        else cutoff.tz_convert("UTC")
+    )
+    event_time = pd.to_datetime(rows["t"], utc=True, errors="coerce")
+    label_time = pd.to_datetime(
+        rows["label_available_time"], utc=True, errors="coerce"
+    )
+    eligible = (
+        event_time.notna()
+        & (event_time < cutoff)
+        & label_time.notna()
+        & (label_time < cutoff)
+    ).to_numpy()
+    return rows.loc[eligible].reset_index(drop=True), labels[eligible]
+
+
 def _asof_struct_feats(node_ids, active_edges, T):
     """Per-node as-of structural bridging features, so the RGCN can SEE and
     message-pass the finding-5 signal (not just degree):
@@ -145,13 +173,20 @@ def _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool
     OWN detected label; features/edges are as-of the bucket start (strictly < bucket).
     Gradients flow enc -> torch cell-pool -> head (no numpy detour)."""
     torch.manual_seed(seed)
-    cutoff = pd.Timestamp(train_cutoff, tz="UTC")
+    cutoff = pd.Timestamp(train_cutoff)
+    cutoff = (
+        cutoff.tz_localize("UTC")
+        if cutoff.tzinfo is None
+        else cutoff.tz_convert("UTC")
+    )
     index = {p: i for i, p in enumerate(node_ids)}
-    tr = train_pool.reset_index(drop=True).copy()
+    tr, eligible_labels = _eligible_training_supervision(
+        train_pool, train_labels, cutoff
+    )
     tr["identity"] = tr["primary_obs_id"].map(obs_to_identity)
     tr["_t"] = pd.to_datetime(tr["t"], utc=True, errors="coerce")
-    tr["_lab"] = np.asarray(train_labels, dtype=float)
-    tr = tr[tr["identity"].isin(index) & tr["_t"].notna() & (tr["_t"] < cutoff)].copy()
+    tr["_lab"] = np.asarray(eligible_labels, dtype=float)
+    tr = tr[tr["identity"].isin(index)].copy()
     if len(tr) == 0:
         return model_cls(_asof_x_caught(node_ids, node_feat, edges_typed.iloc[0:0],
                                     caught_time, cutoff, num_rel=num_rel).shape[1],
