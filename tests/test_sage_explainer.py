@@ -501,6 +501,24 @@ def test_ablation_spec_is_frozen_and_canonicalizes_unique_evidence():
             },
             "strings",
         ),
+        (
+            {
+                "factor_id": "caught:not-a-pair",
+                "kind": "pair_relation",
+                "edge_source_row_ids": ("row",),
+            },
+            "factor_id.*pair_relation",
+        ),
+        (
+            {
+                "factor_id": "caught:hop1",
+                "kind": "caught_flag",
+                "edge_source_row_ids": ("row",),
+                "caught_person_ids": ("hop1",),
+                "provenance_node_ids": ("outside",),
+            },
+            "exclusive evidence",
+        ),
     ],
 )
 def test_ablation_spec_rejects_invalid_or_incomplete_evidence(kwargs, message):
@@ -790,7 +808,7 @@ def test_counterfactual_requires_reference_and_rejects_unknown_evidence_ids():
         )
 
     engine, _ = _explanation_fixture(rank_reference=_counterfactual_reference())
-    with pytest.raises(ValueError, match="unknown edge source_row_id"):
+    with pytest.raises(ValueError, match="incomplete or invalid factor"):
         engine.score_counterfactual(
             context,
             AblationSpec(
@@ -799,11 +817,11 @@ def test_counterfactual_requires_reference_and_rejects_unknown_evidence_ids():
                 edge_source_row_ids=("unknown-row",),
             ),
         )
-    with pytest.raises(ValueError, match="unknown caught person_id"):
+    with pytest.raises(ValueError, match="incomplete or invalid factor"):
         engine.score_counterfactual(
             context,
             AblationSpec(
-                factor_id="caught:unknown",
+                factor_id="caught:unknown-person",
                 kind="caught_flag",
                 caught_person_ids=("unknown-person",),
             ),
@@ -826,7 +844,7 @@ def test_counterfactual_rejects_caught_ids_that_are_not_graph_nodes():
         rank_reference=_counterfactual_reference(),
     )
 
-    with pytest.raises(ValueError, match="unknown caught person_id"):
+    with pytest.raises(ValueError, match="incomplete or invalid factor"):
         engine.score_counterfactual(
             _counterfactual_context(),
             AblationSpec(
@@ -843,7 +861,17 @@ def test_caught_counterfactual_supports_an_empty_lifetime_graph():
     torch.manual_seed(0)
     engine = Seed0ExplanationEngine(
         model=_RGCN(in_dim=8, hidden=4, out=4, num_relations=4),
-        edges_typed=pd.DataFrame(columns=["u", "v", "avail_time", "rel"]),
+        edges_typed=pd.DataFrame(
+            columns=[
+                "source_row_id",
+                "canonical_pair_group_id",
+                "u",
+                "v",
+                "avail_time",
+                "rel",
+                "edge_type",
+            ]
+        ),
         node_ids=["target"],
         node_feat={"target": np.array([1.0])},
         caught_time={"target": SCORING_DAY - pd.Timedelta(hours=1)},
@@ -880,6 +908,49 @@ def test_caught_counterfactual_supports_an_empty_lifetime_graph():
             "ablated_caught_before_snapshot": False,
         }
     ]
+
+
+def test_counterfactual_rejects_partial_duplicate_pair_group():
+    engine, _ = _explanation_fixture(
+        rank_reference=_counterfactual_reference()
+    )
+    partial = AblationSpec(
+        factor_id="pair:g1:rel:0",
+        kind="pair_relation",
+        edge_source_row_ids=("cot",),
+    )
+
+    with pytest.raises(ValueError, match="incomplete or invalid factor"):
+        engine.score_counterfactual(_counterfactual_context(), partial)
+
+
+def test_generated_pair_caught_and_cotravel_factors_are_scoreable():
+    engine, _ = _explanation_fixture(
+        rank_reference=_counterfactual_reference()
+    )
+    snapshot = engine.snapshot(SCORING_DAY)
+    community = engine.community("target", SCORING_DAY)
+    specs_by_kind = {
+        spec.kind: spec
+        for spec in build_ablation_specs(snapshot, "target", community)
+        if spec.kind in {"pair_relation", "caught_flag", "cotravel_pool"}
+        and (
+            spec.kind == "caught_flag"
+            or spec.factor_id.endswith("g1:rel:0")
+        )
+    }
+
+    assert set(specs_by_kind) == {
+        "pair_relation",
+        "caught_flag",
+        "cotravel_pool",
+    }
+    for kind in ("pair_relation", "caught_flag", "cotravel_pool"):
+        result = engine.score_counterfactual(
+            _counterfactual_context(), specs_by_kind[kind]
+        )
+        assert result["factor_id"] == specs_by_kind[kind].factor_id
+        assert result["kind"] == kind
 
 
 def test_counterfactual_cache_returns_copies_and_separates_candidate_contexts():

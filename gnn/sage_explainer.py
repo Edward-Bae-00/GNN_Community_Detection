@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 
@@ -100,6 +101,48 @@ class AblationSpec:
         if self.kind == "structural_provenance" and not self.provenance_node_ids:
             raise ValueError(
                 "structural_provenance requires nonempty provenance_node_ids"
+            )
+
+        edge_only_kinds = {
+            "pair_relation",
+            "relation_star",
+            "cotravel_pool",
+        }
+        if self.kind in edge_only_kinds and (
+            self.caught_person_ids or self.provenance_node_ids
+        ):
+            raise ValueError(
+                f"{self.kind} requires exclusive evidence in edge_source_row_ids"
+            )
+        if self.kind == "caught_flag" and (
+            len(self.caught_person_ids) != 1
+            or self.edge_source_row_ids
+            or self.provenance_node_ids
+        ):
+            raise ValueError(
+                "caught_flag requires exclusive evidence for exactly one caught person"
+            )
+        if self.kind == "structural_provenance" and self.caught_person_ids:
+            raise ValueError(
+                "structural_provenance requires exclusive edge and provenance evidence"
+            )
+
+        factor_id_patterns = {
+            "pair_relation": r"pair:.+:rel:[0-9]+",
+            "relation_star": r"relation-star:.+:rel:[0-9]+",
+            "caught_flag": r"caught:.+",
+            "structural_provenance": r"structural:.+",
+            "cotravel_pool": r"cotravel-pool:.+:rel:[0-9]+",
+        }
+        if re.fullmatch(factor_id_patterns[self.kind], self.factor_id) is None:
+            raise ValueError(
+                f"factor_id does not match {self.kind} generated ID syntax"
+            )
+        if self.kind == "caught_flag" and self.factor_id != (
+            f"caught:{self.caught_person_ids[0]}"
+        ):
+            raise ValueError(
+                "caught_flag factor_id must match its caught person evidence"
             )
 
 
@@ -305,6 +348,23 @@ class Seed0ExplanationEngine:
         if context.person_id not in self.person_index:
             raise KeyError(f"unknown person_id: {context.person_id}")
 
+        original = self.snapshot(context.scoring_day)
+        community = build_complete_community(
+            self, context.person_id, context.scoring_day
+        )
+        allowed_specs = {
+            spec.factor_id: spec
+            for spec in build_ablation_specs(
+                original, context.person_id, community
+            )
+        }
+        expected_factor = allowed_specs.get(factor.factor_id)
+        if expected_factor is None or factor != expected_factor:
+            raise ValueError(
+                "incomplete or invalid factor for the strict as-of snapshot: "
+                f"{factor.factor_id}"
+            )
+
         source = self.__prepared_source
         known_edge_source_ids = (
             set(source._edges_typed["source_row_id"].astype(str))
@@ -342,7 +402,6 @@ class Seed0ExplanationEngine:
         if cached is not None:
             return copy.deepcopy(cached)
 
-        original = self.snapshot(context.scoring_day)
         modified_edges = source._edges_typed.copy(deep=True)
         if factor.edge_source_row_ids:
             modified_edges = modified_edges.loc[
