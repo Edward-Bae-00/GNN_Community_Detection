@@ -126,6 +126,21 @@ def test_source_provenance_is_deterministic_unique_and_collision_safe():
     ]
 
 
+def test_source_provenance_rejects_non_string_person_ids():
+    edges = pd.DataFrame(
+        {
+            "u": [1],
+            "v": ["1"],
+            "avail_time": ["2025-01-01T00:00:00Z"],
+            "edge_type": ["COTRAVEL"],
+            "rel": [0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="string"):
+        gm._add_edge_provenance(edges)
+
+
 @pytest.mark.parametrize(
     ("edges", "message"),
     [

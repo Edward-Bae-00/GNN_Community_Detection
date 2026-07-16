@@ -39,6 +39,10 @@ def _add_edge_provenance(edges: pd.DataFrame) -> pd.DataFrame:
     )
     if work[["u", "v", "avail_time", "edge_type"]].isna().any().any():
         raise ValueError("edge provenance cannot be generated from null values")
+    if not work["u"].map(lambda value: isinstance(value, str)).all() or not work[
+        "v"
+    ].map(lambda value: isinstance(value, str)).all():
+        raise ValueError("edge provenance person IDs must be strings")
     work["edge_type"] = work["edge_type"].astype(str)
 
     occurrence_keys = ["u", "v", "avail_time", "edge_type"]
@@ -196,6 +200,8 @@ def _asof_x(node_ids, node_feat, active_edges, num_rel=NUM_REL):
     return torch.tensor(np.hstack([base, deg]), dtype=torch.float)
 
 def _edge_index_typed_with_provenance(edges, index):
+    if not all(isinstance(person_id, str) for person_id in index):
+        raise ValueError("typed edge index person IDs must be strings")
     if len(edges) == 0:
         return (
             torch.zeros((2, 0), dtype=torch.long),
@@ -212,6 +218,10 @@ def _edge_index_typed_with_provenance(edges, index):
         )
     if edges[["u", "v"]].isna().any().any():
         raise ValueError("typed edge node endpoints cannot be null")
+    if not edges["u"].map(lambda value: isinstance(value, str)).all() or not edges[
+        "v"
+    ].map(lambda value: isinstance(value, str)).all():
+        raise ValueError("typed edge person IDs must be strings")
     unknown_nodes = sorted(
         (set(edges["u"]) | set(edges["v"])).difference(index), key=str
     )
@@ -219,7 +229,11 @@ def _edge_index_typed_with_provenance(edges, index):
         raise ValueError(f"typed edges reference unknown nodes: {unknown_nodes}")
     if edges["source_row_id"].isna().any():
         raise ValueError("typed edge source_row_id provenance cannot be null")
-    source_rows = edges["source_row_id"].astype(str)
+    if not edges["source_row_id"].map(
+        lambda value: isinstance(value, str)
+    ).all():
+        raise ValueError("typed edge source_row_id provenance must be strings")
+    source_rows = edges["source_row_id"]
     if source_rows.eq("").any():
         raise ValueError("typed edge source_row_id provenance cannot be empty")
     if source_rows.duplicated().any():

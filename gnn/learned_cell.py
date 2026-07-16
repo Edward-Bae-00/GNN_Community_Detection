@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -186,20 +187,33 @@ class DaySnapshotInputs:
     caught_before_snapshot: frozenset[str]
 
 
+@dataclass(frozen=True)
+class PreparedSnapshotSource:
+    """Detached lifetime inputs normalized once for repeated day snapshots."""
+
+    _edges_typed: pd.DataFrame
+    node_ids: tuple[str, ...]
+    node_feat: object
+    caught_time: object
+    index: object
+    num_rel: int
+
+
 def _utc_timestamp(value, *, field_name):
     try:
         timestamp = pd.to_datetime(value, utc=True, errors="raise")
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be a valid timestamp") from exc
-    if timestamp is None or pd.isna(timestamp):
+    if timestamp is None:
         return None
     if not isinstance(timestamp, pd.Timestamp):
         raise ValueError(f"{field_name} must be a scalar timestamp")
+    if pd.isna(timestamp):
+        return None
     return timestamp
 
 
-def build_day_snapshot_inputs(
-    scoring_day,
+def prepare_snapshot_source(
     edges_typed,
     node_ids,
     node_feat,
@@ -207,6 +221,122 @@ def build_day_snapshot_inputs(
     index,
     *,
     num_rel=NUM_REL,
+) -> PreparedSnapshotSource:
+    """Normalize and detach lifetime snapshot inputs exactly once."""
+    detached_node_ids = tuple(node_ids)
+    if not all(isinstance(person_id, str) for person_id in detached_node_ids):
+        raise ValueError("snapshot person IDs must be strings")
+    if len(detached_node_ids) != len(set(detached_node_ids)):
+        raise ValueError("node_ids must be unique")
+
+    expected_index = {
+        person_id: position for position, person_id in enumerate(detached_node_ids)
+    }
+    if dict(index) != expected_index:
+        raise ValueError("index must align exactly with node_ids order")
+
+    num_rel = int(num_rel)
+    if num_rel <= 0:
+        raise ValueError("num_rel must be positive")
+
+    required_edge_columns = {"u", "v", "avail_time", "rel"}
+    missing_edge_columns = sorted(required_edge_columns.difference(edges_typed.columns))
+    if missing_edge_columns:
+        raise ValueError(
+            f"typed edges require columns: {', '.join(missing_edge_columns)}"
+        )
+    detached_edges = edges_typed.copy(deep=True)
+    detached_edges["avail_time"] = pd.to_datetime(
+        detached_edges["avail_time"], utc=True, errors="raise"
+    )
+    if detached_edges[["u", "v", "avail_time", "rel"]].isna().any().any():
+        raise ValueError("typed snapshot edges cannot contain null values")
+    if not detached_edges["u"].map(
+        lambda value: isinstance(value, str)
+    ).all() or not detached_edges["v"].map(
+        lambda value: isinstance(value, str)
+    ).all():
+        raise ValueError("typed snapshot edge person IDs must be strings")
+    unknown_nodes = sorted(
+        (set(detached_edges["u"]) | set(detached_edges["v"]))
+        .difference(expected_index)
+    )
+    if unknown_nodes:
+        raise ValueError(f"typed snapshot edges reference unknown nodes: {unknown_nodes}")
+    try:
+        relation = detached_edges["rel"].to_numpy(dtype=np.int64, copy=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("typed snapshot edge relations must be integers") from exc
+    if not np.array_equal(
+        relation.astype(object), detached_edges["rel"].to_numpy(dtype=object)
+    ):
+        raise ValueError("typed snapshot edge relations must be integers")
+    if ((relation < 0) | (relation >= num_rel)).any():
+        raise ValueError("typed snapshot edge relation is outside num_rel")
+    detached_edges["rel"] = relation
+    if len(detached_edges):
+        if "source_row_id" not in detached_edges.columns:
+            raise ValueError("typed snapshot edges require source_row_id provenance")
+        if detached_edges["source_row_id"].isna().any() or not detached_edges[
+            "source_row_id"
+        ].map(lambda value: isinstance(value, str)).all():
+            raise ValueError("typed snapshot source_row_id values must be strings")
+        if detached_edges["source_row_id"].duplicated().any():
+            raise ValueError("typed snapshot source_row_id values must be unique")
+
+    missing_features = [
+        person_id for person_id in detached_node_ids if person_id not in node_feat
+    ]
+    if missing_features:
+        raise ValueError(f"node features missing for node_ids: {missing_features}")
+    detached_features = {}
+    feature_width = None
+    for person_id in detached_node_ids:
+        value = node_feat[person_id]
+        feature = (
+            value.detach().cpu().numpy().copy()
+            if torch.is_tensor(value)
+            else np.array(value, copy=True)
+        )
+        if feature.ndim != 1:
+            raise ValueError("snapshot node features must be one-dimensional")
+        if feature_width is None:
+            feature_width = feature.shape[0]
+        elif feature.shape[0] != feature_width:
+            raise ValueError("snapshot node feature widths must align")
+        feature.setflags(write=False)
+        detached_features[person_id] = feature
+
+    normalized_caught_time = {}
+    for person_id, available_time in dict(caught_time).items():
+        if not isinstance(person_id, str):
+            raise ValueError("caught-time person IDs must be strings")
+        normalized = _utc_timestamp(
+            available_time, field_name=f"caught_time[{person_id!r}]"
+        )
+        if normalized is not None:
+            normalized_caught_time[person_id] = normalized
+
+    return PreparedSnapshotSource(
+        _edges_typed=detached_edges,
+        node_ids=detached_node_ids,
+        node_feat=MappingProxyType(detached_features),
+        caught_time=MappingProxyType(normalized_caught_time),
+        index=MappingProxyType(expected_index),
+        num_rel=num_rel,
+    )
+
+
+def build_day_snapshot_inputs(
+    scoring_day,
+    edges_typed=None,
+    node_ids=None,
+    node_feat=None,
+    caught_time=None,
+    index=None,
+    *,
+    num_rel=None,
+    prepared_source=None,
 ) -> DaySnapshotInputs:
     """Build the single strict-as-of day state used by scoring and explanations."""
     timestamp = _utc_timestamp(scoring_day, field_name="scoring_day")
@@ -214,65 +344,60 @@ def build_day_snapshot_inputs(
         raise ValueError("scoring_day cannot be null")
     day = timestamp.floor("D")
 
-    detached_node_ids = tuple(node_ids)
-    if len(detached_node_ids) != len(set(detached_node_ids)):
-        raise ValueError("node_ids must be unique")
-    missing_features = [
-        person_id for person_id in detached_node_ids if person_id not in node_feat
-    ]
-    if missing_features:
-        raise ValueError(f"node features missing for node_ids: {missing_features}")
-    expected_index = {
-        person_id: position for position, person_id in enumerate(detached_node_ids)
-    }
-    if any(index.get(person_id) != position for person_id, position in expected_index.items()):
-        raise ValueError("index must align exactly with node_ids order")
-
-    if "avail_time" not in edges_typed.columns:
-        raise ValueError("typed edges require avail_time")
-    detached_edges = edges_typed.copy(deep=True)
-    detached_edges["avail_time"] = pd.to_datetime(
-        detached_edges["avail_time"], utc=True, errors="raise"
-    )
-    active = detached_edges.loc[detached_edges["avail_time"] < day].copy(deep=True)
-    active = active.reset_index(drop=True)
-
-    normalized_caught_time = {}
-    for person_id, available_time in dict(caught_time).items():
-        normalized = _utc_timestamp(
-            available_time, field_name=f"caught_time[{person_id!r}]"
+    if isinstance(edges_typed, PreparedSnapshotSource):
+        if prepared_source is not None:
+            raise ValueError("provide only one prepared snapshot source")
+        prepared_source = edges_typed
+        edges_typed = None
+    if prepared_source is None:
+        if any(
+            value is None
+            for value in (edges_typed, node_ids, node_feat, caught_time, index)
+        ):
+            raise ValueError("direct snapshot construction requires all lifetime inputs")
+        prepared_source = prepare_snapshot_source(
+            edges_typed,
+            node_ids,
+            node_feat,
+            caught_time,
+            index,
+            num_rel=NUM_REL if num_rel is None else num_rel,
         )
-        if normalized is not None:
-            normalized_caught_time[person_id] = normalized
+    elif any(
+        value is not None for value in (edges_typed, node_ids, node_feat, caught_time, index)
+    ):
+        raise ValueError("prepared snapshot source cannot be mixed with lifetime inputs")
+    elif num_rel is not None and int(num_rel) != prepared_source.num_rel:
+        raise ValueError("num_rel does not match prepared snapshot source")
 
-    detached_features = {
-        person_id: np.array(node_feat[person_id], copy=True)
-        for person_id in detached_node_ids
-    }
+    source = prepared_source
+    active = source._edges_typed.loc[
+        source._edges_typed["avail_time"] < day
+    ].copy(deep=True).reset_index(drop=True)
     x = _asof_x_caught(
-        detached_node_ids,
-        detached_features,
+        source.node_ids,
+        source.node_feat,
         active,
-        normalized_caught_time,
+        source.caught_time,
         day,
-        num_rel=num_rel,
+        num_rel=source.num_rel,
     ).detach().clone()
     edge_index, edge_type, provenance = _edge_index_typed_with_provenance(
-        active, expected_index
+        active, source.index
     )
     edge_index = edge_index.detach().clone()
     edge_type = edge_type.detach().clone()
     provenance = np.array(provenance, dtype=object, copy=True)
     roots = np.array(
-        _component_roots(detached_node_ids, active, day), dtype=np.int64, copy=True
+        _component_roots(source.node_ids, active, day), dtype=np.int64, copy=True
     )
     caught_before = frozenset(
         person_id
-        for person_id, available_time in normalized_caught_time.items()
+        for person_id, available_time in source.caught_time.items()
         if available_time < day
     )
 
-    if x.shape[0] != len(detached_node_ids) or roots.shape != (len(detached_node_ids),):
+    if x.shape[0] != len(source.node_ids) or roots.shape != (len(source.node_ids),):
         raise RuntimeError("snapshot node features and component roots are misaligned")
     if not (
         edge_index.shape[1] == edge_type.shape[0] == provenance.shape[0]
@@ -351,16 +476,19 @@ def _score_pool(model, pool, obs_to_identity, edges_typed, node_ids, node_feat,
     rows["identity"] = rows["primary_obs_id"].map(obs_to_identity)
     rows["_t"] = pd.to_datetime(rows["t"], utc=True, errors="coerce").dt.floor("D")
     out = np.zeros(len(rows))
+    prepared_source = prepare_snapshot_source(
+        edges_typed,
+        node_ids,
+        node_feat,
+        caught_time,
+        index,
+        num_rel=num_rel,
+    )
     with torch.no_grad():
         for t, grp in rows.groupby("_t", sort=True):
             inputs = build_day_snapshot_inputs(
                 t,
-                edges_typed,
-                node_ids,
-                node_feat,
-                caught_time,
-                index,
-                num_rel=num_rel,
+                prepared_source=prepared_source,
             )
             z = model.enc(
                 inputs.x, inputs.edge_index, edge_type=inputs.edge_type
@@ -373,7 +501,11 @@ def _score_pool(model, pool, obs_to_identity, edges_typed, node_ids, node_feat,
                 .numpy()
             )
             for ridx, ident in zip(grp.index, grp["identity"]):
-                out[ridx] = prob[index[ident]] if ident in index else 0.0
+                out[ridx] = (
+                    prob[prepared_source.index[ident]]
+                    if ident in prepared_source.index
+                    else 0.0
+                )
     return out
 
 

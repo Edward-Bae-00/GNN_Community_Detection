@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from gnn.learned_cell import build_day_snapshot_inputs, _pool_by_roots_torch
+from gnn import learned_cell
 
 
 @dataclass(frozen=True)
@@ -40,37 +40,36 @@ class Seed0ExplanationEngine:
         num_rel,
         rank_reference=None,
     ):
-        self.model = model.eval()
-        self.edges_typed = edges_typed.copy(deep=True)
-        self.node_ids = tuple(node_ids)
-        if len(self.node_ids) != len(set(self.node_ids)):
-            raise ValueError("node_ids must be unique")
-        self.node_feat = {
-            person_id: _detached_feature(node_feat[person_id])
-            for person_id in self.node_ids
-        }
-        self.caught_time = _detached_caught_times(caught_time)
-        self.num_rel = int(num_rel)
-        self.person_index = {
-            person_id: index for index, person_id in enumerate(self.node_ids)
-        }
+        self.model = copy.deepcopy(model).eval()
+        self.model.requires_grad_(False)
+        prepared_node_ids = tuple(node_ids)
+        self.__prepared_source = learned_cell.prepare_snapshot_source(
+            edges_typed,
+            prepared_node_ids,
+            node_feat,
+            caught_time,
+            {
+                person_id: index
+                for index, person_id in enumerate(prepared_node_ids)
+            },
+            num_rel=num_rel,
+        )
+        self.node_ids = self.__prepared_source.node_ids
+        self.caught_time = self.__prepared_source.caught_time
+        self.num_rel = self.__prepared_source.num_rel
+        self.person_index = self.__prepared_source.index
         self.rank_reference = copy.deepcopy(rank_reference)
-        self._snapshot_cache: dict[pd.Timestamp, DaySnapshot] = {}
+        self.__snapshot_cache: dict[pd.Timestamp, DaySnapshot] = {}
 
     def snapshot(self, scoring_day) -> DaySnapshot:
         day = _scoring_day(scoring_day)
-        cached = self._snapshot_cache.get(day)
+        cached = self.__snapshot_cache.get(day)
         if cached is not None:
-            return cached
+            return _materialize_snapshot(cached)
 
-        inputs = build_day_snapshot_inputs(
+        inputs = learned_cell.build_day_snapshot_inputs(
             day,
-            self.edges_typed,
-            self.node_ids,
-            self.node_feat,
-            self.caught_time,
-            self.person_index,
-            num_rel=self.num_rel,
+            prepared_source=self.__prepared_source,
         )
         self.model.eval()
         with torch.no_grad():
@@ -78,7 +77,7 @@ class Seed0ExplanationEngine:
                 inputs.x, inputs.edge_index, edge_type=inputs.edge_type
             )
             prepool_logits = self.model.head(embeddings).squeeze(-1)
-            pooled_embeddings = _pool_by_roots_torch(
+            pooled_embeddings = learned_cell._pool_by_roots_torch(
                 embeddings, inputs.component_roots
             )
             pooled_logits = self.model.head(pooled_embeddings).squeeze(-1)
@@ -95,20 +94,20 @@ class Seed0ExplanationEngine:
         probabilities.setflags(write=False)
         result = DaySnapshot(
             scoring_day=inputs.scoring_day,
-            active_edges=inputs.active_edges.copy(deep=True),
-            x=inputs.x.detach().clone(),
-            edge_index=inputs.edge_index.detach().clone(),
-            edge_type=inputs.edge_type.detach().clone(),
+            active_edges=inputs.active_edges,
+            x=inputs.x,
+            edge_index=inputs.edge_index,
+            edge_type=inputs.edge_type,
             tensor_edge_source_row_ids=tensor_provenance,
             component_roots=component_roots,
-            prepool_embeddings=embeddings.detach().clone(),
-            prepool_logits=prepool_logits.detach().clone(),
-            pooled_logits=pooled_logits.detach().clone(),
+            prepool_embeddings=embeddings.detach(),
+            prepool_logits=prepool_logits.detach(),
+            pooled_logits=pooled_logits.detach(),
             probabilities=probabilities,
             caught_before_snapshot=inputs.caught_before_snapshot,
         )
-        self._snapshot_cache[day] = result
-        return result
+        self.__snapshot_cache[day] = result
+        return _materialize_snapshot(result)
 
     def relationship_categories(self, person_id, scoring_day):
         if person_id not in self.person_index:
@@ -124,22 +123,24 @@ class Seed0ExplanationEngine:
         return build_complete_community(self, person_id, scoring_day)
 
 
-def _detached_feature(value):
-    if torch.is_tensor(value):
-        return value.detach().cpu().numpy().copy()
-    return np.array(value, copy=True)
-
-
-def _detached_caught_times(caught_time):
-    detached = {}
-    for person_id, value in dict(caught_time).items():
-        timestamp = pd.to_datetime(value, utc=True, errors="raise")
-        if timestamp is None or pd.isna(timestamp):
-            continue
-        if not isinstance(timestamp, pd.Timestamp):
-            raise ValueError(f"caught_time[{person_id!r}] must be a scalar timestamp")
-        detached[person_id] = timestamp
-    return detached
+def _materialize_snapshot(snapshot):
+    """Return a detached public snapshot without exposing pristine cache state."""
+    return DaySnapshot(
+        scoring_day=snapshot.scoring_day,
+        active_edges=snapshot.active_edges.copy(deep=True),
+        x=snapshot.x.detach().clone(),
+        edge_index=snapshot.edge_index.detach().clone(),
+        edge_type=snapshot.edge_type.detach().clone(),
+        tensor_edge_source_row_ids=np.array(
+            snapshot.tensor_edge_source_row_ids, dtype=object, copy=True
+        ),
+        component_roots=np.array(snapshot.component_roots, copy=True),
+        prepool_embeddings=snapshot.prepool_embeddings.detach().clone(),
+        prepool_logits=snapshot.prepool_logits.detach().clone(),
+        pooled_logits=snapshot.pooled_logits.detach().clone(),
+        probabilities=np.array(snapshot.probabilities, copy=True),
+        caught_before_snapshot=snapshot.caught_before_snapshot,
+    )
 
 
 def _scoring_day(value):
