@@ -51,14 +51,24 @@ class RecoveryOverlap:
     baseline_only_ids: frozenset[str]
 
     def __post_init__(self) -> None:
-        for field_name in (
+        field_names = (
             "baseline_ids",
             "hybrid_ids",
             "both_ids",
             "hybrid_only_ids",
             "baseline_only_ids",
-        ):
+        )
+        for field_name in field_names:
             object.__setattr__(self, field_name, frozenset(getattr(self, field_name)))
+
+        expected_sets = {
+            "both_ids": self.baseline_ids & self.hybrid_ids,
+            "hybrid_only_ids": self.hybrid_ids - self.baseline_ids,
+            "baseline_only_ids": self.baseline_ids - self.hybrid_ids,
+        }
+        for field_name, expected in expected_sets.items():
+            if getattr(self, field_name) != expected:
+                raise ValueError(f"{field_name} is inconsistent with recovery ID sets")
 
     @property
     def summary(self) -> dict[str, bool | int]:
@@ -73,6 +83,42 @@ class RecoveryOverlap:
             "hybrid_total": hybrid_total,
             "net_gain": hybrid_total - baseline_total,
         }
+
+
+def _validated_identifier_values(values: pd.Series, column_name: str) -> pd.Series:
+    if values.isna().any():
+        raise ValueError(
+            f"{column_name} must contain non-null, non-blank values"
+        )
+    text_values = values.map(str)
+    if text_values.str.strip().eq("").any():
+        raise ValueError(
+            f"{column_name} must contain non-null, non-blank values"
+        )
+    return text_values
+
+
+def _normalized_hidden_values(values: pd.Series) -> np.ndarray:
+    normalized: list[bool] = []
+    invalid_indices: list[int] = []
+    string_tokens = {"true": True, "1": True, "false": False, "0": False}
+
+    for row_index, value in enumerate(values.tolist()):
+        if isinstance(value, (bool, np.bool_)):
+            normalized.append(bool(value))
+        elif isinstance(value, (int, np.integer)) and value in (0, 1):
+            normalized.append(bool(value))
+        elif isinstance(value, str) and value.strip().lower() in string_tokens:
+            normalized.append(string_tokens[value.strip().lower()])
+        else:
+            invalid_indices.append(row_index)
+
+    if invalid_indices:
+        raise ValueError(
+            "hidden contains invalid boolean values at row indices: "
+            f"{invalid_indices}"
+        )
+    return np.asarray(normalized, dtype=bool)
 
 
 def simulate_recovery_run(
@@ -105,13 +151,15 @@ def simulate_recovery_run(
     rows = pool.reset_index(drop=True).copy()
     rows["_row_index"] = np.arange(len(rows), dtype=int)
     rows["_score"] = score_values
+    rows["_event_id"] = _validated_identifier_values(rows["event_id"], "event_id")
+    rows["_person_id"] = _validated_identifier_values(
+        rows["primary_person_id"], "primary_person_id"
+    )
+    rows["_hidden"] = _normalized_hidden_values(rows["hidden"])
     parsed_times = pd.to_datetime(rows["t"], utc=True, errors="coerce")
     if parsed_times.isna().any():
         raise ValueError("pool contains invalid timestamps")
     rows["_scoring_day"] = parsed_times.dt.floor("D")
-    rows["_person_id"] = rows["primary_person_id"].astype(str)
-    rows["_event_id"] = rows["event_id"].astype(str)
-    rows["_hidden"] = rows["hidden"].fillna(False).astype(bool)
 
     official_times: dict[str, pd.Timestamp] = {}
     for person_id, caught_time in official_caught_times.items():

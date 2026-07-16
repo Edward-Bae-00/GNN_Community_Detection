@@ -8,6 +8,7 @@ import pytest
 
 from gnn.recovery_observability import (
     RecoveryAnchor,
+    RecoveryOverlap,
     recovery_overlap,
     simulate_recovery_run,
 )
@@ -196,6 +197,84 @@ def test_results_are_immutable_and_pool_index_is_reset_for_score_alignment() -> 
         run.arm = "changed"  # type: ignore[misc]
 
 
+@pytest.mark.parametrize("column", ["event_id", "primary_person_id"])
+@pytest.mark.parametrize("bad_value", [None, np.nan, pd.NA, "", "   "])
+def test_null_or_blank_identifiers_are_rejected(
+    column: str, bad_value: object
+) -> None:
+    pool = _pool(["e1"], ["p1"], ["2025-01-01T01:00:00Z"])
+    pool.loc[0, column] = bad_value
+
+    with pytest.raises(
+        ValueError, match=rf"{column} must contain non-null, non-blank values"
+    ):
+        simulate_recovery_run(
+            pool,
+            [0.5],
+            arm="baseline",
+            daily_budget=1,
+            official_caught_times={},
+        )
+
+
+@pytest.mark.parametrize(
+    ("hidden_value", "is_hidden"),
+    [
+        (True, True),
+        (False, False),
+        (np.bool_(True), True),
+        (np.bool_(False), False),
+        (1, True),
+        (0, False),
+        ("true", True),
+        (" TRUE ", True),
+        ("false", False),
+        ("False", False),
+        ("1", True),
+        ("0", False),
+    ],
+)
+def test_hidden_values_are_parsed_from_explicit_boolean_tokens(
+    hidden_value: object, is_hidden: bool
+) -> None:
+    pool = _pool(
+        ["e1"],
+        ["p1"],
+        ["2025-01-01T01:00:00Z"],
+        hidden=[hidden_value],  # type: ignore[list-item]
+    )
+
+    run = simulate_recovery_run(
+        pool,
+        [0.5],
+        arm="baseline",
+        daily_budget=1,
+        official_caught_times={},
+    )
+
+    expected = frozenset({"p1"}) if is_hidden else frozenset()
+    assert run.recovered_ids == expected
+
+
+@pytest.mark.parametrize("hidden_value", [None, np.nan, pd.NA, "", "yes", 2, -1, 0.5])
+def test_null_or_unknown_hidden_values_are_rejected(hidden_value: object) -> None:
+    pool = _pool(
+        ["e1"],
+        ["p1"],
+        ["2025-01-01T01:00:00Z"],
+        hidden=[hidden_value],  # type: ignore[list-item]
+    )
+
+    with pytest.raises(ValueError, match="hidden contains invalid boolean values"):
+        simulate_recovery_run(
+            pool,
+            [0.5],
+            arm="baseline",
+            daily_budget=1,
+            official_caught_times={},
+        )
+
+
 @pytest.mark.parametrize("missing", ["event_id", "primary_person_id", "t", "hidden"])
 def test_missing_required_columns_fail_clearly(missing: str) -> None:
     pool = _pool(["e1"], ["p1"], ["2025-01-01T01:00:00Z"]).drop(columns=missing)
@@ -299,3 +378,27 @@ def test_overlap_rejects_unequal_budgets() -> None:
 
     with pytest.raises(ValueError, match="equal daily_budget"):
         recovery_overlap(baseline, hybrid)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_ids"),
+    [
+        ("both_ids", frozenset({"not-shared"})),
+        ("hybrid_only_ids", frozenset()),
+        ("baseline_only_ids", frozenset()),
+    ],
+)
+def test_direct_overlap_construction_rejects_contradictory_sets(
+    field_name: str, bad_ids: frozenset[str]
+) -> None:
+    values = {
+        "baseline_ids": frozenset({"baseline", "both"}),
+        "hybrid_ids": frozenset({"hybrid", "both"}),
+        "both_ids": frozenset({"both"}),
+        "hybrid_only_ids": frozenset({"hybrid"}),
+        "baseline_only_ids": frozenset({"baseline"}),
+    }
+    values[field_name] = bad_ids
+
+    with pytest.raises(ValueError, match=rf"{field_name} is inconsistent"):
+        RecoveryOverlap(**values)
