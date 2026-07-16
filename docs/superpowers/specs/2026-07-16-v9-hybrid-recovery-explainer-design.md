@@ -11,8 +11,10 @@ Add a case-level explanation section to the V9 Results tab that:
    explanation communities, and measured counterfactual effects.
 
 The feature must make the V9 positive-control result easier to audit without
-changing model scores, inspection budgets, corpus design, or leak-free evaluation
-semantics.
+changing inspection budgets or corpus design. One prerequisite model correction
+is in scope: `SHARED_PLATE_HOT` must use official label-availability time rather
+than seizure-event time. Corrected V9 scores and artifacts must be regenerated
+before observability output is accepted.
 
 ## Terminology
 
@@ -63,6 +65,32 @@ features even though the default GraphSAGE message-passing edges are not typed.
 Consequently, a stock GNNExplainer edge mask alone cannot explain even the
 single-seed Hybrid selection. The design must explain both the seed-0 Hybrid
 decision and the seed-0 graph message-passing contribution.
+
+## Prerequisite: Leak-Free HOT-Plate Timing
+
+The current graph builder derives a vehicle's first hot time from the event
+timestamp of its first `seizure_flag`. That precedes official
+`label_available_time_utc` in the corpus and violates the project's strict as-of
+rule. In the checked V9dev corpus, all 159 seizure labels become available after
+their event, with delays from 1 to 28 days.
+
+Before generating explanations:
+
+1. load `label_available_time_utc` with plate/seizure inputs;
+2. for each vehicle, define `first_observable_seizure_time` as the earliest valid
+   `label_available_time_utc` among rows whose `seizure_flag` is true;
+3. keep a shared-plate relationship ordinary when its own edge-availability time
+   precedes that observable seizure time;
+4. mark it `SHARED_PLATE_HOT` only when its edge-availability time is at or after
+   the first observable seizure time; and
+5. treat missing or malformed seizure-label availability as unavailable, never
+   as event-time knowledge.
+
+The graph's existing strict `edge_available_time < scoring_snapshot` filter still
+applies. The correction must be exercised on V9dev first, then the three-seed V9
+ensemble and seed-0 observability results must be regenerated. Update the current
+V9 diagnostic and `Documents/Data/changes_3.md` with the corrected data-driven
+values; do not preserve stale headline numbers in explanatory copy.
 
 ## Method Decision
 
@@ -369,12 +397,23 @@ evidence.
 
 ## Verification
 
+### HOT-plate timing tests
+
+- Verify a seizure does not create `SHARED_PLATE_HOT` edges before its
+  `label_available_time_utc`.
+- Verify a shared-plate encounter exactly at the label-availability timestamp is
+  typed HOT but remains unavailable to a scoring snapshot at that exact time.
+- Verify missing/malformed label availability never creates a HOT relation.
+- Verify future seizure labels do not relabel earlier shared-plate encounters.
+- Regenerate V9dev and confirm strict as-of invariance before the full V9 run.
+
 ### Evaluation tests
 
 - Prove exact set algebra for Baseline, overlap, Hybrid-only, Baseline-only,
   Hybrid total, and net gain for seed 0 at the same 25/day budget.
-- Verify every pre-existing headline and aggregate V9 result remains sourced from
-  the three-seed ensemble and is unchanged by observability generation.
+- After the HOT-timing correction, verify every headline and aggregate V9 result
+  remains sourced from the three-seed ensemble and is not further changed by
+  observability generation.
 - Prove person deduplication and first-recovery anchoring.
 - Verify deterministic representative selection and explicit coverage counts.
 
@@ -430,6 +469,8 @@ evidence.
 - Do not force Baseline containment by using outcome labels, post-hoc selection,
   a larger Hybrid budget, or hidden corpus truth.
 - Do not tune the corpus or model merely to make Baseline-only equal zero.
+- Do not preserve old V9 metric values if the leak-free HOT-timing correction
+  changes them.
 - Do not implement ACGAN-GNNExplainer in the first version.
 - Do not generate full explanations for every Hybrid-only recovery in the first
   version.
@@ -443,15 +484,17 @@ evidence.
 
 The feature is complete when:
 
-1. the observability block reports exact seed-0, same-budget unique-person
+1. HOT-plate relation timing uses official label availability and corrected
+   V9dev/full-V9 artifacts have been regenerated;
+2. the observability block reports exact seed-0, same-budget unique-person
    overlap and gain while all existing V9 results remain three-seed ensemble
    results;
-2. it explains up to 40 deterministic representative seed-0 Hybrid-only
+3. it explains up to 40 deterministic representative seed-0 Hybrid-only
    recoveries;
-3. each explained case shows the complete as-of explanation community, staged
+4. each explained case shows the complete as-of explanation community, staged
    message influence, score/rank decomposition, measured counterfactual effects,
    restart stability, and a grounded LLM or deterministic narrative;
-4. no future, lifetime, hidden-organization, or ground-truth community input can
+5. no future, lifetime, hidden-organization, or ground-truth community input can
    enter an explanation;
-5. failure states never fabricate or substitute explanations; and
-6. focused V9dev verification and a full V9 artifact/dashboard check pass.
+6. failure states never fabricate or substitute explanations; and
+7. focused V9dev verification and a full V9 artifact/dashboard check pass.
