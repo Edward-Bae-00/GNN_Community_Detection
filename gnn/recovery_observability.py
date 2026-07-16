@@ -137,11 +137,10 @@ class FrozenRankReference:
 
         blend_weight = _validated_blend_weight(self.blend_weight)
         object.__setattr__(self, "blend_weight", blend_weight)
-        if not isinstance(self.percentile_reference_id, str) or not (
-            self.percentile_reference_id.startswith("sha256:")
-            and len(self.percentile_reference_id) > len("sha256:")
-        ):
-            raise ValueError("percentile_reference_id must be a sha256 reference")
+        if self.percentile_reference_id != _ordered_id_hash(event_ids):
+            raise ValueError(
+                "percentile_reference_id must match ordered event_ids"
+            )
 
 
 @dataclass(frozen=True)
@@ -211,7 +210,7 @@ class HybridOnlyCase:
         if not isinstance(self.decision_trace, Mapping):
             raise ValueError("decision_trace must be a mapping")
         object.__setattr__(
-            self, "decision_trace", MappingProxyType(dict(self.decision_trace))
+            self, "decision_trace", _freeze_json_like(self.decision_trace)
         )
 
     @property
@@ -284,6 +283,26 @@ def _frozen_row_indices(values, field_name: str) -> tuple[int, ...]:
     ):
         raise ValueError(f"{field_name} must contain non-negative row indices")
     return tuple(int(index) for index in indices)
+
+
+def _freeze_json_like(value):
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: _freeze_json_like(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json_like(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        try:
+            return frozenset(_freeze_json_like(item) for item in value)
+        except TypeError as exc:
+            raise ValueError("decision_trace set values must be hashable") from exc
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise ValueError(
+        "decision_trace contains an unsupported value type: "
+        f"{type(value).__name__}"
+    )
 
 
 def _ordered_id_hash(values) -> str:

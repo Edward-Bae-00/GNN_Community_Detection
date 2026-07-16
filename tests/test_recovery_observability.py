@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import MappingProxyType
 
 import numpy as np
@@ -460,6 +461,24 @@ def test_rank_reference_rejects_invalid_inputs(
         build_rank_reference(pool, baseline, gnn, blend_weight)
 
 
+@pytest.mark.parametrize(
+    "invalid_reference_id",
+    ["sha256:not-a-digest", f"sha256:{'0' * 64}"],
+)
+def test_percentile_reference_id_must_match_ordered_event_ids(
+    invalid_reference_id: str,
+) -> None:
+    reference = build_rank_reference(
+        pd.DataFrame({"event_id": ["e1", "e2"]}),
+        [0.8, 0.2],
+        [0.7, 0.3],
+        0.5,
+    )
+
+    with pytest.raises(ValueError, match="must match ordered event_ids"):
+        replace(reference, percentile_reference_id=invalid_reference_id)
+
+
 def test_decision_trace_hashes_ordered_candidate_sets_and_uses_arm_ranks() -> None:
     pool = pd.DataFrame({"event_id": ["anchor", "b-high", "h-high", "low"]})
     reference = build_rank_reference(
@@ -641,6 +660,43 @@ def test_hybrid_only_case_copies_inputs_and_freezes_decision_trace() -> None:
     assert case.decision_trace["baseline_rank"] == 3
     with pytest.raises(TypeError):
         case.decision_trace["baseline_rank"] = 4  # type: ignore[index]
+
+
+def test_hybrid_only_case_decision_trace_is_deeply_immutable_and_detached() -> None:
+    source_ids: list[object] = ["e1", {"rank": 1}]
+    source_metadata = {"candidate_ids": source_ids, "labels": {"A", "B"}}
+    decision_trace: dict[str, object] = {"evidence": source_metadata}
+    case = _hybrid_only_case(
+        "p1",
+        0,
+        3,
+        2,
+        1,
+        0.25,
+        0.75,
+        ("COTRAVEL",),
+        "2025-01",
+        decision_trace=decision_trace,
+    )
+
+    source_ids[0] = "changed"
+    source_ids[1]["rank"] = 99  # type: ignore[index]
+    source_metadata["labels"].add("C")  # type: ignore[union-attr]
+    decision_trace["new"] = True
+
+    evidence = case.decision_trace["evidence"]
+    assert isinstance(evidence, MappingProxyType)
+    assert evidence["candidate_ids"][0] == "e1"
+    assert evidence["candidate_ids"][1]["rank"] == 1
+    assert evidence["labels"] == frozenset({"A", "B"})
+    with pytest.raises(TypeError):
+        evidence["new"] = True  # type: ignore[index]
+    with pytest.raises(TypeError):
+        evidence["candidate_ids"][0] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        evidence["candidate_ids"][1]["rank"] = 99  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        evidence["labels"].add("C")  # type: ignore[union-attr]
 
 
 def test_overlap_rejects_unequal_budgets() -> None:
