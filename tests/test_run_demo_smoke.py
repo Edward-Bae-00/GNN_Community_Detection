@@ -163,7 +163,7 @@ def test_gnn_scores_rejects_empty_or_duplicate_seed_order():
         rd._gnn_scores(*args, seeds=(1, "1"), **kwargs)
 
 
-def test_gnn_score_bundle_rejects_invalid_pool_index_and_shapes():
+def test_gnn_score_bundle_rejects_invalid_pool_index():
     bundle = rd.GNNScoreBundle(
         seed_order=(0, 1),
         models_by_seed={0: object(), 1: object()},
@@ -178,16 +178,51 @@ def test_gnn_score_bundle_rejects_invalid_pool_index_and_shapes():
     with pytest.raises(IndexError, match="pool_index"):
         bundle.ensemble(1)
 
-    inconsistent = rd.GNNScoreBundle(
-        seed_order=(0, 1),
-        models_by_seed={0: object(), 1: object()},
-        scores_by_seed={
-            0: (np.array([0.1, 0.2]),),
-            1: (np.array([0.3]),),
-        },
-    )
-    with pytest.raises(ValueError, match="inconsistent shapes"):
-        inconsistent.ensemble(0)
+
+def test_gnn_score_bundle_rejects_identical_shaped_2d_scores():
+    with pytest.raises(ValueError, match="exactly 1-D"):
+        rd.GNNScoreBundle(
+            seed_order=(0, 1),
+            models_by_seed={0: object(), 1: object()},
+            scores_by_seed={
+                0: (np.array([[0.1, 0.2], [0.3, 0.4]]),),
+                1: (np.array([[0.5, 0.6], [0.7, 0.8]]),),
+            },
+        )
+
+
+@pytest.mark.parametrize("nonfinite", [np.nan, np.inf, -np.inf])
+def test_gnn_score_bundle_rejects_nonfinite_scores(nonfinite):
+    with pytest.raises(ValueError, match="finite"):
+        rd.GNNScoreBundle(
+            seed_order=(0,),
+            models_by_seed={0: object()},
+            scores_by_seed={0: (np.array([0.1, nonfinite]),)},
+        )
+
+
+def test_gnn_score_bundle_rejects_inconsistent_pool_counts():
+    with pytest.raises(ValueError, match="same number of pool entries"):
+        rd.GNNScoreBundle(
+            seed_order=(0, 1),
+            models_by_seed={0: object(), 1: object()},
+            scores_by_seed={
+                0: (np.array([0.1]), np.array([0.2])),
+                1: (np.array([0.3]),),
+            },
+        )
+
+
+def test_gnn_score_bundle_rejects_misaligned_pool_rows():
+    with pytest.raises(ValueError, match="aligned row shapes"):
+        rd.GNNScoreBundle(
+            seed_order=(0, 1),
+            models_by_seed={0: object(), 1: object()},
+            scores_by_seed={
+                0: (np.array([0.1, 0.2]),),
+                1: (np.array([0.3]),),
+            },
+        )
 
 
 def test_gnn_score_bundle_is_defensively_immutable():
@@ -209,12 +244,17 @@ def test_gnn_score_bundle_is_defensively_immutable():
     np.testing.assert_array_equal(
         bundle.scores_by_seed[0][0], np.array([0.1, 0.2], dtype=np.float32)
     )
+    ensemble_before = bundle.ensemble(0).copy()
+    retained = bundle.scores_by_seed[0][0]
     with pytest.raises(TypeError):
         bundle.models_by_seed[0] = object()
     with pytest.raises(TypeError):
         bundle.scores_by_seed[0] = ()
+    with pytest.raises(ValueError, match="WRITEABLE"):
+        retained.setflags(write=True)
     with pytest.raises(ValueError, match="read-only"):
-        bundle.scores_by_seed[0][0][0] = 7.0
+        retained[0] = 7.0
+    np.testing.assert_array_equal(bundle.ensemble(0), ensemble_before)
     with pytest.raises(FrozenInstanceError):
         bundle.seed_order = (1, 0)
 

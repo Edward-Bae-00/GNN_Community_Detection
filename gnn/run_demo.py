@@ -491,9 +491,9 @@ def _pick_fusion_weight(base_valid, gnn_valid, hidden_valid, ks,
 class GNNScoreBundle:
     """Runtime GNN models and their per-pool scores in deterministic seed order.
 
-    The mapping/tuple structure and detached score arrays are immutable snapshots.
-    Retained PyTorch model objects remain mutable because they are live runtime
-    objects rather than serialized model state.
+    The mapping/tuple structure and detached, bytes-backed score arrays are
+    immutable snapshots. Retained PyTorch model objects remain mutable because
+    they are live runtime objects rather than serialized model state.
     """
 
     seed_order: tuple[int, ...]
@@ -519,14 +519,53 @@ class GNNScoreBundle:
         if missing_scores:
             raise ValueError(f"scores_by_seed is missing seeds: {missing_scores}")
 
+        pool_counts = {seed: len(raw_scores[seed]) for seed in seed_order}
+        if len(set(pool_counts.values())) != 1:
+            raise ValueError(
+                "scores_by_seed must provide the same number of pool entries "
+                f"for every seed: {pool_counts}"
+            )
+
         retained_scores = {}
         for seed in seed_order:
             seed_scores = []
-            for scores in raw_scores[seed]:
-                detached = np.array(scores, copy=True, subok=False)
-                detached.setflags(write=False)
-                seed_scores.append(detached)
+            for pool_index, scores in enumerate(raw_scores[seed]):
+                detached = np.array(
+                    scores, copy=True, order="C", subok=False
+                )
+                if detached.ndim != 1:
+                    raise ValueError(
+                        f"score array for seed {seed}, pool_index {pool_index} "
+                        f"must be exactly 1-D; got shape {detached.shape}"
+                    )
+                try:
+                    finite = bool(np.isfinite(detached).all())
+                except TypeError as exc:
+                    raise ValueError(
+                        f"score array for seed {seed}, pool_index {pool_index} "
+                        "must contain finite numeric values"
+                    ) from exc
+                if not finite:
+                    raise ValueError(
+                        f"score array for seed {seed}, pool_index {pool_index} "
+                        "must contain only finite values"
+                    )
+                immutable = np.frombuffer(
+                    detached.tobytes(order="C"), dtype=detached.dtype
+                ).reshape(detached.shape)
+                seed_scores.append(immutable)
             retained_scores[seed] = tuple(seed_scores)
+
+        for pool_index in range(next(iter(pool_counts.values()))):
+            shapes = {
+                seed: retained_scores[seed][pool_index].shape
+                for seed in seed_order
+            }
+            if len(set(shapes.values())) != 1:
+                raise ValueError(
+                    f"score arrays for pool_index {pool_index} must have "
+                    f"aligned row shapes across seeds: {shapes}"
+                )
 
         object.__setattr__(self, "seed_order", seed_order)
         object.__setattr__(
