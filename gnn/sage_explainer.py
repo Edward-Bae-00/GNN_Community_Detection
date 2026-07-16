@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import re
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 
@@ -13,9 +14,17 @@ import numpy as np
 import pandas as pd
 import torch
 from scipy.stats import rankdata
+from torch_geometric.explain import Explainer, GNNExplainer, ModelConfig
+from torch_geometric.utils import k_hop_subgraph
 
 from gnn import learned_cell
-from gnn.recovery_observability import FrozenRankReference, _selection_tiebreak
+from gnn.graphmodel_rgcn import caught_feature_names
+from gnn.recovery_observability import (
+    FrozenRankReference,
+    HybridOnlyCase,
+    _selection_tiebreak,
+    build_decision_trace,
+)
 
 
 _ABLATION_KINDS = frozenset(
@@ -27,6 +36,8 @@ _ABLATION_KINDS = frozenset(
         "cotravel_pool",
     }
 )
+
+_OBSERVABILITY_DAILY_BUDGET = 25
 
 FORBIDDEN_EXPLANATION_FIELDS = frozenset(
     {
@@ -235,6 +246,107 @@ class DaySnapshot:
     caught_before_snapshot: frozenset[str]
 
 
+class PrePoolSAGELogitWrapper(torch.nn.Module):
+    """Expose the homogeneous GraphSAGE member logits before component pooling."""
+
+    def __init__(self, model: torch.nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x, edge_index):
+        embeddings = self.model.enc(x, edge_index)
+        return self.model.head(embeddings).squeeze(-1)
+
+
+@dataclass(frozen=True, init=False)
+class MemberSubgraph:
+    """Immutable two-hop inputs with detached tensor-edge provenance."""
+
+    _x: torch.Tensor
+    _edge_index: torch.Tensor
+    target_index: int
+    _original_node_indices: np.ndarray
+    _tensor_edge_source_row_ids: np.ndarray
+
+    def __init__(
+        self,
+        *,
+        x,
+        edge_index,
+        target_index,
+        original_node_indices,
+        tensor_edge_source_row_ids,
+    ):
+        if not torch.is_tensor(x) or x.ndim != 2:
+            raise ValueError("member subgraph x must be a two-dimensional tensor")
+        if (
+            not torch.is_tensor(edge_index)
+            or edge_index.ndim != 2
+            or edge_index.shape[0] != 2
+        ):
+            raise ValueError("member subgraph edge_index must have shape [2, E]")
+        nodes = np.array(original_node_indices, dtype=np.int64, copy=True)
+        provenance = np.array(
+            tensor_edge_source_row_ids, dtype=object, copy=True
+        )
+        if nodes.ndim != 1 or nodes.shape[0] != x.shape[0]:
+            raise ValueError(
+                "member subgraph nodes must align with node features"
+            )
+        if provenance.ndim != 1 or provenance.shape[0] != edge_index.shape[1]:
+            raise ValueError(
+                "member subgraph tensor edges and provenance must align"
+            )
+        if any(
+            not isinstance(source_row_id, str) or not source_row_id
+            for source_row_id in provenance
+        ):
+            raise ValueError(
+                "member subgraph provenance must contain nonempty strings"
+            )
+        if (
+            not isinstance(target_index, (int, np.integer))
+            or isinstance(target_index, (bool, np.bool_))
+            or not 0 <= int(target_index) < x.shape[0]
+        ):
+            raise ValueError("member subgraph target_index is out of range")
+        if edge_index.numel() and (
+            int(edge_index.min()) < 0 or int(edge_index.max()) >= x.shape[0]
+        ):
+            raise ValueError("member subgraph edge_index is out of range")
+        object.__setattr__(self, "_x", x.detach().clone())
+        object.__setattr__(
+            self, "_edge_index", edge_index.detach().clone()
+        )
+        object.__setattr__(self, "target_index", int(target_index))
+        nodes.setflags(write=False)
+        provenance.setflags(write=False)
+        object.__setattr__(self, "_original_node_indices", nodes)
+        object.__setattr__(self, "_tensor_edge_source_row_ids", provenance)
+
+    @property
+    def x(self):
+        return self._x.detach().clone()
+
+    @property
+    def edge_index(self):
+        return self._edge_index.detach().clone()
+
+    @property
+    def original_node_indices(self):
+        result = np.array(self._original_node_indices, copy=True)
+        result.setflags(write=False)
+        return result
+
+    @property
+    def tensor_edge_source_row_ids(self):
+        result = np.array(
+            self._tensor_edge_source_row_ids, dtype=object, copy=True
+        )
+        result.setflags(write=False)
+        return result
+
+
 @dataclass(frozen=True)
 class _BoundRankReference:
     reference: FrozenRankReference
@@ -389,6 +501,7 @@ class Seed0ExplanationEngine:
         self.__rank_state = None
         self.__snapshot_cache: dict[pd.Timestamp, DaySnapshot] = {}
         self.__counterfactual_cache: dict[str, dict[str, object]] = {}
+        self.__faithfulness_cache: dict[str, float] = {}
         self.__factor_specs_cache: dict[
             tuple[str, pd.Timestamp, str], tuple[AblationSpec, ...]
         ] = {}
@@ -420,6 +533,7 @@ class Seed0ExplanationEngine:
         )
         self.__rank_state = new_state
         self.__counterfactual_cache.clear()
+        self.__faithfulness_cache.clear()
         self.__factor_specs_cache.clear()
 
     def snapshot(self, scoring_day) -> DaySnapshot:
@@ -486,8 +600,132 @@ class Seed0ExplanationEngine:
     def score_counterfactual(self, context, factor):
         return score_grouped_counterfactual(self, context, factor)
 
+    def explanation_model_copy(self):
+        """Return an isolated eval-mode model for post-hoc explanation only."""
+        return copy.deepcopy(self.__model).eval()
+
+    def caught_available_time(self, person_id):
+        """Return one immutable observed-catch availability scalar, if known."""
+        if person_id not in self.person_index:
+            raise KeyError(f"unknown person_id: {person_id}")
+        value = self.__prepared_source.caught_time.get(person_id)
+        return None if value is None else pd.Timestamp(value)
+
+    def __validate_candidate_rows_for_day(
+        self, scoring_day, row_indices, *, field_name
+    ):
+        rank_state = self.__rank_state
+        if rank_state is None:
+            raise ValueError(
+                "candidate validation requires a frozen rank reference"
+            )
+        day = _scoring_day(scoring_day)
+        indices = _reference_indices(
+            row_indices,
+            field_name=field_name,
+            n_rows=len(rank_state.reference.event_ids),
+        )
+        for row_index in indices:
+            _, bound_day = rank_state.row_bindings[row_index]
+            if bound_day != day:
+                raise ValueError(
+                    f"{field_name} row binding does not match scoring_day"
+                )
+
     def __caught_available_time(self, person_id):
         return self.__prepared_source.caught_time[person_id]
+
+    def __diagnostic_edge_source_set_probability(
+        self, context, edge_source_row_ids
+    ):
+        if not isinstance(context, CounterfactualContext):
+            raise ValueError("context must be a CounterfactualContext")
+        rank_state = self.__rank_state
+        if rank_state is None:
+            raise ValueError(
+                "diagnostic edge scoring requires a frozen rank reference"
+            )
+        if context.person_id not in self.person_index:
+            raise KeyError(f"unknown person_id: {context.person_id}")
+        _validate_bound_counterfactual_context(rank_state, context)
+        source_ids = _canonical_string_ids(
+            edge_source_row_ids, field_name="edge_source_row_ids"
+        )
+        original = self.snapshot(context.scoring_day)
+        active_source_ids = set(
+            original.active_edges["source_row_id"].astype(str)
+        )
+        inactive = sorted(set(source_ids).difference(active_source_ids))
+        if inactive:
+            raise ValueError(
+                "every diagnostic edge source_row_id must be active at the "
+                f"scoring snapshot: {inactive}"
+            )
+
+        cache_key = _length_framed_hash(
+            (
+                "faithfulness-edge-source-set",
+                rank_state.fingerprint,
+                context.person_id,
+                context.scoring_day.isoformat(),
+                str(context.row_index),
+                *(str(index) for index in context.same_day_person_row_indices),
+                "candidate-boundary",
+                *(str(index) for index in context.candidate_row_indices),
+                "source-boundary",
+                *source_ids,
+            )
+        )
+        cached = self.__faithfulness_cache.get(cache_key)
+        if cached is not None:
+            return float(cached)
+
+        target_index = self.person_index[context.person_id]
+        if not source_ids:
+            probability = float(original.probabilities[target_index])
+        else:
+            source = self.__prepared_source
+            modified_edges = source._edges_typed.loc[
+                ~source._edges_typed["source_row_id"]
+                .astype(str)
+                .isin(source_ids)
+            ].copy(deep=True)
+            modified_source = learned_cell.prepare_snapshot_source(
+                modified_edges,
+                source.node_ids,
+                source.node_feat,
+                source.caught_time,
+                source.index,
+                num_rel=source.num_rel,
+            )
+            inputs = learned_cell.build_day_snapshot_inputs(
+                context.scoring_day, prepared_source=modified_source
+            )
+            self.__model.eval()
+            with torch.no_grad():
+                embeddings = self.__model.enc(
+                    inputs.x,
+                    inputs.edge_index,
+                    edge_type=inputs.edge_type,
+                )
+                pooled_embeddings = learned_cell._pool_by_roots_torch(
+                    embeddings, inputs.component_roots
+                )
+                probabilities = (
+                    torch.sigmoid(
+                        self.__model.head(pooled_embeddings).squeeze(-1)
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+            probability = float(probabilities[target_index])
+        if not np.isfinite(probability) or not 0.0 <= probability <= 1.0:
+            raise ValueError(
+                "diagnostic edge-set probability must be finite in [0, 1]"
+            )
+        self.__faithfulness_cache[cache_key] = probability
+        return float(probability)
 
     def __score_grouped_counterfactual(self, context, factor):
         if not isinstance(context, CounterfactualContext):
@@ -702,6 +940,423 @@ def score_grouped_counterfactual(engine, context, factor):
     return engine._Seed0ExplanationEngine__score_grouped_counterfactual(
         context, factor
     )
+
+
+def diagnostic_edge_source_set_probability(
+    engine, context, edge_source_row_ids
+):
+    """Rescore an exact active source-row set without relaxing Task 6 factors."""
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    return engine._Seed0ExplanationEngine__diagnostic_edge_source_set_probability(
+        context, edge_source_row_ids
+    )
+
+
+def _length_framed_hash(parts):
+    """Hash ordered strings without separator or concatenation collisions."""
+    if isinstance(parts, (str, bytes)):
+        raise ValueError("hash parts must be a sequence of strings")
+    digest = hashlib.sha256()
+    for part in parts:
+        if not isinstance(part, str):
+            raise ValueError("hash parts must be strings")
+        payload = part.encode("utf-8")
+        digest.update(len(payload).to_bytes(8, byteorder="big", signed=False))
+        digest.update(payload)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def member_subgraph(engine, person_id, scoring_day):
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    if person_id not in engine.person_index:
+        raise KeyError(f"unknown person_id: {person_id}")
+    snapshot = engine.snapshot(scoring_day)
+    target_index = engine.person_index[person_id]
+    subset, edge_index, mapping, edge_mask = k_hop_subgraph(
+        target_index,
+        2,
+        snapshot.edge_index,
+        relabel_nodes=True,
+        num_nodes=len(engine.node_ids),
+    )
+    provenance = snapshot.tensor_edge_source_row_ids[
+        edge_mask.detach().cpu().numpy()
+    ]
+    return MemberSubgraph(
+        x=snapshot.x[subset],
+        edge_index=edge_index,
+        target_index=int(mapping.item()),
+        original_node_indices=subset.detach().cpu().numpy(),
+        tensor_edge_source_row_ids=provenance,
+    )
+
+
+def make_gnn_explainer(wrapper, epochs=150):
+    if not isinstance(wrapper, PrePoolSAGELogitWrapper):
+        raise ValueError("wrapper must be a PrePoolSAGELogitWrapper")
+    if (
+        not isinstance(epochs, (int, np.integer))
+        or isinstance(epochs, (bool, np.bool_))
+        or epochs <= 0
+    ):
+        raise ValueError("epochs must be a positive integer")
+    return Explainer(
+        model=wrapper,
+        algorithm=GNNExplainer(epochs=int(epochs)),
+        explanation_type="model",
+        node_mask_type="attributes",
+        edge_mask_type="object",
+        model_config=ModelConfig(
+            mode="binary_classification",
+            task_level="node",
+            return_type="raw",
+        ),
+    )
+
+
+def _validated_restart_seeds(restart_seeds):
+    if isinstance(restart_seeds, (str, bytes)):
+        raise ValueError("restart_seeds must contain nonnegative integers")
+    try:
+        values = tuple(restart_seeds)
+    except TypeError as exc:
+        raise ValueError(
+            "restart_seeds must contain nonnegative integers"
+        ) from exc
+    if not values:
+        raise ValueError("restart_seeds must not be empty")
+    if any(
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value < 0
+        for value in values
+    ):
+        raise ValueError("restart_seeds must contain nonnegative integers")
+    normalized = tuple(int(value) for value in values)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("restart_seeds must not contain duplicates")
+    if normalized != (0, 1, 2):
+        raise ValueError("restart_seeds must be exactly (0, 1, 2)")
+    return normalized
+
+
+def _readonly_float_mask(value, *, expected_length, field_name):
+    mask = np.asarray(value, dtype=float)
+    if mask.ndim != 1 or mask.shape[0] != expected_length:
+        raise ValueError(f"{field_name} is not aligned with explanation inputs")
+    if not np.isfinite(mask).all() or (mask < 0.0).any():
+        raise ValueError(f"{field_name} must be finite and nonnegative")
+    result = np.array(mask, dtype=float, copy=True)
+    result.setflags(write=False)
+    return result
+
+
+def run_member_explanation(
+    engine,
+    person_id,
+    scoring_day,
+    *,
+    restart_seeds=(0, 1, 2),
+    epochs=150,
+    explainer_factory=make_gnn_explainer,
+):
+    """Explain one pooled member's exact two-hop pre-pool GraphSAGE logit."""
+    seeds = _validated_restart_seeds(restart_seeds)
+    local = member_subgraph(engine, person_id, scoring_day)
+    wrapper = PrePoolSAGELogitWrapper(engine.explanation_model_copy())
+    local_x = local.x
+    local_edge_index = local.edge_index
+    snapshot = engine.snapshot(scoring_day)
+    with torch.no_grad():
+        local_logit = wrapper(local_x, local_edge_index)[local.target_index]
+        full_logit = snapshot.prepool_logits[engine.person_index[person_id]]
+    torch.testing.assert_close(
+        local_logit, full_logit, rtol=1e-6, atol=1e-6
+    )
+
+    edge_count = local_edge_index.shape[1]
+    if edge_count == 0:
+        return {
+            "edge_masks": tuple(
+                np.zeros(0, dtype=float) for _ in seeds
+            ),
+            "feature_masks": (),
+            "restart_seeds": seeds,
+            "local_prepool_logit": float(local_logit),
+            "full_prepool_logit": float(full_logit),
+            "status": "no-message-edges",
+        }
+
+    edge_masks = []
+    feature_masks = []
+    for restart_seed in seeds:
+        with torch.random.fork_rng():
+            torch.manual_seed(restart_seed)
+            explanation = explainer_factory(wrapper, epochs=epochs)(
+                x=local_x,
+                edge_index=local_edge_index,
+                index=local.target_index,
+            )
+        edge_masks.append(
+            _readonly_float_mask(
+                explanation.edge_mask.detach().cpu().numpy(),
+                expected_length=edge_count,
+                field_name="edge_mask",
+            )
+        )
+        node_mask = explanation.node_mask.detach().cpu().numpy()
+        feature_mask = (
+            node_mask.mean(axis=0) if node_mask.ndim == 2 else node_mask
+        )
+        feature_masks.append(
+            _readonly_float_mask(
+                feature_mask,
+                expected_length=local_x.shape[1],
+                field_name="feature_mask",
+            )
+        )
+    return {
+        "edge_masks": tuple(edge_masks),
+        "feature_masks": tuple(feature_masks),
+        "restart_seeds": seeds,
+        "local_prepool_logit": float(local_logit),
+        "full_prepool_logit": float(full_logit),
+        "status": "ok",
+    }
+
+
+def build_flow_stages(community):
+    if not isinstance(community, Mapping):
+        raise ValueError("community must be a mapping")
+    nodes_by_id = community.get("nodes_by_id")
+    edges = community.get("edges")
+    if not isinstance(nodes_by_id, Mapping) or not isinstance(edges, Sequence):
+        raise ValueError("community must contain nodes_by_id and edges")
+    node_ids = tuple(sorted(str(node_id) for node_id in nodes_by_id))
+    edge_ids = tuple(sorted(str(edge["edge_id"]) for edge in edges))
+    first_hop = sorted(
+        edge["edge_id"] for edge in edges if edge["message_hop"] <= 1
+    )
+    second_hop = sorted(
+        edge["edge_id"] for edge in edges if edge["message_hop"] <= 2
+    )
+    pooling = sorted(
+        edge["edge_id"]
+        for edge in edges
+        if str(edge["edge_type"]).upper() == "COTRAVEL"
+        and nodes_by_id[edge["u"]]["pooled_member"]
+        and nodes_by_id[edge["v"]]["pooled_member"]
+    )
+    emphasized = (first_hop, second_hop, pooling, [])
+    return [
+        {
+            "stage_id": stage_id,
+            "node_ids": list(node_ids),
+            "edge_ids": list(edge_ids),
+            "emphasized_edge_ids": values,
+        }
+        for stage_id, values in zip(
+            ("first_hop", "second_hop", "component_pool", "rank_fusion"),
+            emphasized,
+        )
+    ]
+
+
+def aggregate_restart_masks(masks, top_fraction=0.1):
+    try:
+        fraction = float(top_fraction)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("top_fraction must be finite and in (0, 1]") from exc
+    if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        raise ValueError("top_fraction must be finite and in (0, 1]")
+    if isinstance(masks, (str, bytes)):
+        raise ValueError("at least one aligned explainer mask is required")
+    try:
+        rows = tuple(np.asarray(mask, dtype=float) for mask in masks)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("explainer masks must be numeric") from exc
+    if not rows:
+        raise ValueError("at least one aligned explainer mask is required")
+    if any(row.ndim != 1 for row in rows):
+        raise ValueError("each explainer mask must be one-dimensional")
+    if len({row.shape for row in rows}) != 1:
+        raise ValueError("explainer masks must be aligned")
+    matrix = np.vstack(rows)
+    if not np.isfinite(matrix).all():
+        raise ValueError("explainer masks must be finite")
+    if (matrix < 0.0).any():
+        raise ValueError("explainer masks must be nonnegative")
+    if matrix.shape[1] == 0:
+        empty = np.zeros(0, dtype=float)
+        return {
+            "median": empty,
+            "q1": empty,
+            "q3": empty,
+            "selection_frequency": empty,
+            "restart_count": matrix.shape[0],
+            "top_factor_agreement": 0.0,
+            "status": "no-message-edges",
+        }
+
+    normalized = matrix / np.maximum(
+        matrix.max(axis=1, keepdims=True), 1e-12
+    )
+    top_count = max(1, int(np.ceil(normalized.shape[1] * fraction)))
+    selected = np.zeros_like(normalized, dtype=bool)
+    for row_index, row in enumerate(normalized):
+        top = np.argsort(-row, kind="stable")[:top_count]
+        positive_top = top[row[top] > 0.0]
+        selected[row_index, positive_top] = True
+    selection_frequency = selected.mean(axis=0)
+    return {
+        "median": np.median(normalized, axis=0),
+        "q1": np.quantile(normalized, 0.25, axis=0),
+        "q3": np.quantile(normalized, 0.75, axis=0),
+        "selection_frequency": selection_frequency,
+        "restart_count": normalized.shape[0],
+        "top_factor_agreement": float(selection_frequency.max()),
+        "status": "ok" if selected.any() else "no-positive-influence",
+    }
+
+
+def matched_random_controls(
+    edge_records, *, selected_edge_ids, seed
+):
+    pairs, _ = _matched_control_details(
+        edge_records, selected_edge_ids=selected_edge_ids, seed=seed
+    )
+    return tuple(pair["control_edge_id"] for pair in pairs)
+
+
+def _matched_control_details(
+    edge_records, *, selected_edge_ids, seed
+):
+    records = tuple(edge_records)
+    edge_ids = tuple(record["edge_id"] for record in records)
+    if len(set(edge_ids)) != len(edge_ids):
+        raise ValueError("control edge_id values must be unique")
+    by_id = {record["edge_id"]: record for record in records}
+    selected_ids = tuple(selected_edge_ids)
+    if len(set(selected_ids)) != len(selected_ids):
+        raise ValueError("selected_edge_ids must not contain duplicates")
+    unknown = sorted(set(selected_ids).difference(by_id))
+    if unknown:
+        raise ValueError(f"unknown selected edge IDs: {unknown}")
+    selected = set(selected_ids)
+    rng = np.random.default_rng(seed)
+    pairs = []
+    unmatched = []
+    used_controls = set()
+    for edge_id in selected_ids:
+        source = by_id[edge_id]
+        candidates = sorted(
+            record["edge_id"]
+            for record in records
+            if record["edge_id"] not in selected
+            and record["edge_id"] not in used_controls
+            and record["relation"] == source["relation"]
+            and record["degree_bin"] == source["degree_bin"]
+        )
+        if candidates:
+            control_edge_id = candidates[
+                int(rng.integers(0, len(candidates)))
+            ]
+            used_controls.add(control_edge_id)
+            pairs.append(
+                {
+                    "selected_edge_id": edge_id,
+                    "control_edge_id": control_edge_id,
+                }
+            )
+        else:
+            unmatched.append(edge_id)
+    return pairs, unmatched
+
+
+def _validated_probability(value, *, field_name):
+    try:
+        probability = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be finite in [0, 1]") from exc
+    if not np.isfinite(probability) or not 0.0 <= probability <= 1.0:
+        raise ValueError(f"{field_name} must be finite in [0, 1]")
+    return probability
+
+
+def edge_removal_faithfulness(
+    edge_records, importance_by_id, *, rescore, seed=0
+):
+    records = tuple(edge_records)
+    edge_ids = tuple(record["edge_id"] for record in records)
+    if len(set(edge_ids)) != len(edge_ids):
+        raise ValueError("faithfulness edge_id values must be unique")
+    if not isinstance(importance_by_id, Mapping):
+        raise ValueError("importance_by_id must be a mapping")
+    importance = {}
+    for edge_id in edge_ids:
+        try:
+            value = float(importance_by_id.get(edge_id, 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "faithfulness importance values must be finite and nonnegative"
+            ) from exc
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError(
+                "faithfulness importance values must be finite and nonnegative"
+            )
+        importance[edge_id] = value
+    ordered = sorted(
+        records,
+        key=lambda record: (
+            -importance[record["edge_id"]],
+            record["edge_id"],
+        ),
+    )
+    original = _validated_probability(
+        rescore(()), field_name="original_probability"
+    )
+    points = []
+    for fraction in (0.10, 0.25, 0.50):
+        count = (
+            max(1, int(np.ceil(len(ordered) * fraction)))
+            if ordered
+            else 0
+        )
+        selected = tuple(
+            record["edge_id"] for record in ordered[:count]
+        )
+        control_pairs, unmatched = _matched_control_details(
+            records,
+            selected_edge_ids=selected,
+            seed=int(seed) + count,
+        )
+        controls = tuple(
+            pair["control_edge_id"] for pair in control_pairs
+        )
+        top_probability = _validated_probability(
+            rescore(selected), field_name="top_edge_probability"
+        )
+        matched_drop = None
+        if len(controls) == len(selected):
+            matched_probability = _validated_probability(
+                rescore(controls), field_name="matched_random_probability"
+            )
+            matched_drop = original - matched_probability
+        points.append(
+            {
+                "fraction": fraction,
+                "selected_edge_ids": list(selected),
+                "matched_control_edge_ids": list(controls),
+                "matched_control_pairs": control_pairs,
+                "unmatched_selected_edge_ids": unmatched,
+                "top_edge_probability_drop": original - top_probability,
+                "matched_random_probability_drop": matched_drop,
+                "unmatched_control_count": len(unmatched),
+            }
+        )
+    return {"original_probability": original, "points": points}
 
 
 def _counterfactual_fingerprint(context, factor, rank_reference_fingerprint):
@@ -1353,3 +2008,627 @@ def _normalized_layout(graph):
             )
         positions[person_id] = normalized
     return positions
+
+
+def json_safe(value):
+    """Detach supported scientific values into deterministic JSON primitives."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): json_safe(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
+        return value.isoformat()
+    if isinstance(value, np.ndarray):
+        return json_safe(value.tolist())
+    if isinstance(value, np.generic):
+        return json_safe(value.item())
+    if torch.is_tensor(value):
+        return json_safe(value.detach().cpu().numpy())
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return [json_safe(item) for item in sorted(value, key=str)]
+    if isinstance(value, float) and not np.isfinite(value):
+        raise ValueError("JSON payload floats must be finite")
+    return value
+
+
+def build_provenance_expansion(engine, snapshot, spec, community):
+    """Expand strict-as-of factor provenance outside the message community."""
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    if not isinstance(snapshot, DaySnapshot):
+        raise ValueError("snapshot must be a DaySnapshot")
+    if not isinstance(spec, AblationSpec):
+        raise ValueError("spec must be an AblationSpec")
+    if not isinstance(community, Mapping):
+        raise ValueError("community must be a mapping")
+    base_ids = set(
+        _canonical_string_ids(
+            community.get("base_source_row_ids", ()),
+            field_name="base_source_row_ids",
+        )
+    )
+    active_ids = set(snapshot.active_edges["source_row_id"].astype(str))
+    inactive_ids = sorted(
+        set(spec.edge_source_row_ids).difference(active_ids)
+    )
+    if inactive_ids:
+        raise ValueError(
+            "provenance expansion source IDs must be active strictly before "
+            f"the scoring snapshot: {inactive_ids}"
+        )
+    outside_ids = set(spec.edge_source_row_ids).difference(base_ids)
+    if not outside_ids:
+        return None
+    frame = snapshot.active_edges.loc[
+        snapshot.active_edges["source_row_id"].astype(str).isin(outside_ids)
+    ].copy(deep=True)
+    if frame.empty:
+        return None
+    if not (
+        pd.to_datetime(frame["avail_time"], utc=True, errors="raise")
+        < snapshot.scoring_day
+    ).all():
+        raise ValueError(
+            "provenance expansion contains evidence at or after the snapshot"
+        )
+    nodes_by_id = community.get("nodes_by_id")
+    if not isinstance(nodes_by_id, Mapping):
+        raise ValueError("community nodes_by_id must be a mapping")
+    people = sorted(
+        set(frame["u"].astype(str)).union(frame["v"].astype(str))
+    )
+    outside_people = [
+        person_id for person_id in people if person_id not in nodes_by_id
+    ]
+    ring_position = {
+        person_id: (
+            0.5
+            + 0.46
+            * np.cos(
+                2 * np.pi * index / max(1, len(outside_people))
+            ),
+            0.5
+            + 0.46
+            * np.sin(
+                2 * np.pi * index / max(1, len(outside_people))
+            ),
+        )
+        for index, person_id in enumerate(outside_people)
+    }
+    nodes = []
+    for person_id in people:
+        if person_id in nodes_by_id:
+            nodes.append(copy.deepcopy(dict(nodes_by_id[person_id])))
+            continue
+        caught_before = person_id in snapshot.caught_before_snapshot
+        available_time = engine.caught_available_time(person_id)
+        nodes.append(
+            {
+                "node_id": person_id,
+                "x": float(ring_position[person_id][0]),
+                "y": float(ring_position[person_id][1]),
+                "target": False,
+                "pooled_member": False,
+                "caught_before_snapshot": caught_before,
+                "caught_label_available_time": (
+                    available_time.isoformat()
+                    if caught_before and available_time is not None
+                    else None
+                ),
+            }
+        )
+
+    edges = []
+    for (group_id, relation), group in frame.groupby(
+        ["canonical_pair_group_id", "rel"], sort=True
+    ):
+        endpoint_pairs = {
+            tuple(sorted((str(row.u), str(row.v))))
+            for row in group.itertuples(index=False)
+        }
+        if len(endpoint_pairs) != 1:
+            raise ValueError(
+                "provenance pair group has inconsistent endpoints"
+            )
+        edge_types = set(group["edge_type"].astype(str))
+        if len(edge_types) != 1:
+            raise ValueError(
+                "provenance pair group has inconsistent edge types"
+            )
+        u, v = next(iter(endpoint_pairs))
+        observations = sorted(
+            (
+                {
+                    "source_row_id": str(row.source_row_id),
+                    "available_time": pd.Timestamp(row.avail_time).isoformat(),
+                }
+                for row in group.itertuples(index=False)
+            ),
+            key=lambda item: (
+                item["available_time"],
+                item["source_row_id"],
+            ),
+        )
+        edges.append(
+            {
+                "edge_id": f"provenance:{group_id}:rel:{int(relation)}",
+                "u": u,
+                "v": v,
+                "rel": int(relation),
+                "edge_type": next(iter(edge_types)),
+                "source_row_ids": sorted(
+                    observation["source_row_id"]
+                    for observation in observations
+                ),
+                "observations": observations,
+            }
+        )
+    edges.sort(key=lambda edge: edge["edge_id"])
+    return {
+        "expansion_id": f"provenance:{spec.factor_id}",
+        "label": "outside message community",
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+def _normalize_member_mask(mask, *, expected_length, field_name):
+    values = _readonly_float_mask(
+        mask, expected_length=expected_length, field_name=field_name
+    )
+    if values.size == 0:
+        return np.zeros(0, dtype=float)
+    maximum = float(values.max())
+    return (
+        np.asarray(values, dtype=float) / maximum
+        if maximum > 0.0
+        else np.zeros(values.shape, dtype=float)
+    )
+
+
+def _empty_feature_aggregate(feature_count):
+    empty = np.zeros(feature_count, dtype=float)
+    return {
+        "median": empty.copy(),
+        "q1": empty.copy(),
+        "q3": empty.copy(),
+        "selection_frequency": empty.copy(),
+        "restart_count": 0,
+        "top_factor_agreement": 0.0,
+        "status": "no-features",
+    }
+
+
+def _factor_restart_metrics(
+    spec,
+    community_edges,
+    feature_names,
+    feature_aggregate,
+):
+    feature_indices = []
+    if spec.kind == "caught_flag" and "caught_before_snapshot" in feature_names:
+        feature_indices = [feature_names.index("caught_before_snapshot")]
+    elif spec.kind == "structural_provenance":
+        feature_indices = [
+            feature_names.index(name)
+            for name in (
+                "log1p_cotravel_component_size",
+                "log1p_households_spanned",
+            )
+            if name in feature_names
+        ]
+    if feature_indices and feature_aggregate["restart_count"]:
+        frequency = max(
+            feature_aggregate["selection_frequency"][index]
+            for index in feature_indices
+        )
+        iqr = max(
+            feature_aggregate["q3"][index]
+            - feature_aggregate["q1"][index]
+            for index in feature_indices
+        )
+        return float(frequency), float(iqr), "feature_mask"
+
+    matching = [
+        edge
+        for edge in community_edges
+        if set(edge["source_row_ids"]).intersection(
+            spec.edge_source_row_ids
+        )
+    ]
+    if matching:
+        frequency = max(edge["selection_frequency"] for edge in matching)
+        iqr = max(
+            edge["explainer_q3"] - edge["explainer_q1"]
+            for edge in matching
+        )
+        return float(frequency), float(iqr), "edge_mask"
+    return 0.0, 1.0, "not_applicable"
+
+
+def compose_case_explanation(
+    engine,
+    case,
+    *,
+    member_explainer=None,
+    restart_seeds=(0, 1, 2),
+    explainer_epochs=150,
+):
+    """Compose one deterministic, leak-safe seed-0 explanation payload."""
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    if not isinstance(case, HybridOnlyCase):
+        raise ValueError("case must be a HybridOnlyCase")
+    seeds = _validated_restart_seeds(restart_seeds)
+    reference = engine.rank_reference
+    if reference is None:
+        raise ValueError("case explanation requires a frozen rank reference")
+    if not 0 <= case.anchor.row_index < len(reference.event_ids):
+        raise ValueError("case anchor row is outside the rank reference")
+
+    snapshot = engine.snapshot(case.anchor.scoring_day)
+    target_index = engine.person_index[case.person_id]
+    decision_trace = case.decision_trace_jsonable()
+    snapshot_probability_parity = bool(
+        np.isclose(
+            snapshot.probabilities[target_index],
+            reference.seed0_gnn_raw[case.anchor.row_index],
+            rtol=1e-6,
+            atol=1e-7,
+        )
+    )
+    anchor_event_parity = bool(
+        reference.event_ids[case.anchor.row_index] == case.anchor.event_id
+    )
+    if not snapshot_probability_parity or not anchor_event_parity:
+        raise ValueError("case explanation failed production parity")
+    if decision_trace.get("daily_budget") != _OBSERVABILITY_DAILY_BUDGET:
+        raise ValueError(
+            "case decision trace does not match the frozen 25/day policy"
+        )
+    engine._Seed0ExplanationEngine__validate_candidate_rows_for_day(
+        case.anchor.scoring_day,
+        case.baseline_candidate_row_indices,
+        field_name="baseline_candidate_row_indices",
+    )
+    engine._Seed0ExplanationEngine__validate_candidate_rows_for_day(
+        case.anchor.scoring_day,
+        case.hybrid_candidate_row_indices,
+        field_name="hybrid_candidate_row_indices",
+    )
+    try:
+        expected_trace = build_decision_trace(
+            reference,
+            row_index=case.anchor.row_index,
+            baseline_candidate_row_indices=(
+                case.baseline_candidate_row_indices
+            ),
+            hybrid_candidate_row_indices=case.hybrid_candidate_row_indices,
+            daily_budget=_OBSERVABILITY_DAILY_BUDGET,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "case decision trace does not match the frozen references"
+        ) from exc
+    if decision_trace != expected_trace:
+        raise ValueError(
+            "case decision trace does not match the frozen references"
+        )
+    outer_case_parity = bool(
+        case.baseline_rank == expected_trace["baseline_rank"]
+        and case.gnn_rank == expected_trace["seed0_gnn_rank"]
+        and case.hybrid_rank == expected_trace["seed0_hybrid_rank"]
+        and np.isclose(
+            case.baseline_percentile,
+            expected_trace["baseline_percentile"],
+            rtol=1e-7,
+            atol=1e-8,
+        )
+        and np.isclose(
+            case.gnn_percentile,
+            expected_trace["seed0_gnn_percentile"],
+            rtol=1e-7,
+            atol=1e-8,
+        )
+    )
+    if not outer_case_parity:
+        raise ValueError(
+            "case rank fields do not match the frozen references"
+        )
+    probability_parity = snapshot_probability_parity
+    percentile_parity = True
+    rank_parity = True
+
+    context = CounterfactualContext(
+        person_id=case.person_id,
+        row_index=case.anchor.row_index,
+        scoring_day=case.anchor.scoring_day,
+        same_day_person_row_indices=case.same_day_person_row_indices,
+        candidate_row_indices=case.hybrid_candidate_row_indices,
+        original_hybrid_rank=case.hybrid_rank,
+    )
+    diagnostic_edge_source_set_probability(engine, context, ())
+    community = engine.community(case.person_id, case.anchor.scoring_day)
+    component_root = snapshot.component_roots[target_index]
+    member_indices = np.flatnonzero(
+        snapshot.component_roots == component_root
+    ).tolist()
+    member_ids = sorted(engine.node_ids[index] for index in member_indices)
+    member_indices = [engine.person_index[person_id] for person_id in member_ids]
+    member_logits = snapshot.prepool_logits[member_indices]
+    pooled_logit = snapshot.pooled_logits[target_index]
+    pooled_parity = bool(
+        torch.isclose(
+            pooled_logit,
+            member_logits.mean(),
+            rtol=1e-6,
+            atol=1e-6,
+        ).item()
+    )
+    if not pooled_parity:
+        raise ValueError("component member logits failed pooled-logit parity")
+
+    edges = community["edges"]
+    edge_ids = [edge["edge_id"] for edge in edges]
+    source_to_edge = {}
+    for edge in edges:
+        for source_row_id in edge["source_row_ids"]:
+            existing = source_to_edge.get(source_row_id)
+            if existing is not None and existing != edge["edge_id"]:
+                raise ValueError(
+                    "immutable source provenance maps to multiple display edges"
+                )
+            source_to_edge[source_row_id] = edge["edge_id"]
+
+    restart_edge_values = [defaultdict(float) for _ in seeds]
+    feature_count = snapshot.x.shape[1]
+    restart_feature_values = [
+        np.zeros(feature_count, dtype=float) for _ in seeds
+    ]
+    has_feature_masks = False
+    explainer = run_member_explanation if member_explainer is None else member_explainer
+    for member_id in member_ids:
+        result = explainer(
+            engine,
+            member_id,
+            case.anchor.scoring_day,
+            restart_seeds=seeds,
+            epochs=explainer_epochs,
+        )
+        if tuple(result.get("restart_seeds", ())) != seeds:
+            raise ValueError("member explanation restart seeds are misaligned")
+        expected_logit = float(
+            snapshot.prepool_logits[engine.person_index[member_id]]
+        )
+        if not (
+            np.isclose(
+                result.get("local_prepool_logit", np.nan),
+                expected_logit,
+                rtol=1e-6,
+                atol=1e-6,
+            )
+            and np.isclose(
+                result.get("full_prepool_logit", np.nan),
+                expected_logit,
+                rtol=1e-6,
+                atol=1e-6,
+            )
+        ):
+            raise ValueError(
+                f"member explanation failed local/full parity: {member_id}"
+            )
+        local = member_subgraph(engine, member_id, case.anchor.scoring_day)
+        provenance = local.tensor_edge_source_row_ids
+        edge_masks = tuple(result.get("edge_masks", ()))
+        if len(edge_masks) != len(seeds):
+            raise ValueError("member edge-mask restarts are misaligned")
+        for restart_index, mask in enumerate(edge_masks):
+            normalized = _normalize_member_mask(
+                mask,
+                expected_length=len(provenance),
+                field_name="member edge_mask",
+            )
+            for source_row_id, value in zip(provenance, normalized):
+                display_edge_id = source_to_edge.get(str(source_row_id))
+                if display_edge_id is None:
+                    raise ValueError(
+                        "local tensor-edge provenance is absent from the "
+                        f"complete display community: {source_row_id}"
+                    )
+                restart_edge_values[restart_index][display_edge_id] += (
+                    float(value) / len(member_ids)
+                )
+
+        feature_masks = tuple(result.get("feature_masks", ()))
+        if feature_masks:
+            if len(feature_masks) != len(seeds):
+                raise ValueError("member feature-mask restarts are misaligned")
+            has_feature_masks = True
+            for restart_index, mask in enumerate(feature_masks):
+                restart_feature_values[restart_index] += (
+                    _normalize_member_mask(
+                        mask,
+                        expected_length=feature_count,
+                        field_name="member feature_mask",
+                    )
+                    / len(member_ids)
+                )
+
+    aligned_edge_masks = [
+        np.array([values[edge_id] for edge_id in edge_ids], dtype=float)
+        for values in restart_edge_values
+    ]
+    edge_aggregate = aggregate_restart_masks(aligned_edge_masks)
+    feature_aggregate = (
+        aggregate_restart_masks(restart_feature_values)
+        if has_feature_masks
+        else _empty_feature_aggregate(feature_count)
+    )
+    for index, edge in enumerate(edges):
+        edge["explainer_median"] = float(edge_aggregate["median"][index])
+        edge["explainer_q1"] = float(edge_aggregate["q1"][index])
+        edge["explainer_q3"] = float(edge_aggregate["q3"][index])
+        edge["selection_frequency"] = float(
+            edge_aggregate["selection_frequency"][index]
+        )
+
+    feature_names = list(caught_feature_names(engine.num_rel))
+    if len(feature_names) != feature_count:
+        raise ValueError("feature names are not aligned with snapshot inputs")
+    display_feature_mask_stats = [
+        {
+            "feature_name": name,
+            "explainer_median": float(feature_aggregate["median"][index]),
+            "explainer_q1": float(feature_aggregate["q1"][index]),
+            "explainer_q3": float(feature_aggregate["q3"][index]),
+            "selection_frequency": float(
+                feature_aggregate["selection_frequency"][index]
+            ),
+        }
+        for index, name in enumerate(feature_names)
+    ]
+
+    factors = []
+    for spec in build_ablation_specs(snapshot, case.person_id, community):
+        counterfactual = engine.score_counterfactual(context, spec)
+        frequency, iqr, restart_source = _factor_restart_metrics(
+            spec, edges, feature_names, feature_aggregate
+        )
+        expansion = build_provenance_expansion(
+            engine, snapshot, spec, community
+        )
+        if expansion is not None:
+            community["provenance_expansions"].append(expansion)
+        factors.append(
+            {
+                "factor_id": spec.factor_id,
+                "label": spec.factor_id.replace(":", " · "),
+                "kind": spec.kind,
+                "counterfactual": counterfactual,
+                "restart": {
+                    "selection_frequency": frequency,
+                    "iqr": iqr,
+                    "source": restart_source,
+                },
+                "stability": classify_factor_stability(
+                    counterfactual, frequency, iqr
+                ),
+                "provenance_expansion_ids": (
+                    [expansion["expansion_id"]]
+                    if expansion is not None
+                    else []
+                ),
+            }
+        )
+
+    importance_by_id = {
+        edge["edge_id"]: edge["explainer_median"] for edge in edges
+    }
+    degrees = defaultdict(int)
+    for edge in edges:
+        degrees[edge["u"]] += 1
+        degrees[edge["v"]] += 1
+
+    def degree_bin(value):
+        if value <= 1:
+            return "1"
+        if value <= 4:
+            return "2-4"
+        if value <= 8:
+            return "5-8"
+        return "9+"
+
+    faithfulness_edges = [
+        {
+            "edge_id": edge["edge_id"],
+            "relation": edge["edge_type"],
+            "degree_bin": degree_bin(
+                max(degrees[edge["u"]], degrees[edge["v"]])
+            ),
+        }
+        for edge in edges
+    ]
+    edge_by_id = {edge["edge_id"]: edge for edge in edges}
+
+    def rescore(removed_edge_ids):
+        source_ids = tuple(
+            sorted(
+                {
+                    source_row_id
+                    for edge_id in removed_edge_ids
+                    for source_row_id in edge_by_id[edge_id][
+                        "source_row_ids"
+                    ]
+                }
+            )
+        )
+        return diagnostic_edge_source_set_probability(
+            engine, context, source_ids
+        )
+
+    faithfulness = edge_removal_faithfulness(
+        faithfulness_edges,
+        importance_by_id,
+        rescore=rescore,
+        seed=0,
+    )
+    stable_count = sum(
+        factor["stability"] == "stable" for factor in factors
+    )
+    payload = {
+        "case_id": f"case:{case.person_id}",
+        "person_id": case.person_id,
+        "event_id": case.anchor.event_id,
+        "scoring_day": snapshot.scoring_day,
+        "snapshot": {
+            "scoring_day": snapshot.scoring_day,
+            "component_member_ids": member_ids,
+            "member_prepool_logits": {
+                member_id: float(
+                    snapshot.prepool_logits[engine.person_index[member_id]]
+                )
+                for member_id in member_ids
+            },
+            "member_prepool_logit_mean": float(member_logits.mean()),
+            "target_pooled_logit": float(pooled_logit),
+        },
+        "decision_trace": decision_trace,
+        "factors": factors,
+        "community": community,
+        "display_feature_mask_stats": display_feature_mask_stats,
+        "flow_stages": build_flow_stages(community),
+        "stable_factor_status": "stable" if stable_count else "unstable",
+        "stability": {
+            "stable_factor_count": stable_count,
+            "edge_restart_aggregate": edge_aggregate,
+            "feature_restart_aggregate": feature_aggregate,
+            "signed_effect_source": "counterfactual_only",
+        },
+        "faithfulness": faithfulness,
+        "parity": {
+            "production_seed0_probability": probability_parity,
+            "pooled_logit_decomposition": pooled_parity,
+            "frozen_percentile": percentile_parity,
+            "frozen_daily_hybrid_rank": rank_parity,
+            "anchor_event": anchor_event_parity,
+        },
+        "evidence_boundary": {
+            "snapshot": snapshot.scoring_day,
+            "edge_rule": "available_time < snapshot",
+            "caught_rule": "label_available_time_utc < snapshot",
+        },
+    }
+    safe_payload = json_safe(payload)
+    validate_explanation_payload(safe_payload)
+    json.dumps(
+        safe_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return safe_payload

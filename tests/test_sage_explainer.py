@@ -9,9 +9,15 @@ import torch
 from gnn import graphmodel_rgcn as gm
 from gnn import learned_cell
 from gnn import sage_explainer as se
+from gnn.graphmodel_alt import _SAGE
 from gnn.graphmodel_rgcn import _RGCN
 from gnn.learned_cell import _asof_x_caught, _score_pool
-from gnn.recovery_observability import build_rank_reference
+from gnn.recovery_observability import (
+    HybridOnlyCase,
+    RecoveryAnchor,
+    build_decision_trace,
+    build_rank_reference,
+)
 from gnn.sage_explainer import (
     AblationSpec,
     CounterfactualContext,
@@ -1515,3 +1521,863 @@ def test_factor_stability_boundaries(delta, frequency, iqr, expected):
 def test_factor_stability_rejects_invalid_restart_metrics(frequency, iqr, message):
     with pytest.raises(ValueError, match=message):
         classify_factor_stability({"hybrid_rank_delta": 1}, frequency, iqr)
+
+
+def _sage_explanation_fixture():
+    torch.manual_seed(0)
+    node_ids = ["target", "poolmate", "hop1", "hop2"]
+    edges = pd.DataFrame(
+        {
+            "source_row_id": ["cot", "res", "plate"],
+            "canonical_pair_group_id": ["g-cot", "g-res", "g-plate"],
+            "u": ["target", "poolmate", "hop1"],
+            "v": ["poolmate", "hop1", "hop2"],
+            "avail_time": [SCORING_DAY - pd.Timedelta(hours=1)] * 3,
+            "rel": [0, 1, 2],
+            "edge_type": ["COTRAVEL", "RESIDENCE", "SHARED_PLATE"],
+        }
+    )
+    return se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=edges,
+        node_ids=node_ids,
+        node_feat={person_id: np.array([1.0]) for person_id in node_ids},
+        caught_time={},
+        num_rel=4,
+    )
+
+
+def test_two_hop_wrapper_matches_full_graph_member_prepool_logit():
+    engine = _sage_explanation_fixture()
+    snapshot = engine.snapshot(SCORING_DAY)
+    local = se.member_subgraph(engine, "target", SCORING_DAY)
+
+    actual = se.PrePoolSAGELogitWrapper(
+        engine.explanation_model_copy()
+    )(local.x, local.edge_index)[local.target_index]
+    expected = snapshot.prepool_logits[engine.person_index["target"]]
+
+    torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-6)
+    assert local.tensor_edge_source_row_ids.tolist() == [
+        "cot",
+        "res",
+        "cot",
+        "res",
+    ]
+
+
+def test_restart_aggregation_normalizes_and_reports_median_iqr_frequency():
+    aggregate = se.aggregate_restart_masks(
+        [
+            np.array([0.9, 0.2, 0.1]),
+            np.array([0.8, 0.3, 0.1]),
+            np.array([0.7, 0.4, 0.1]),
+        ],
+        top_fraction=1 / 3,
+    )
+
+    np.testing.assert_allclose(aggregate["median"], [1.0, 0.375, 0.125])
+    np.testing.assert_allclose(
+        aggregate["q1"], [1.0, 0.2986111111111111, 0.11805555555555555]
+    )
+    np.testing.assert_allclose(
+        aggregate["q3"], [1.0, 0.4732142857142857, 0.13392857142857142]
+    )
+    np.testing.assert_allclose(
+        aggregate["selection_frequency"], [1.0, 0.0, 0.0]
+    )
+    assert aggregate["restart_count"] == 3
+    assert aggregate["top_factor_agreement"] == 1.0
+    assert aggregate["status"] == "ok"
+
+
+def test_restart_aggregation_reports_explicit_empty_edge_status():
+    aggregate = se.aggregate_restart_masks(
+        [np.zeros(0), np.zeros(0), np.zeros(0)]
+    )
+
+    assert aggregate["median"].size == 0
+    assert aggregate["q1"].size == 0
+    assert aggregate["q3"].size == 0
+    assert aggregate["selection_frequency"].size == 0
+    assert aggregate["restart_count"] == 3
+    assert aggregate["top_factor_agreement"] == 0.0
+    assert aggregate["status"] == "no-message-edges"
+
+
+@pytest.mark.parametrize(
+    ("masks", "top_fraction", "message"),
+    [
+        ([], 0.1, "at least one"),
+        ([np.array([1.0]), np.array([1.0, 2.0])], 0.1, "aligned"),
+        ([np.array([[1.0]])], 0.1, "one-dimensional"),
+        ([np.array([-0.1])], 0.1, "nonnegative"),
+        ([np.array([np.inf])], 0.1, "finite"),
+        ([np.array([1.0])], 0.0, "top_fraction"),
+        ([np.array([1.0])], 1.1, "top_fraction"),
+        ([np.array([1.0])], np.nan, "top_fraction"),
+    ],
+)
+def test_restart_aggregation_rejects_invalid_masks_and_fraction(
+    masks, top_fraction, message
+):
+    with pytest.raises(ValueError, match=message):
+        se.aggregate_restart_masks(masks, top_fraction=top_fraction)
+
+
+def test_restart_aggregation_reports_top_factor_agreement():
+    aggregate = se.aggregate_restart_masks(
+        [
+            np.array([1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
+            np.array([1.0, 0.0, 0.0]),
+        ],
+        top_fraction=1 / 3,
+    )
+
+    np.testing.assert_allclose(
+        aggregate["selection_frequency"], [2 / 3, 1 / 3, 0.0]
+    )
+    assert aggregate["top_factor_agreement"] == pytest.approx(2 / 3)
+
+
+def test_restart_aggregation_does_not_select_arbitrary_zero_masks():
+    aggregate = se.aggregate_restart_masks(
+        [np.zeros(3), np.zeros(3), np.zeros(3)], top_fraction=1 / 3
+    )
+
+    np.testing.assert_array_equal(
+        aggregate["selection_frequency"], np.zeros(3)
+    )
+    assert aggregate["top_factor_agreement"] == 0.0
+    assert aggregate["status"] == "no-positive-influence"
+
+
+def test_faithfulness_controls_require_exact_relation_and_degree_bin():
+    edge_records = [
+        {"edge_id": "e1", "relation": "COTRAVEL", "degree_bin": "2-4"},
+        {"edge_id": "e2", "relation": "COTRAVEL", "degree_bin": "2-4"},
+        {"edge_id": "e3", "relation": "RESIDENCE", "degree_bin": "5-8"},
+        {"edge_id": "e4", "relation": "RESIDENCE", "degree_bin": "5-8"},
+        {"edge_id": "loose-relation", "relation": "RESIDENCE", "degree_bin": "2-4"},
+        {"edge_id": "loose-degree", "relation": "COTRAVEL", "degree_bin": "5-8"},
+    ]
+
+    assert se.matched_random_controls(
+        edge_records, selected_edge_ids=("e1", "e3"), seed=0
+    ) == ("e2", "e4")
+    assert se.matched_random_controls(
+        edge_records, selected_edge_ids=("e1", "e2"), seed=0
+    ) == ()
+
+
+def test_member_subgraph_is_immutable_and_defensively_copied():
+    local = se.member_subgraph(_sage_explanation_fixture(), "target", SCORING_DAY)
+    expected_x = local.x.clone()
+    expected_edge_index = local.edge_index.clone()
+    expected_nodes = local.original_node_indices.copy()
+    expected_provenance = local.tensor_edge_source_row_ids.copy()
+
+    local.x.fill_(99.0)
+    local.edge_index.fill_(0)
+    with pytest.raises(ValueError, match="read-only"):
+        local.original_node_indices[:] = -1
+    with pytest.raises(ValueError, match="read-only"):
+        local.tensor_edge_source_row_ids[:] = "poisoned"
+
+    torch.testing.assert_close(local.x, expected_x)
+    torch.testing.assert_close(local.edge_index, expected_edge_index)
+    np.testing.assert_array_equal(local.original_node_indices, expected_nodes)
+    np.testing.assert_array_equal(
+        local.tensor_edge_source_row_ids, expected_provenance
+    )
+    with pytest.raises(AttributeError):
+        local.target_index = 99
+
+
+def test_member_subgraph_rejects_misaligned_tensor_edge_provenance():
+    with pytest.raises(ValueError, match="tensor edges.*provenance"):
+        se.MemberSubgraph(
+            x=torch.ones((2, 3)),
+            edge_index=torch.tensor([[0], [1]], dtype=torch.long),
+            target_index=0,
+            original_node_indices=np.array([0, 1]),
+            tensor_edge_source_row_ids=np.array([], dtype=object),
+        )
+
+
+def test_make_gnn_explainer_uses_binary_node_raw_configuration():
+    wrapper = se.PrePoolSAGELogitWrapper(
+        _sage_explanation_fixture().explanation_model_copy()
+    )
+
+    explainer = se.make_gnn_explainer(wrapper, epochs=2)
+
+    assert explainer.model is wrapper
+    assert explainer.model_config.mode.value == "binary_classification"
+    assert explainer.model_config.task_level.value == "node"
+    assert explainer.model_config.return_type.value == "raw"
+    assert explainer.node_mask_type.value == "attributes"
+    assert explainer.edge_mask_type.value == "object"
+    assert explainer.algorithm.epochs == 2
+
+
+def test_member_explanation_uses_exact_restarts_and_isolated_model_copy():
+    engine = _sage_explanation_fixture()
+    expected_later_day = engine.snapshot(
+        SCORING_DAY + pd.Timedelta(days=1)
+    ).probabilities.copy()
+    canonical_model = engine._Seed0ExplanationEngine__model
+    expected_parameters = [
+        parameter.detach().clone() for parameter in canonical_model.parameters()
+    ]
+    calls = []
+
+    class FakeExplainer:
+        def __init__(self, wrapper):
+            self.wrapper = wrapper
+
+        def __call__(self, *, x, edge_index, index):
+            calls.append((x.shape, edge_index.shape, index))
+            with torch.no_grad():
+                next(self.wrapper.parameters()).fill_(99.0)
+            return SimpleNamespace(
+                edge_mask=torch.rand(edge_index.shape[1]),
+                node_mask=torch.rand(x.shape),
+            )
+
+    def explainer_factory(wrapper, *, epochs):
+        assert epochs == 2
+        return FakeExplainer(wrapper)
+
+    first = se.run_member_explanation(
+        engine,
+        "target",
+        SCORING_DAY,
+        restart_seeds=(0, 1, 2),
+        epochs=2,
+        explainer_factory=explainer_factory,
+    )
+    second = se.run_member_explanation(
+        engine,
+        "target",
+        SCORING_DAY,
+        restart_seeds=(0, 1, 2),
+        epochs=2,
+        explainer_factory=explainer_factory,
+    )
+
+    assert first["status"] == "ok"
+    assert first["restart_seeds"] == (0, 1, 2)
+    assert len(first["edge_masks"]) == len(first["feature_masks"]) == 3
+    for actual, expected in zip(first["edge_masks"], second["edge_masks"]):
+        np.testing.assert_array_equal(actual, expected)
+    for actual, expected in zip(
+        first["feature_masks"], second["feature_masks"]
+    ):
+        np.testing.assert_array_equal(actual, expected)
+    assert len(calls) == 6
+    np.testing.assert_array_equal(
+        engine.snapshot(SCORING_DAY + pd.Timedelta(days=2)).probabilities,
+        expected_later_day,
+    )
+    assert canonical_model.training is False
+    assert all(not parameter.requires_grad for parameter in canonical_model.parameters())
+    for actual, expected in zip(canonical_model.parameters(), expected_parameters):
+        torch.testing.assert_close(actual, expected)
+
+
+def test_member_explanation_reports_empty_message_edges_without_optimizer_call():
+    engine = se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=pd.DataFrame(
+            columns=[
+                "source_row_id",
+                "canonical_pair_group_id",
+                "u",
+                "v",
+                "avail_time",
+                "rel",
+                "edge_type",
+            ]
+        ),
+        node_ids=["target"],
+        node_feat={"target": np.array([1.0])},
+        caught_time={},
+        num_rel=4,
+    )
+
+    def forbidden_factory(*args, **kwargs):
+        raise AssertionError("empty explanations must not run GNNExplainer")
+
+    result = se.run_member_explanation(
+        engine,
+        "target",
+        SCORING_DAY,
+        explainer_factory=forbidden_factory,
+    )
+
+    assert result["status"] == "no-message-edges"
+    assert result["restart_seeds"] == (0, 1, 2)
+    assert len(result["edge_masks"]) == 3
+    assert all(mask.size == 0 for mask in result["edge_masks"])
+    assert result["feature_masks"] == ()
+
+
+@pytest.mark.parametrize(
+    "restart_seeds",
+    [(7,), (0, 1), (0, 1, 2, 3), (2, 1, 0)],
+)
+def test_restart_seed_validation_requires_canonical_seed_zero_restarts(
+    restart_seeds,
+):
+    with pytest.raises(ValueError, match=r"exactly \(0, 1, 2\)"):
+        se._validated_restart_seeds(restart_seeds)
+
+
+def test_member_and_case_entrypoints_reject_noncanonical_restarts():
+    engine = _sage_explanation_fixture()
+
+    class ZeroExplainer:
+        def __call__(self, *, x, edge_index, index):
+            return SimpleNamespace(
+                edge_mask=torch.zeros(edge_index.shape[1]),
+                node_mask=torch.zeros(x.shape),
+            )
+
+    with pytest.raises(ValueError, match=r"exactly \(0, 1, 2\)"):
+        se.run_member_explanation(
+            engine,
+            "target",
+            SCORING_DAY,
+            restart_seeds=(7,),
+            epochs=1,
+            explainer_factory=lambda wrapper, epochs: ZeroExplainer(),
+        )
+
+    bound_engine, case = _sage_case_fixture()
+    with pytest.raises(ValueError, match=r"exactly \(0, 1, 2\)"):
+        se.compose_case_explanation(
+            bound_engine,
+            case,
+            restart_seeds=(7,),
+            member_explainer=_deterministic_member_explainer,
+        )
+
+
+def test_flow_stages_preserve_complete_membership_and_only_change_emphasis():
+    community = _sage_explanation_fixture().community("target", SCORING_DAY)
+
+    stages = se.build_flow_stages(community)
+
+    node_ids = tuple(sorted(community["nodes_by_id"]))
+    edge_ids = tuple(sorted(edge["edge_id"] for edge in community["edges"]))
+    assert [stage["stage_id"] for stage in stages] == [
+        "first_hop",
+        "second_hop",
+        "component_pool",
+        "rank_fusion",
+    ]
+    assert all(tuple(stage["node_ids"]) == node_ids for stage in stages)
+    assert all(tuple(stage["edge_ids"]) == edge_ids for stage in stages)
+    assert stages[0]["emphasized_edge_ids"] == ["g-cot:rel:0", "g-res:rel:1"]
+    assert stages[1]["emphasized_edge_ids"] == list(edge_ids)
+    assert stages[2]["emphasized_edge_ids"] == ["g-cot:rel:0"]
+    assert stages[3]["emphasized_edge_ids"] == []
+
+
+def test_edge_removal_faithfulness_uses_exact_fractions_and_matched_controls():
+    records = [
+        {"edge_id": f"e{index}", "relation": "COTRAVEL", "degree_bin": "2-4"}
+        for index in range(1, 7)
+    ]
+    importance = {f"e{index}": 7.0 - index for index in range(1, 7)}
+
+    def rescore(removed):
+        return 0.9 - 0.05 * len(removed)
+
+    result = se.edge_removal_faithfulness(
+        records, importance, rescore=rescore, seed=0
+    )
+
+    assert result["original_probability"] == pytest.approx(0.9)
+    assert [point["fraction"] for point in result["points"]] == [0.1, 0.25, 0.5]
+    assert [len(point["selected_edge_ids"]) for point in result["points"]] == [1, 2, 3]
+    assert all(point["unmatched_control_count"] == 0 for point in result["points"])
+    assert all(
+        point["matched_random_probability_drop"]
+        == pytest.approx(point["top_edge_probability_drop"])
+        for point in result["points"]
+    )
+
+
+def test_edge_removal_faithfulness_records_unmatched_controls_without_fallback():
+    records = [
+        {"edge_id": "e1", "relation": "COTRAVEL", "degree_bin": "1"},
+        {"edge_id": "e2", "relation": "RESIDENCE", "degree_bin": "9+"},
+    ]
+
+    result = se.edge_removal_faithfulness(
+        records,
+        {"e1": 1.0, "e2": 0.5},
+        rescore=lambda removed: 0.8 - 0.1 * len(removed),
+    )
+
+    assert all(point["unmatched_control_count"] > 0 for point in result["points"])
+    assert all(
+        point["matched_random_probability_drop"] is None
+        for point in result["points"]
+    )
+
+
+def test_faithfulness_records_exact_unmatched_ids_and_control_pairing():
+    records = [
+        {"edge_id": "e1", "relation": "COTRAVEL", "degree_bin": "1"},
+        {"edge_id": "e2", "relation": "RESIDENCE", "degree_bin": "2-4"},
+        {"edge_id": "e3", "relation": "RESIDENCE", "degree_bin": "2-4"},
+    ]
+
+    result = se.edge_removal_faithfulness(
+        records,
+        {"e1": 3.0, "e2": 2.0, "e3": 1.0},
+        rescore=lambda removed: 0.9 - 0.1 * len(removed),
+        seed=0,
+    )
+
+    half = result["points"][2]
+    assert half["selected_edge_ids"] == ["e1", "e2"]
+    assert half["matched_control_pairs"] == [
+        {"selected_edge_id": "e2", "control_edge_id": "e3"}
+    ]
+    assert half["unmatched_selected_edge_ids"] == ["e1"]
+    assert half["unmatched_control_count"] == 1
+
+
+def test_diagnostic_edge_set_rescore_is_exact_strict_asof_and_separate():
+    engine, _, components = _explanation_fixture(
+        return_components=True, bind_rank_reference=True
+    )
+    model, edges, node_ids, node_feat, caught_times = components
+    context = _counterfactual_context()
+
+    actual = se.diagnostic_edge_source_set_probability(
+        engine, context, ("cot", "cot-duplicate")
+    )
+    expected = _score_pool(
+        model,
+        pd.DataFrame(
+            {
+                "primary_obs_id": ["obs-target"],
+                "t": [SCORING_DAY + pd.Timedelta(hours=6)],
+            }
+        ),
+        {"obs-target": "target"},
+        edges.loc[
+            ~edges["source_row_id"].isin(("cot", "cot-duplicate"))
+        ],
+        node_ids,
+        node_feat,
+        caught_times,
+        {person_id: index for index, person_id in enumerate(node_ids)},
+        num_rel=4,
+    )[0]
+
+    assert actual == pytest.approx(expected, rel=1e-6)
+    with pytest.raises(ValueError, match="active at the scoring snapshot"):
+        se.diagnostic_edge_source_set_probability(
+            engine, context, ("at-boundary",)
+        )
+    with pytest.raises(ValueError, match="incomplete or invalid factor"):
+        engine.score_counterfactual(
+            context,
+            AblationSpec(
+                factor_id="pair:g1:rel:0",
+                kind="pair_relation",
+                edge_source_row_ids=("cot",),
+            ),
+        )
+
+
+def test_length_framed_hash_prevents_edge_set_boundary_collisions():
+    assert se._length_framed_hash(("a", "bc")) != se._length_framed_hash(
+        ("ab", "c")
+    )
+
+
+def _sage_case_fixture():
+    engine = _sage_explanation_fixture()
+    probability = float(
+        engine.snapshot(SCORING_DAY).probabilities[
+            engine.person_index["target"]
+        ]
+    )
+    reference = _counterfactual_reference(target_probability=probability)
+    engine.bind_rank_reference(reference, _counterfactual_row_bindings())
+    trace = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        daily_budget=25,
+    )
+    case = HybridOnlyCase(
+        person_id="target",
+        anchor=RecoveryAnchor(
+            person_id="target",
+            event_id="target-a",
+            row_index=0,
+            scoring_day=SCORING_DAY,
+            inspected_rank=1,
+        ),
+        baseline_rank=trace["baseline_rank"],
+        gnn_rank=trace["seed0_gnn_rank"],
+        hybrid_rank=trace["seed0_hybrid_rank"],
+        baseline_percentile=trace["baseline_percentile"],
+        gnn_percentile=trace["seed0_gnn_percentile"],
+        relationship_categories=("COTRAVEL",),
+        scoring_period="2025-01",
+        same_day_person_row_indices=(0, 1),
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        decision_trace=trace,
+    )
+    return engine, case
+
+
+def _deterministic_member_explainer(
+    engine, person_id, scoring_day, *, restart_seeds=(0, 1, 2), **kwargs
+):
+    local = se.member_subgraph(engine, person_id, scoring_day)
+    edge_values = {
+        "cot": 1.0,
+        "res": 0.5,
+        "plate": 0.25,
+    }
+    edge_mask = np.array(
+        [edge_values[str(source_id)] for source_id in local.tensor_edge_source_row_ids],
+        dtype=float,
+    )
+    feature_mask = np.arange(1, local.x.shape[1] + 1, dtype=float)
+    snapshot = engine.snapshot(scoring_day)
+    logit = float(snapshot.prepool_logits[engine.person_index[person_id]])
+    return {
+        "edge_masks": tuple(edge_mask.copy() for _ in restart_seeds),
+        "feature_masks": tuple(feature_mask.copy() for _ in restart_seeds),
+        "restart_seeds": tuple(restart_seeds),
+        "local_prepool_logit": logit,
+        "full_prepool_logit": logit,
+        "status": "ok",
+    }
+
+
+def _copy_case(case, *, decision_trace=None, **overrides):
+    values = {
+        "person_id": case.person_id,
+        "anchor": case.anchor,
+        "baseline_rank": case.baseline_rank,
+        "gnn_rank": case.gnn_rank,
+        "hybrid_rank": case.hybrid_rank,
+        "baseline_percentile": case.baseline_percentile,
+        "gnn_percentile": case.gnn_percentile,
+        "relationship_categories": case.relationship_categories,
+        "scoring_period": case.scoring_period,
+        "same_day_person_row_indices": case.same_day_person_row_indices,
+        "baseline_candidate_row_indices": case.baseline_candidate_row_indices,
+        "hybrid_candidate_row_indices": case.hybrid_candidate_row_indices,
+        "decision_trace": (
+            case.decision_trace_jsonable()
+            if decision_trace is None
+            else decision_trace
+        ),
+    }
+    values.update(overrides)
+    return HybridOnlyCase(**values)
+
+
+def test_json_safe_handles_mapping_proxy_numpy_timestamp_and_tuples():
+    payload = MappingProxyType(
+        {
+            "array": np.array([1, 2]),
+            "scalar": np.float32(0.5),
+            "when": SCORING_DAY,
+            "nested": (MappingProxyType({"flag": np.bool_(True)}),),
+        }
+    )
+
+    safe = se.json_safe(payload)
+
+    assert safe == {
+        "array": [1, 2],
+        "scalar": pytest.approx(0.5),
+        "when": "2025-01-02T00:00:00+00:00",
+        "nested": [{"flag": True}],
+    }
+    json.dumps(safe, allow_nan=False, sort_keys=True)
+
+
+def test_provenance_expansion_is_strict_asof_and_uses_source_row_ids():
+    node_ids = ["target", "a", "b", "outside"]
+    edges = pd.DataFrame(
+        {
+            "source_row_id": ["target-res", "a-b-cot", "b-outside-cot", "future"],
+            "canonical_pair_group_id": ["g-res", "g-ab", "g-bo", "g-future"],
+            "u": ["target", "a", "b", "outside"],
+            "v": ["a", "b", "outside", "target"],
+            "avail_time": [
+                SCORING_DAY - pd.Timedelta(hours=4),
+                SCORING_DAY - pd.Timedelta(hours=3),
+                SCORING_DAY - pd.Timedelta(hours=2),
+                SCORING_DAY,
+            ],
+            "rel": [1, 0, 0, 2],
+            "edge_type": ["RESIDENCE", "COTRAVEL", "COTRAVEL", "SHARED_PLATE"],
+        }
+    )
+    engine = se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=edges,
+        node_ids=node_ids,
+        node_feat={person_id: np.array([1.0]) for person_id in node_ids},
+        caught_time={"outside": SCORING_DAY - pd.Timedelta(hours=1)},
+        num_rel=4,
+    )
+    snapshot = engine.snapshot(SCORING_DAY)
+    community = engine.community("target", SCORING_DAY)
+    spec = next(
+        factor
+        for factor in build_ablation_specs(snapshot, "target", community)
+        if factor.kind == "structural_provenance"
+    )
+
+    expansion = se.build_provenance_expansion(
+        engine, snapshot, spec, community
+    )
+
+    assert expansion["label"] == "outside message community"
+    assert [edge["source_row_ids"] for edge in expansion["edges"]] == [
+        ["b-outside-cot"]
+    ]
+    assert "future" not in json.dumps(expansion)
+    outside = next(
+        node for node in expansion["nodes"] if node["node_id"] == "outside"
+    )
+    assert outside["caught_before_snapshot"] is True
+    assert outside["caught_label_available_time"] == (
+        "2025-01-01T23:00:00+00:00"
+    )
+    json.dumps(se.json_safe(expansion), allow_nan=False, sort_keys=True)
+
+
+def test_compose_case_explanation_collapses_member_masks_and_proves_parity():
+    engine, case = _sage_case_fixture()
+
+    explanation = se.compose_case_explanation(
+        engine, case, member_explainer=_deterministic_member_explainer
+    )
+
+    assert explanation["case_id"] == "case:target"
+    assert explanation["snapshot"]["component_member_ids"] == [
+        "poolmate",
+        "target",
+    ]
+    assert explanation["parity"] == {
+        "production_seed0_probability": True,
+        "pooled_logit_decomposition": True,
+        "frozen_percentile": True,
+        "frozen_daily_hybrid_rank": True,
+        "anchor_event": True,
+    }
+    edge_stats = {
+        edge["edge_id"]: edge for edge in explanation["community"]["edges"]
+    }
+    assert edge_stats["g-cot:rel:0"]["explainer_median"] == pytest.approx(1.0)
+    assert edge_stats["g-res:rel:1"]["explainer_median"] == pytest.approx(0.5)
+    assert edge_stats["g-plate:rel:2"]["explainer_median"] == pytest.approx(0.125)
+    assert edge_stats["g-cot:rel:0"]["selection_frequency"] == 1.0
+    assert edge_stats["g-res:rel:1"]["selection_frequency"] == 0.0
+    assert edge_stats["g-plate:rel:2"]["selection_frequency"] == 0.0
+    assert explanation["stability"]["signed_effect_source"] == (
+        "counterfactual_only"
+    )
+    assert explanation["stability"]["edge_restart_aggregate"][
+        "top_factor_agreement"
+    ] == 1.0
+    assert explanation["display_feature_mask_stats"][0]["feature_name"] == "bias"
+    assert explanation["factors"]
+    assert all("counterfactual" in factor for factor in explanation["factors"])
+    assert [point["fraction"] for point in explanation["faithfulness"]["points"]] == [
+        0.1,
+        0.25,
+        0.5,
+    ]
+    assert all(
+        set(stage["node_ids"])
+        == set(explanation["community"]["nodes_by_id"])
+        for stage in explanation["flow_stages"]
+    )
+    assert explanation["evidence_boundary"] == {
+        "snapshot": "2025-01-02T00:00:00+00:00",
+        "edge_rule": "available_time < snapshot",
+        "caught_rule": "label_available_time_utc < snapshot",
+    }
+    json.dumps(explanation, allow_nan=False, sort_keys=True)
+
+
+def test_compose_case_explanation_is_deterministic_and_cache_safe():
+    engine, case = _sage_case_fixture()
+
+    first = se.compose_case_explanation(
+        engine, case, member_explainer=_deterministic_member_explainer
+    )
+    expected = json.dumps(first, allow_nan=False, sort_keys=True)
+    first["community"]["edges"][0]["source_row_ids"].append("poisoned")
+    second = se.compose_case_explanation(
+        engine, case, member_explainer=_deterministic_member_explainer
+    )
+
+    assert json.dumps(second, allow_nan=False, sort_keys=True) == expected
+
+
+def test_compose_case_explanation_rejects_stale_probability_parity():
+    engine, case = _sage_case_fixture()
+    stale_reference = _counterfactual_reference(target_probability=0.99)
+    engine.bind_rank_reference(stale_reference, _counterfactual_row_bindings())
+
+    with pytest.raises(ValueError, match="production parity"):
+        se.compose_case_explanation(
+            engine, case, member_explainer=_deterministic_member_explainer
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "mutate"),
+    [
+        ("percentile_reference_id", lambda value: value + "-stale"),
+        ("baseline_daily_reference_id", lambda value: value + "-stale"),
+        ("hybrid_daily_reference_id", lambda value: value + "-stale"),
+        ("daily_budget", lambda value: value - 1),
+        ("baseline_raw", lambda value: value + 0.01),
+        ("baseline_percentile", lambda value: value + 0.01),
+        ("baseline_weighted_term", lambda value: value + 0.01),
+        ("baseline_rank", lambda value: value + 1),
+        ("seed0_gnn_probability", lambda value: min(1.0, value + 0.01)),
+        ("seed0_gnn_percentile", lambda value: value - 0.01),
+        ("seed0_gnn_weighted_term", lambda value: value - 0.01),
+        ("seed0_gnn_rank", lambda value: value + 1),
+        ("seed0_hybrid_score", lambda value: value - 0.01),
+        ("seed0_hybrid_rank", lambda value: value + 1),
+    ],
+)
+def test_compose_case_explanation_rejects_any_stale_decision_trace_field(
+    field_name, mutate
+):
+    engine, case = _sage_case_fixture()
+    trace = case.decision_trace_jsonable()
+    trace[field_name] = mutate(trace[field_name])
+
+    with pytest.raises(ValueError, match="decision trace.*frozen"):
+        se.compose_case_explanation(
+            engine,
+            _copy_case(case, decision_trace=trace),
+            member_explainer=_deterministic_member_explainer,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "mutate"),
+    [
+        ("baseline_rank", lambda value: value + 1),
+        ("gnn_rank", lambda value: value + 1),
+        ("baseline_percentile", lambda value: value + 0.01),
+        ("gnn_percentile", lambda value: value - 0.01),
+    ],
+)
+def test_compose_case_explanation_rejects_stale_outer_case_rank_fields(
+    field_name, mutate
+):
+    engine, case = _sage_case_fixture()
+
+    with pytest.raises(ValueError, match="case rank fields.*frozen"):
+        se.compose_case_explanation(
+            engine,
+            _copy_case(case, **{field_name: mutate(getattr(case, field_name))}),
+            member_explainer=_deterministic_member_explainer,
+        )
+
+
+def test_compose_case_explanation_rejects_cross_day_baseline_candidate_pool():
+    engine, case = _sage_case_fixture()
+    reference = engine.rank_reference
+    bindings = _counterfactual_row_bindings()
+    bindings[3] = ("peer-b", SCORING_DAY + pd.Timedelta(days=1))
+    engine.bind_rank_reference(reference, bindings)
+    baseline_candidates = (0, 1, 2, 3)
+    hybrid_candidates = (0, 1, 2)
+    trace = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=baseline_candidates,
+        hybrid_candidate_row_indices=hybrid_candidates,
+        daily_budget=25,
+    )
+    poisoned = _copy_case(
+        case,
+        baseline_rank=trace["baseline_rank"],
+        gnn_rank=trace["seed0_gnn_rank"],
+        hybrid_rank=trace["seed0_hybrid_rank"],
+        baseline_percentile=trace["baseline_percentile"],
+        gnn_percentile=trace["seed0_gnn_percentile"],
+        baseline_candidate_row_indices=baseline_candidates,
+        hybrid_candidate_row_indices=hybrid_candidates,
+        decision_trace=trace,
+    )
+
+    with pytest.raises(ValueError, match="baseline_candidate.*scoring_day"):
+        se.compose_case_explanation(
+            engine,
+            poisoned,
+            member_explainer=_deterministic_member_explainer,
+        )
+
+
+def test_structural_factor_restart_stability_uses_feature_masks_not_edge_masks():
+    spec = AblationSpec(
+        factor_id="structural:target",
+        kind="structural_provenance",
+        edge_source_row_ids=("outside-row",),
+        provenance_node_ids=("outside",),
+    )
+    feature_names = list(gm.caught_feature_names(4))
+    frequency = np.zeros(len(feature_names), dtype=float)
+    q1 = np.zeros(len(feature_names), dtype=float)
+    q3 = np.zeros(len(feature_names), dtype=float)
+    for name in (
+        "log1p_cotravel_component_size",
+        "log1p_households_spanned",
+    ):
+        index = feature_names.index(name)
+        frequency[index] = 0.75
+        q1[index] = 0.2
+        q3[index] = 0.3
+
+    actual = se._factor_restart_metrics(
+        spec,
+        [
+            {
+                "source_row_ids": ["outside-row"],
+                "selection_frequency": 1.0,
+                "explainer_q1": 0.0,
+                "explainer_q3": 0.9,
+            }
+        ],
+        feature_names,
+        {
+            "selection_frequency": frequency,
+            "q1": q1,
+            "q3": q3,
+            "restart_count": 3,
+        },
+    )
+
+    assert actual[:2] == pytest.approx((0.75, 0.1))
+    assert actual[2] == "feature_mask"
