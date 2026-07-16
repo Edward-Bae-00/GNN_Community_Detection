@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
 
 import numpy as np
 import pandas as pd
+from scipy.stats import rankdata
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,141 @@ class RecoveryOverlap:
         }
 
 
+@dataclass(frozen=True)
+class FrozenRankReference:
+    percentile_reference_id: str
+    event_ids: tuple[str, ...]
+    baseline_raw: np.ndarray
+    seed0_gnn_raw: np.ndarray
+    baseline_percentile: np.ndarray
+    seed0_gnn_percentile: np.ndarray
+    seed0_hybrid_score: np.ndarray
+    baseline_selection_score: np.ndarray
+    seed0_gnn_selection_score: np.ndarray
+    seed0_hybrid_selection_score: np.ndarray
+    blend_weight: float
+
+    def __post_init__(self) -> None:
+        event_ids = tuple(self.event_ids)
+        if not event_ids:
+            raise ValueError("rank reference must contain event IDs")
+        if any(
+            value is None or pd.isna(value) or not str(value).strip()
+            for value in event_ids
+        ):
+            raise ValueError("event_id must contain non-null, non-blank values")
+        event_ids = tuple(str(value) for value in event_ids)
+        object.__setattr__(self, "event_ids", event_ids)
+
+        array_fields = (
+            "baseline_raw",
+            "seed0_gnn_raw",
+            "baseline_percentile",
+            "seed0_gnn_percentile",
+            "seed0_hybrid_score",
+            "baseline_selection_score",
+            "seed0_gnn_selection_score",
+            "seed0_hybrid_selection_score",
+        )
+        for field_name in array_fields:
+            copied = np.array(getattr(self, field_name), dtype=float, copy=True)
+            if copied.ndim != 1 or len(copied) != len(event_ids):
+                raise ValueError(
+                    f"{field_name} must be one-dimensional and aligned to event_ids"
+                )
+            if not np.isfinite(copied).all():
+                raise ValueError(f"{field_name} must be finite")
+            values = np.frombuffer(copied.tobytes(), dtype=copied.dtype)
+            object.__setattr__(self, field_name, values)
+
+        blend_weight = _validated_blend_weight(self.blend_weight)
+        object.__setattr__(self, "blend_weight", blend_weight)
+        if not isinstance(self.percentile_reference_id, str) or not (
+            self.percentile_reference_id.startswith("sha256:")
+            and len(self.percentile_reference_id) > len("sha256:")
+        ):
+            raise ValueError("percentile_reference_id must be a sha256 reference")
+
+
+@dataclass(frozen=True)
+class HybridOnlyCase:
+    person_id: str
+    anchor: RecoveryAnchor
+    baseline_rank: int
+    gnn_rank: int
+    hybrid_rank: int
+    baseline_percentile: float
+    gnn_percentile: float
+    relationship_categories: tuple[str, ...]
+    scoring_period: str
+    same_day_person_row_indices: tuple[int, ...] = ()
+    baseline_candidate_row_indices: tuple[int, ...] = ()
+    hybrid_candidate_row_indices: tuple[int, ...] = ()
+    decision_trace: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.person_id, str) or not self.person_id.strip():
+            raise ValueError("person_id must be non-blank")
+        if not isinstance(self.anchor, RecoveryAnchor):
+            raise ValueError("anchor must be a RecoveryAnchor")
+        if self.anchor.person_id != self.person_id:
+            raise ValueError("anchor person_id must match case person_id")
+
+        for field_name in ("baseline_rank", "gnn_rank", "hybrid_rank"):
+            value = getattr(self, field_name)
+            if (
+                not isinstance(value, (int, np.integer))
+                or isinstance(value, (bool, np.bool_))
+                or value <= 0
+            ):
+                raise ValueError(f"{field_name} must be a positive integer")
+            object.__setattr__(self, field_name, int(value))
+
+        for field_name in ("baseline_percentile", "gnn_percentile"):
+            try:
+                value = float(getattr(self, field_name))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field_name} must be between 0 and 1") from exc
+            if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"{field_name} must be between 0 and 1")
+            object.__setattr__(self, field_name, value)
+
+        if isinstance(self.relationship_categories, str):
+            raise ValueError("relationship_categories must be a collection")
+        categories = tuple(self.relationship_categories)
+        if any(
+            not isinstance(category, str) or not category.strip()
+            for category in categories
+        ):
+            raise ValueError("relationship_categories must contain non-blank values")
+        object.__setattr__(self, "relationship_categories", categories)
+        if not isinstance(self.scoring_period, str) or not self.scoring_period.strip():
+            raise ValueError("scoring_period must be non-blank")
+
+        index_fields = (
+            "same_day_person_row_indices",
+            "baseline_candidate_row_indices",
+            "hybrid_candidate_row_indices",
+        )
+        for field_name in index_fields:
+            values = _frozen_row_indices(getattr(self, field_name), field_name)
+            object.__setattr__(self, field_name, values)
+
+        if not isinstance(self.decision_trace, Mapping):
+            raise ValueError("decision_trace must be a mapping")
+        object.__setattr__(
+            self, "decision_trace", MappingProxyType(dict(self.decision_trace))
+        )
+
+    @property
+    def hybrid_rank_uplift(self) -> int:
+        return self.baseline_rank - self.hybrid_rank
+
+    @property
+    def gnn_percentile_uplift(self) -> float:
+        return self.gnn_percentile - self.baseline_percentile
+
+
 def _validated_identifier_values(values: pd.Series, column_name: str) -> pd.Series:
     if values.isna().any():
         raise ValueError(
@@ -119,6 +257,231 @@ def _normalized_hidden_values(values: pd.Series) -> np.ndarray:
             f"{invalid_indices}"
         )
     return np.asarray(normalized, dtype=bool)
+
+
+def _validated_blend_weight(blend_weight: object) -> float:
+    if isinstance(blend_weight, (bool, np.bool_)):
+        raise ValueError("blend_weight must be finite and between 0 and 1")
+    try:
+        value = float(blend_weight)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("blend_weight must be finite and between 0 and 1") from exc
+    if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError("blend_weight must be finite and between 0 and 1")
+    return value
+
+
+def _frozen_row_indices(values, field_name: str) -> tuple[int, ...]:
+    try:
+        indices = tuple(values)
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must contain row indices") from exc
+    if any(
+        not isinstance(index, (int, np.integer))
+        or isinstance(index, (bool, np.bool_))
+        or index < 0
+        for index in indices
+    ):
+        raise ValueError(f"{field_name} must contain non-negative row indices")
+    return tuple(int(index) for index in indices)
+
+
+def _ordered_id_hash(values) -> str:
+    payload = "\n".join(str(value) for value in values).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _selection_tiebreak(scores) -> np.ndarray:
+    values = np.asarray(scores, dtype=float)
+    rng = np.random.default_rng(42)
+    return values + rng.uniform(0.0, 1e-9, size=len(values))
+
+
+def _validated_rank_input(values, field_name: str, n_rows: int) -> np.ndarray:
+    try:
+        array = np.asarray(values, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("rank inputs must be numeric and one-dimensional") from exc
+    if array.ndim != 1 or len(array) != n_rows:
+        raise ValueError("rank inputs must be non-empty and aligned to pool rows")
+    if not np.isfinite(array).all():
+        raise ValueError(f"{field_name} rank inputs must be finite")
+    return array
+
+
+def build_rank_reference(
+    pool: pd.DataFrame,
+    baseline_raw,
+    seed0_gnn_raw,
+    blend_weight,
+) -> FrozenRankReference:
+    """Freeze global seed-0 percentile and selection references for one pool."""
+    if "event_id" not in pool.columns:
+        raise ValueError("pool missing required column: event_id")
+    n_rows = len(pool)
+    if n_rows == 0:
+        raise ValueError("rank inputs must be non-empty and aligned to pool rows")
+    baseline = _validated_rank_input(baseline_raw, "baseline", n_rows)
+    gnn = _validated_rank_input(seed0_gnn_raw, "seed0 GNN", n_rows)
+    weight = _validated_blend_weight(blend_weight)
+    event_ids = tuple(_validated_identifier_values(pool["event_id"], "event_id"))
+
+    baseline_pct = rankdata(baseline, method="average") / n_rows
+    gnn_pct = rankdata(gnn, method="average") / n_rows
+    hybrid = weight * gnn_pct + (1.0 - weight) * baseline_pct
+    return FrozenRankReference(
+        percentile_reference_id=_ordered_id_hash(event_ids),
+        event_ids=event_ids,
+        baseline_raw=baseline,
+        seed0_gnn_raw=gnn,
+        baseline_percentile=baseline_pct,
+        seed0_gnn_percentile=gnn_pct,
+        seed0_hybrid_score=hybrid,
+        baseline_selection_score=_selection_tiebreak(baseline),
+        seed0_gnn_selection_score=_selection_tiebreak(gnn),
+        seed0_hybrid_selection_score=_selection_tiebreak(hybrid),
+        blend_weight=weight,
+    )
+
+
+def _validated_candidate_indices(
+    values,
+    *,
+    field_name: str,
+    n_rows: int,
+) -> tuple[int, ...]:
+    try:
+        indices = tuple(values)
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must contain row indices") from exc
+    if any(
+        not isinstance(index, (int, np.integer))
+        or isinstance(index, (bool, np.bool_))
+        or not 0 <= index < n_rows
+        for index in indices
+    ):
+        raise ValueError(f"{field_name} contains a row index out of range")
+    normalized = tuple(int(index) for index in indices)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{field_name} must not contain duplicate row indices")
+    return normalized
+
+
+def _rank_in_candidates(
+    scores: np.ndarray,
+    row_index: int,
+    candidate_row_indices: tuple[int, ...],
+) -> int:
+    ordered = sorted(
+        candidate_row_indices,
+        key=lambda index: (-float(scores[index]), index),
+    )
+    if row_index not in ordered:
+        raise ValueError("anchor row is absent from its daily candidate reference")
+    return ordered.index(row_index) + 1
+
+
+def build_decision_trace(
+    reference: FrozenRankReference,
+    row_index: int,
+    baseline_candidate_row_indices: tuple[int, ...],
+    hybrid_candidate_row_indices: tuple[int, ...],
+    daily_budget: int,
+) -> dict[str, object]:
+    """Serialize the frozen global scores and arm-specific daily ranks."""
+    n_rows = len(reference.event_ids)
+    if (
+        not isinstance(row_index, (int, np.integer))
+        or isinstance(row_index, (bool, np.bool_))
+        or not 0 <= row_index < n_rows
+    ):
+        raise ValueError("row_index is out of range for the rank reference")
+    row_index = int(row_index)
+    if (
+        not isinstance(daily_budget, (int, np.integer))
+        or isinstance(daily_budget, (bool, np.bool_))
+        or daily_budget <= 0
+    ):
+        raise ValueError("daily_budget must be positive")
+    baseline_candidates = _validated_candidate_indices(
+        baseline_candidate_row_indices,
+        field_name="baseline_candidate_row_indices",
+        n_rows=n_rows,
+    )
+    hybrid_candidates = _validated_candidate_indices(
+        hybrid_candidate_row_indices,
+        field_name="hybrid_candidate_row_indices",
+        n_rows=n_rows,
+    )
+
+    baseline_rank = _rank_in_candidates(
+        reference.baseline_selection_score, row_index, baseline_candidates
+    )
+    gnn_rank = _rank_in_candidates(
+        reference.seed0_gnn_selection_score, row_index, hybrid_candidates
+    )
+    hybrid_rank = _rank_in_candidates(
+        reference.seed0_hybrid_selection_score, row_index, hybrid_candidates
+    )
+    return {
+        "percentile_reference_id": reference.percentile_reference_id,
+        "baseline_daily_reference_id": _ordered_id_hash(
+            reference.event_ids[index] for index in baseline_candidates
+        ),
+        "hybrid_daily_reference_id": _ordered_id_hash(
+            reference.event_ids[index] for index in hybrid_candidates
+        ),
+        "daily_budget": int(daily_budget),
+        "baseline_raw": float(reference.baseline_raw[row_index]),
+        "baseline_percentile": float(reference.baseline_percentile[row_index]),
+        "baseline_weighted_term": float(
+            (1.0 - reference.blend_weight)
+            * reference.baseline_percentile[row_index]
+        ),
+        "baseline_rank": baseline_rank,
+        "seed0_gnn_probability": float(reference.seed0_gnn_raw[row_index]),
+        "seed0_gnn_percentile": float(reference.seed0_gnn_percentile[row_index]),
+        "seed0_gnn_weighted_term": float(
+            reference.blend_weight * reference.seed0_gnn_percentile[row_index]
+        ),
+        "seed0_gnn_rank": gnn_rank,
+        "seed0_hybrid_score": float(reference.seed0_hybrid_score[row_index]),
+        "seed0_hybrid_rank": hybrid_rank,
+    }
+
+
+def representative_attempt_order(cases) -> list[HybridOnlyCase]:
+    """Return deterministic category/period round-robin attempt order."""
+    ranked = sorted(
+        cases,
+        key=lambda case: (
+            -case.hybrid_rank_uplift,
+            -case.gnn_percentile_uplift,
+            case.person_id,
+        ),
+    )
+    queues: defaultdict[tuple[str, str], deque[HybridOnlyCase]] = defaultdict(deque)
+    for case in ranked:
+        categories = sorted(set(case.relationship_categories) or {"NONE"})
+        for category in categories:
+            queues[(category, case.scoring_period)].append(case)
+
+    selected: set[str] = set()
+    ordered: list[HybridOnlyCase] = []
+    while any(queues.values()):
+        progressed = False
+        for key in sorted(queues):
+            queue = queues[key]
+            while queue and queue[0].person_id in selected:
+                queue.popleft()
+            if queue:
+                case = queue.popleft()
+                selected.add(case.person_id)
+                ordered.append(case)
+                progressed = True
+        if not progressed:
+            break
+    return ordered
 
 
 def simulate_recovery_run(

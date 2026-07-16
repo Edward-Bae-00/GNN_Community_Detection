@@ -7,11 +7,16 @@ import pandas as pd
 import pytest
 
 from gnn.recovery_observability import (
+    HybridOnlyCase,
     RecoveryAnchor,
     RecoveryOverlap,
+    build_decision_trace,
+    build_rank_reference,
     recovery_overlap,
+    representative_attempt_order,
     simulate_recovery_run,
 )
+from gnn.run_demo import _rank_fuse
 
 
 def _pool(
@@ -357,6 +362,285 @@ def test_equal_scores_use_row_index_as_deterministic_tiebreak() -> None:
 
     assert run.days[day].candidate_row_indices == (0, 1, 2)
     assert run.days[day].inspected_row_indices == (0, 1)
+
+
+def test_rank_reference_matches_rank_fuse_and_freezes_arrays() -> None:
+    pool = pd.DataFrame({"event_id": ["e1", "e2", "e3", "e4"]})
+    baseline = np.array([0.1, 0.8, 0.4, 0.4])
+    gnn = np.array([0.9, 0.2, 0.5, 0.5])
+
+    reference = build_rank_reference(pool, baseline, gnn, blend_weight=0.75)
+
+    np.testing.assert_allclose(
+        reference.baseline_percentile,
+        np.array([0.25, 1.0, 0.625, 0.625]),
+    )
+    np.testing.assert_allclose(
+        reference.seed0_hybrid_score,
+        _rank_fuse(baseline, gnn, 0.75),
+    )
+    expected_noise = np.random.default_rng(42).uniform(0.0, 1e-9, size=4)
+    np.testing.assert_allclose(
+        reference.baseline_selection_score,
+        baseline + expected_noise,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert reference.percentile_reference_id.startswith("sha256:")
+    assert reference.event_ids == ("e1", "e2", "e3", "e4")
+
+    baseline[0] = 99.0
+    assert reference.baseline_raw[0] == pytest.approx(0.1)
+    for values in (
+        reference.baseline_raw,
+        reference.seed0_gnn_raw,
+        reference.baseline_percentile,
+        reference.seed0_gnn_percentile,
+        reference.seed0_hybrid_score,
+        reference.baseline_selection_score,
+        reference.seed0_gnn_selection_score,
+        reference.seed0_hybrid_selection_score,
+    ):
+        assert not values.flags.writeable
+        with pytest.raises(ValueError, match="read-only"):
+            values[0] = -1.0
+        with pytest.raises(ValueError, match="cannot set WRITEABLE flag"):
+            values.setflags(write=True)
+
+
+@pytest.mark.parametrize(
+    ("pool", "baseline", "gnn", "blend_weight", "error"),
+    [
+        (pd.DataFrame({"event_id": []}), [], [], 0.5, "non-empty and aligned"),
+        (
+            pd.DataFrame({"event_id": ["e1"]}),
+            [0.1, 0.2],
+            [0.3],
+            0.5,
+            "non-empty and aligned",
+        ),
+        (
+            pd.DataFrame({"event_id": ["e1"]}),
+            [np.nan],
+            [0.3],
+            0.5,
+            "finite",
+        ),
+        (
+            pd.DataFrame({"not_event_id": ["e1"]}),
+            [0.1],
+            [0.3],
+            0.5,
+            "event_id",
+        ),
+        (
+            pd.DataFrame({"event_id": ["   "]}),
+            [0.1],
+            [0.3],
+            0.5,
+            "non-null, non-blank",
+        ),
+        (
+            pd.DataFrame({"event_id": ["e1"]}),
+            [0.1],
+            [0.3],
+            1.1,
+            "blend_weight",
+        ),
+    ],
+)
+def test_rank_reference_rejects_invalid_inputs(
+    pool: pd.DataFrame,
+    baseline: list[float],
+    gnn: list[float],
+    blend_weight: float,
+    error: str,
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        build_rank_reference(pool, baseline, gnn, blend_weight)
+
+
+def test_decision_trace_hashes_ordered_candidate_sets_and_uses_arm_ranks() -> None:
+    pool = pd.DataFrame({"event_id": ["anchor", "b-high", "h-high", "low"]})
+    reference = build_rank_reference(
+        pool,
+        baseline_raw=[0.8, 0.9, 0.1, 0.2],
+        seed0_gnn_raw=[0.8, 0.1, 0.9, 0.2],
+        blend_weight=0.5,
+    )
+
+    trace = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(1, 0, 3),
+        hybrid_candidate_row_indices=(2, 0, 3),
+        daily_budget=2,
+    )
+    reordered = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(0, 1, 3),
+        hybrid_candidate_row_indices=(2, 0, 3),
+        daily_budget=2,
+    )
+    changed_hybrid = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(1, 0, 3),
+        hybrid_candidate_row_indices=(0, 2, 3),
+        daily_budget=2,
+    )
+
+    assert trace["percentile_reference_id"] == reference.percentile_reference_id
+    assert trace["baseline_daily_reference_id"] != reordered[
+        "baseline_daily_reference_id"
+    ]
+    assert trace["hybrid_daily_reference_id"] == reordered[
+        "hybrid_daily_reference_id"
+    ]
+    assert trace["baseline_daily_reference_id"] == changed_hybrid[
+        "baseline_daily_reference_id"
+    ]
+    assert trace["hybrid_daily_reference_id"] != changed_hybrid[
+        "hybrid_daily_reference_id"
+    ]
+    assert trace["baseline_rank"] == 2
+    assert trace["seed0_gnn_rank"] == 2
+    assert trace["seed0_hybrid_rank"] == 1
+    assert trace["daily_budget"] == 2
+    assert trace["baseline_raw"] == pytest.approx(0.8)
+    assert trace["baseline_weighted_term"] == pytest.approx(
+        0.5 * reference.baseline_percentile[0]
+    )
+    assert trace["seed0_gnn_probability"] == pytest.approx(0.8)
+    assert trace["seed0_gnn_weighted_term"] == pytest.approx(
+        0.5 * reference.seed0_gnn_percentile[0]
+    )
+    assert trace["seed0_hybrid_score"] == pytest.approx(
+        reference.seed0_hybrid_score[0]
+    )
+    assert all(
+        isinstance(value, (str, int, float)) for value in trace.values()
+    )
+
+
+@pytest.mark.parametrize(
+    ("row_index", "baseline_candidates", "hybrid_candidates", "budget", "error"),
+    [
+        (3, (0, 1), (0, 1), 1, "row_index"),
+        (0, (1,), (0, 1), 1, "absent"),
+        (0, (0, 1), (1,), 1, "absent"),
+        (0, (0, 2), (0, 1), 1, "out of range"),
+        (0, (0, 1), (0, -1), 1, "out of range"),
+        (0, (0, 1), (0, 1), 0, "daily_budget"),
+    ],
+)
+def test_decision_trace_rejects_invalid_references(
+    row_index: int,
+    baseline_candidates: tuple[int, ...],
+    hybrid_candidates: tuple[int, ...],
+    budget: int,
+    error: str,
+) -> None:
+    reference = build_rank_reference(
+        pd.DataFrame({"event_id": ["e1", "e2"]}),
+        [0.8, 0.2],
+        [0.7, 0.3],
+        0.5,
+    )
+
+    with pytest.raises(ValueError, match=error):
+        build_decision_trace(
+            reference,
+            row_index=row_index,
+            baseline_candidate_row_indices=baseline_candidates,
+            hybrid_candidate_row_indices=hybrid_candidates,
+            daily_budget=budget,
+        )
+
+
+def _hybrid_only_case(
+    person_id: str,
+    row_index: int,
+    baseline_rank: int,
+    gnn_rank: int,
+    hybrid_rank: int,
+    baseline_percentile: float,
+    gnn_percentile: float,
+    categories: tuple[str, ...],
+    period: str,
+    *,
+    decision_trace: dict[str, object] | None = None,
+) -> HybridOnlyCase:
+    day = pd.Timestamp("2025-01-02T00:00:00Z")
+    return HybridOnlyCase(
+        person_id=person_id,
+        anchor=RecoveryAnchor(
+            person_id, f"e-{person_id}", row_index, day, inspected_rank=1
+        ),
+        baseline_rank=baseline_rank,
+        gnn_rank=gnn_rank,
+        hybrid_rank=hybrid_rank,
+        baseline_percentile=baseline_percentile,
+        gnn_percentile=gnn_percentile,
+        relationship_categories=categories,
+        scoring_period=period,
+        same_day_person_row_indices=[row_index],  # type: ignore[arg-type]
+        baseline_candidate_row_indices=[row_index],  # type: ignore[arg-type]
+        hybrid_candidate_row_indices=[row_index],  # type: ignore[arg-type]
+        decision_trace={} if decision_trace is None else decision_trace,
+    )
+
+
+def test_representative_attempt_order_is_deterministic_and_round_robin() -> None:
+    cases = [
+        _hybrid_only_case("p1", 0, 21, 2, 1, 0.40, 0.90, ("COTRAVEL",), "2025-01"),
+        _hybrid_only_case("p2", 1, 20, 3, 1, 0.41, 0.88, ("RESIDENCE",), "2025-01"),
+        _hybrid_only_case(
+            "p3", 2, 19, 4, 1, 0.42, 0.87, ("SHARED_PLATE",), "2025-02"
+        ),
+        _hybrid_only_case(
+            "p4",
+            3,
+            18,
+            5,
+            1,
+            0.43,
+            0.86,
+            ("COTRAVEL", "RESIDENCE"),
+            "2025-01",
+        ),
+    ]
+
+    first = representative_attempt_order(cases)
+    second = representative_attempt_order(list(reversed(cases)))
+
+    assert [case.person_id for case in first] == [case.person_id for case in second]
+    assert len({case.person_id for case in first}) == len(cases)
+    assert {case.relationship_categories[0] for case in first[:3]} == {
+        "COTRAVEL",
+        "RESIDENCE",
+        "SHARED_PLATE",
+    }
+
+
+def test_hybrid_only_case_copies_inputs_and_freezes_decision_trace() -> None:
+    decision_trace: dict[str, object] = {"baseline_rank": 3}
+    case = _hybrid_only_case(
+        "p1", 0, 3, 2, 1, 0.25, 0.75, ("COTRAVEL",), "2025-01",
+        decision_trace=decision_trace,
+    )
+    decision_trace["baseline_rank"] = 99
+
+    assert case.hybrid_rank_uplift == 2
+    assert case.gnn_percentile_uplift == pytest.approx(0.5)
+    assert case.same_day_person_row_indices == (0,)
+    assert case.baseline_candidate_row_indices == (0,)
+    assert case.hybrid_candidate_row_indices == (0,)
+    assert isinstance(case.decision_trace, MappingProxyType)
+    assert case.decision_trace["baseline_rank"] == 3
+    with pytest.raises(TypeError):
+        case.decision_trace["baseline_rank"] = 4  # type: ignore[index]
 
 
 def test_overlap_rejects_unequal_budgets() -> None:
