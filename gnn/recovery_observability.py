@@ -112,6 +112,8 @@ class FrozenRankReference:
         ):
             raise ValueError("event_id must contain non-null, non-blank values")
         event_ids = tuple(str(value) for value in event_ids)
+        if len(set(event_ids)) != len(event_ids):
+            raise ValueError("event_id values must be unique")
         object.__setattr__(self, "event_ids", event_ids)
 
         array_fields = (
@@ -221,6 +223,10 @@ class HybridOnlyCase:
     def gnn_percentile_uplift(self) -> float:
         return self.gnn_percentile - self.baseline_percentile
 
+    def decision_trace_jsonable(self) -> dict[str, object]:
+        """Return a detached JSON-compatible copy of the frozen trace."""
+        return _thaw_json_like(self.decision_trace)
+
 
 def _validated_identifier_values(values: pd.Series, column_name: str) -> pd.Series:
     if values.isna().any():
@@ -287,16 +293,17 @@ def _frozen_row_indices(values, field_name: str) -> tuple[int, ...]:
 
 def _freeze_json_like(value):
     if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError("decision_trace mapping keys must be strings")
         return MappingProxyType(
             {key: _freeze_json_like(item) for key, item in value.items()}
         )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_json_like(item) for item in value)
     if isinstance(value, (set, frozenset)):
-        try:
-            return frozenset(_freeze_json_like(item) for item in value)
-        except TypeError as exc:
-            raise ValueError("decision_trace set values must be hashable") from exc
+        raise ValueError("decision_trace sets are not JSON-compatible")
+    if isinstance(value, float) and not np.isfinite(value):
+        raise ValueError("decision_trace floats must be finite")
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise ValueError(
@@ -305,9 +312,22 @@ def _freeze_json_like(value):
     )
 
 
+def _thaw_json_like(value):
+    if isinstance(value, Mapping):
+        return {key: _thaw_json_like(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json_like(item) for item in value]
+    return value
+
+
 def _ordered_id_hash(values) -> str:
-    payload = "\n".join(str(value) for value in values).encode("utf-8")
-    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    encoded_values = tuple(str(value).encode("utf-8") for value in values)
+    digest = hashlib.sha256()
+    digest.update(len(encoded_values).to_bytes(8, byteorder="big", signed=False))
+    for value in encoded_values:
+        digest.update(len(value).to_bytes(8, byteorder="big", signed=False))
+        digest.update(value)
+    return f"sha256:{digest.hexdigest()}"
 
 
 def _selection_tiebreak(scores) -> np.ndarray:

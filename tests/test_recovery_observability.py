@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from types import MappingProxyType
 
@@ -479,6 +480,25 @@ def test_percentile_reference_id_must_match_ordered_event_ids(
         replace(reference, percentile_reference_id=invalid_reference_id)
 
 
+def test_rank_reference_rejects_duplicate_event_ids_in_build_and_direct_use() -> None:
+    pool = pd.DataFrame({"event_id": ["duplicate", "duplicate"]})
+    with pytest.raises(ValueError, match="event_id values must be unique"):
+        build_rank_reference(pool, [0.8, 0.2], [0.7, 0.3], 0.5)
+
+    reference = build_rank_reference(
+        pd.DataFrame({"event_id": ["e1", "e2"]}),
+        [0.8, 0.2],
+        [0.7, 0.3],
+        0.5,
+    )
+    with pytest.raises(ValueError, match="event_id values must be unique"):
+        replace(
+            reference,
+            event_ids=("duplicate", "duplicate"),
+            percentile_reference_id=f"sha256:{'0' * 64}",
+        )
+
+
 def test_decision_trace_hashes_ordered_candidate_sets_and_uses_arm_ranks() -> None:
     pool = pd.DataFrame({"event_id": ["anchor", "b-high", "h-high", "low"]})
     reference = build_rank_reference(
@@ -541,6 +561,73 @@ def test_decision_trace_hashes_ordered_candidate_sets_and_uses_arm_ranks() -> No
     assert all(
         isinstance(value, (str, int, float)) for value in trace.values()
     )
+
+
+def test_daily_candidate_hashes_use_unambiguous_length_framing() -> None:
+    reference = build_rank_reference(
+        pd.DataFrame(
+            {"event_id": ["anchor", "a\nb", "c", "a", "b\nc"]}
+        ),
+        [0.9, 0.8, 0.7, 0.6, 0.5],
+        [0.9, 0.8, 0.7, 0.6, 0.5],
+        0.5,
+    )
+    first = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(0, 1, 2),
+        hybrid_candidate_row_indices=(0, 1, 2),
+        daily_budget=1,
+    )
+    second = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(0, 3, 4),
+        hybrid_candidate_row_indices=(0, 3, 4),
+        daily_budget=1,
+    )
+
+    assert first["baseline_daily_reference_id"] != second[
+        "baseline_daily_reference_id"
+    ]
+    assert first["hybrid_daily_reference_id"] != second[
+        "hybrid_daily_reference_id"
+    ]
+
+    left_global = build_rank_reference(
+        pd.DataFrame({"event_id": ["a\nb", "c"]}),
+        [0.8, 0.2],
+        [0.7, 0.3],
+        0.5,
+    )
+    right_global = build_rank_reference(
+        pd.DataFrame({"event_id": ["a", "b\nc"]}),
+        [0.8, 0.2],
+        [0.7, 0.3],
+        0.5,
+    )
+    assert (
+        left_global.percentile_reference_id
+        != right_global.percentile_reference_id
+    )
+
+
+def test_decision_trace_rejects_duplicate_candidate_rows() -> None:
+    reference = build_rank_reference(
+        pd.DataFrame({"event_id": ["e1", "e2"]}),
+        [0.8, 0.2],
+        [0.7, 0.3],
+        0.5,
+    )
+
+    with pytest.raises(ValueError, match="must not contain duplicate row indices"):
+        build_decision_trace(
+            reference,
+            row_index=0,
+            baseline_candidate_row_indices=(0, 0),
+            hybrid_candidate_row_indices=(0, 1),
+            daily_budget=1,
+        )
 
 
 @pytest.mark.parametrize(
@@ -643,6 +730,32 @@ def test_representative_attempt_order_is_deterministic_and_round_robin() -> None
     }
 
 
+def test_representative_round_robin_interleaves_exact_queue_sequence() -> None:
+    cases = [
+        _hybrid_only_case("p1", 0, 101, 2, 1, 0.1, 0.9, ("COTRAVEL",), "2025-01"),
+        _hybrid_only_case("p2", 1, 92, 3, 2, 0.2, 0.9, ("COTRAVEL",), "2025-01"),
+        _hybrid_only_case("p3", 2, 83, 4, 3, 0.3, 0.9, ("COTRAVEL",), "2025-01"),
+        _hybrid_only_case("p4", 3, 74, 5, 4, 0.4, 0.9, ("RESIDENCE",), "2025-01"),
+        _hybrid_only_case(
+            "p5", 4, 65, 6, 5, 0.5, 0.9, ("SHARED_PLATE",), "2025-02"
+        ),
+        _hybrid_only_case(
+            "p6", 5, 56, 7, 6, 0.6, 0.9, ("SHARED_PLATE",), "2025-02"
+        ),
+    ]
+
+    ordered = representative_attempt_order(list(reversed(cases)))
+
+    assert [case.person_id for case in ordered] == [
+        "p1",
+        "p4",
+        "p5",
+        "p2",
+        "p6",
+        "p3",
+    ]
+
+
 def test_hybrid_only_case_copies_inputs_and_freezes_decision_trace() -> None:
     decision_trace: dict[str, object] = {"baseline_rank": 3}
     case = _hybrid_only_case(
@@ -664,7 +777,7 @@ def test_hybrid_only_case_copies_inputs_and_freezes_decision_trace() -> None:
 
 def test_hybrid_only_case_decision_trace_is_deeply_immutable_and_detached() -> None:
     source_ids: list[object] = ["e1", {"rank": 1}]
-    source_metadata = {"candidate_ids": source_ids, "labels": {"A", "B"}}
+    source_metadata = {"candidate_ids": source_ids, "labels": ["A", "B"]}
     decision_trace: dict[str, object] = {"evidence": source_metadata}
     case = _hybrid_only_case(
         "p1",
@@ -681,14 +794,14 @@ def test_hybrid_only_case_decision_trace_is_deeply_immutable_and_detached() -> N
 
     source_ids[0] = "changed"
     source_ids[1]["rank"] = 99  # type: ignore[index]
-    source_metadata["labels"].add("C")  # type: ignore[union-attr]
+    source_metadata["labels"].append("C")  # type: ignore[union-attr]
     decision_trace["new"] = True
 
     evidence = case.decision_trace["evidence"]
     assert isinstance(evidence, MappingProxyType)
     assert evidence["candidate_ids"][0] == "e1"
     assert evidence["candidate_ids"][1]["rank"] == 1
-    assert evidence["labels"] == frozenset({"A", "B"})
+    assert evidence["labels"] == ("A", "B")
     with pytest.raises(TypeError):
         evidence["new"] = True  # type: ignore[index]
     with pytest.raises(TypeError):
@@ -696,7 +809,68 @@ def test_hybrid_only_case_decision_trace_is_deeply_immutable_and_detached() -> N
     with pytest.raises(TypeError):
         evidence["candidate_ids"][1]["rank"] = 99  # type: ignore[index]
     with pytest.raises(AttributeError):
-        evidence["labels"].add("C")  # type: ignore[union-attr]
+        evidence["labels"].append("C")  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    "invalid_trace",
+    [
+        {"bad": {"set-value"}},
+        {1: "non-string-key"},
+        {"bad": np.nan},
+        {"bad": np.inf},
+        {"bad": object()},
+    ],
+)
+def test_hybrid_only_case_rejects_non_json_decision_trace_values(
+    invalid_trace: dict[object, object],
+) -> None:
+    with pytest.raises(ValueError, match="decision_trace"):
+        _hybrid_only_case(
+            "p1",
+            0,
+            3,
+            2,
+            1,
+            0.25,
+            0.75,
+            ("COTRAVEL",),
+            "2025-01",
+            decision_trace=invalid_trace,  # type: ignore[arg-type]
+        )
+
+
+def test_decision_trace_jsonable_round_trips_and_is_detached() -> None:
+    case = _hybrid_only_case(
+        "p1",
+        0,
+        3,
+        2,
+        1,
+        0.25,
+        0.75,
+        ("COTRAVEL",),
+        "2025-01",
+        decision_trace={
+            "evidence": {"candidate_ids": ["e1", "e2"], "weights": (0.25, 0.75)},
+            "selected": True,
+            "note": None,
+        },
+    )
+
+    jsonable = case.decision_trace_jsonable()
+    round_tripped = json.loads(json.dumps(jsonable, sort_keys=True))
+
+    assert round_tripped == {
+        "evidence": {
+            "candidate_ids": ["e1", "e2"],
+            "weights": [0.25, 0.75],
+        },
+        "note": None,
+        "selected": True,
+    }
+    jsonable["evidence"]["candidate_ids"][0] = "changed"
+    assert case.decision_trace["evidence"]["candidate_ids"][0] == "e1"
 
 
 def test_overlap_rejects_unequal_budgets() -> None:
