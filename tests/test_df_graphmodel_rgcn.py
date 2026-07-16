@@ -78,6 +78,100 @@ def test_build_person_graph_typed_smoke():
     assert (edges["rel"]==0).any()  # some COTRAVEL edges exist
 
 
+def test_source_provenance_is_deterministic_unique_and_collision_safe():
+    collision_separator = "\x1f"
+    edges = pd.DataFrame(
+        {
+            "u": [
+                "duplicate|left",
+                "duplicate|left",
+                f"a{collision_separator}b",
+                "a",
+                "pair-left",
+                "pair-right",
+            ],
+            "v": [
+                "duplicate|right",
+                "duplicate|right",
+                "c",
+                f"b{collision_separator}c",
+                "pair-right",
+                "pair-left",
+            ],
+            "avail_time": [
+                "2025-01-01T00:00:00Z",
+                pd.Timestamp("2024-12-31T19:00:00-05:00"),
+                "2025-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+            ],
+            "edge_type": ["COTRAVEL"] * 6,
+            "rel": [0] * 6,
+        }
+    )
+
+    first = gm._add_edge_provenance(edges)
+    second = gm._add_edge_provenance(edges)
+
+    assert first["source_row_id"].tolist() == second["source_row_id"].tolist()
+    assert first["source_row_id"].notna().all()
+    assert first["source_row_id"].is_unique
+    assert first.loc[2, "source_row_id"] != first.loc[3, "source_row_id"]
+    assert first.loc[2, "canonical_pair_group_id"] != first.loc[
+        3, "canonical_pair_group_id"
+    ]
+    assert first.loc[4, "canonical_pair_group_id"] == first.loc[
+        5, "canonical_pair_group_id"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("edges", "message"),
+    [
+        (
+            pd.DataFrame({"u": ["p1"], "v": ["p2"], "rel": [0]}),
+            "source_row_id",
+        ),
+        (
+            pd.DataFrame(
+                {
+                    "source_row_id": [None],
+                    "u": ["p1"],
+                    "v": ["p2"],
+                    "rel": [0],
+                }
+            ),
+            "source_row_id",
+        ),
+        (
+            pd.DataFrame(
+                {
+                    "source_row_id": ["row-a"],
+                    "u": ["p1"],
+                    "v": ["unknown"],
+                    "rel": [0],
+                }
+            ),
+            "unknown",
+        ),
+    ],
+)
+def test_tensor_provenance_rejects_missing_null_or_unknown_values(edges, message):
+    with pytest.raises(ValueError, match=message):
+        gm._edge_index_typed_with_provenance(edges, {"p1": 0, "p2": 1})
+
+
+def test_empty_tensor_provenance_is_aligned():
+    edge_index, edge_type, source_rows = gm._edge_index_typed_with_provenance(
+        pd.DataFrame(), {"p1": 0}
+    )
+
+    assert edge_index.shape == (2, 0)
+    assert edge_type.shape == (0,)
+    assert source_rows.shape == (0,)
+
+
 def test_build_caught_times_uses_earliest_label_availability(tmp_path):
     pd.DataFrame(
         {

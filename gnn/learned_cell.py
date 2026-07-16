@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,14 @@ import pandas as pd
 
 
 import torch
-from gnn.graphmodel_rgcn import REL, NUM_REL, _RGCN, _asof_x, _edge_index_typed
+from gnn.graphmodel_rgcn import (
+    REL,
+    NUM_REL,
+    _RGCN,
+    _asof_x,
+    _edge_index_typed,
+    _edge_index_typed_with_provenance,
+)
 
 class UF:
     def __init__(self, n):
@@ -69,7 +77,7 @@ def _asof_cell_pool(z, node_ids, active_typed_edges, t):
 def _pool_by_roots_torch(z, roots):
     """Differentiable mean-pool of a torch tensor z by integer component roots.
     Keeps the gradient path to the encoder (unlike a numpy detour)."""
-    roots_t = torch.as_tensor(roots, dtype=torch.long)
+    roots_t = torch.tensor(roots, dtype=torch.long)
     uniq, inv = torch.unique(roots_t, return_inverse=True)
     sums = torch.zeros(len(uniq), z.shape[1], dtype=z.dtype).index_add_(0, inv, z)
     counts = torch.zeros(len(uniq), 1, dtype=z.dtype).index_add_(
@@ -166,6 +174,124 @@ def _asof_x_caught(node_ids, node_feat, active_edges, caught_time, T, num_rel=NU
     return torch.cat([x, struct, caught], dim=1)
 
 
+@dataclass(frozen=True)
+class DaySnapshotInputs:
+    scoring_day: pd.Timestamp
+    active_edges: pd.DataFrame
+    x: torch.Tensor
+    edge_index: torch.Tensor
+    edge_type: torch.Tensor
+    tensor_edge_source_row_ids: np.ndarray
+    component_roots: np.ndarray
+    caught_before_snapshot: frozenset[str]
+
+
+def _utc_timestamp(value, *, field_name):
+    try:
+        timestamp = pd.to_datetime(value, utc=True, errors="raise")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a valid timestamp") from exc
+    if timestamp is None or pd.isna(timestamp):
+        return None
+    if not isinstance(timestamp, pd.Timestamp):
+        raise ValueError(f"{field_name} must be a scalar timestamp")
+    return timestamp
+
+
+def build_day_snapshot_inputs(
+    scoring_day,
+    edges_typed,
+    node_ids,
+    node_feat,
+    caught_time,
+    index,
+    *,
+    num_rel=NUM_REL,
+) -> DaySnapshotInputs:
+    """Build the single strict-as-of day state used by scoring and explanations."""
+    timestamp = _utc_timestamp(scoring_day, field_name="scoring_day")
+    if timestamp is None:
+        raise ValueError("scoring_day cannot be null")
+    day = timestamp.floor("D")
+
+    detached_node_ids = tuple(node_ids)
+    if len(detached_node_ids) != len(set(detached_node_ids)):
+        raise ValueError("node_ids must be unique")
+    missing_features = [
+        person_id for person_id in detached_node_ids if person_id not in node_feat
+    ]
+    if missing_features:
+        raise ValueError(f"node features missing for node_ids: {missing_features}")
+    expected_index = {
+        person_id: position for position, person_id in enumerate(detached_node_ids)
+    }
+    if any(index.get(person_id) != position for person_id, position in expected_index.items()):
+        raise ValueError("index must align exactly with node_ids order")
+
+    if "avail_time" not in edges_typed.columns:
+        raise ValueError("typed edges require avail_time")
+    detached_edges = edges_typed.copy(deep=True)
+    detached_edges["avail_time"] = pd.to_datetime(
+        detached_edges["avail_time"], utc=True, errors="raise"
+    )
+    active = detached_edges.loc[detached_edges["avail_time"] < day].copy(deep=True)
+    active = active.reset_index(drop=True)
+
+    normalized_caught_time = {}
+    for person_id, available_time in dict(caught_time).items():
+        normalized = _utc_timestamp(
+            available_time, field_name=f"caught_time[{person_id!r}]"
+        )
+        if normalized is not None:
+            normalized_caught_time[person_id] = normalized
+
+    detached_features = {
+        person_id: np.array(node_feat[person_id], copy=True)
+        for person_id in detached_node_ids
+    }
+    x = _asof_x_caught(
+        detached_node_ids,
+        detached_features,
+        active,
+        normalized_caught_time,
+        day,
+        num_rel=num_rel,
+    ).detach().clone()
+    edge_index, edge_type, provenance = _edge_index_typed_with_provenance(
+        active, expected_index
+    )
+    edge_index = edge_index.detach().clone()
+    edge_type = edge_type.detach().clone()
+    provenance = np.array(provenance, dtype=object, copy=True)
+    roots = np.array(
+        _component_roots(detached_node_ids, active, day), dtype=np.int64, copy=True
+    )
+    caught_before = frozenset(
+        person_id
+        for person_id, available_time in normalized_caught_time.items()
+        if available_time < day
+    )
+
+    if x.shape[0] != len(detached_node_ids) or roots.shape != (len(detached_node_ids),):
+        raise RuntimeError("snapshot node features and component roots are misaligned")
+    if not (
+        edge_index.shape[1] == edge_type.shape[0] == provenance.shape[0]
+    ):
+        raise RuntimeError("snapshot tensor edges and provenance are misaligned")
+    provenance.setflags(write=False)
+    roots.setflags(write=False)
+    return DaySnapshotInputs(
+        scoring_day=day,
+        active_edges=active,
+        x=x,
+        edge_index=edge_index,
+        edge_type=edge_type,
+        tensor_edge_source_row_ids=provenance,
+        component_roots=roots,
+        caught_before_snapshot=caught_before,
+    )
+
+
 def _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool,
                        obs_to_identity, train_labels, *, seed, epochs, lr,
                        train_cutoff, train_bucket, num_rel=NUM_REL, model_cls=_RGCN):
@@ -227,12 +353,25 @@ def _score_pool(model, pool, obs_to_identity, edges_typed, node_ids, node_feat,
     out = np.zeros(len(rows))
     with torch.no_grad():
         for t, grp in rows.groupby("_t", sort=True):
-            sub = edges_typed[edges_typed["avail_time"] < t]
-            x = _asof_x_caught(node_ids, node_feat, sub, caught_time, t, num_rel=num_rel)
-            ei, et = _edge_index_typed(sub, index)
-            z = model.enc(x, ei, edge_type=et)
-            zp = _pool_by_roots_torch(z, _component_roots(node_ids, sub, t))
-            prob = torch.sigmoid(model.head(zp).squeeze(-1)).numpy()
+            inputs = build_day_snapshot_inputs(
+                t,
+                edges_typed,
+                node_ids,
+                node_feat,
+                caught_time,
+                index,
+                num_rel=num_rel,
+            )
+            z = model.enc(
+                inputs.x, inputs.edge_index, edge_type=inputs.edge_type
+            )
+            zp = _pool_by_roots_torch(z, inputs.component_roots)
+            prob = (
+                torch.sigmoid(model.head(zp).squeeze(-1))
+                .detach()
+                .cpu()
+                .numpy()
+            )
             for ridx, ident in zip(grp.index, grp["identity"]):
                 out[ridx] = prob[index[ident]] if ident in index else 0.0
     return out

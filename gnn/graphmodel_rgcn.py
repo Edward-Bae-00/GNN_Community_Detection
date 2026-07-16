@@ -1,4 +1,6 @@
 from __future__ import annotations
+import hashlib
+
 import numpy as np
 import pandas as pd
 import torch
@@ -12,6 +14,78 @@ NUM_REL = 2
 REL_PLATE = {"COTRAVEL": 0, "RESIDENCE": 1,
              "SHARED_PLATE": 2, "SHARED_PLATE_HOT": 3}
 NUM_REL_PLATE = 4
+
+
+def _stable_digest(*parts) -> str:
+    """Hash values with explicit byte lengths so embedded delimiters are safe."""
+    digest = hashlib.sha256()
+    for part in parts:
+        payload = str(part).encode("utf-8")
+        digest.update(len(payload).to_bytes(8, byteorder="big", signed=False))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def _add_edge_provenance(edges: pd.DataFrame) -> pd.DataFrame:
+    """Attach stable source-row and unordered typed-pair identifiers."""
+    required = {"u", "v", "avail_time", "edge_type"}
+    missing = sorted(required.difference(edges.columns))
+    if missing:
+        raise ValueError(f"edge provenance requires columns: {', '.join(missing)}")
+
+    work = edges.reset_index(drop=True).copy(deep=True)
+    work["avail_time"] = pd.to_datetime(
+        work["avail_time"], utc=True, errors="raise"
+    )
+    if work[["u", "v", "avail_time", "edge_type"]].isna().any().any():
+        raise ValueError("edge provenance cannot be generated from null values")
+    work["edge_type"] = work["edge_type"].astype(str)
+
+    occurrence_keys = ["u", "v", "avail_time", "edge_type"]
+    work["_source_occurrence"] = work.groupby(
+        occurrence_keys, sort=False, dropna=False
+    ).cumcount()
+    work["source_row_id"] = [
+        "edge:"
+        + _stable_digest(
+            u,
+            v,
+            pd.Timestamp(available_time).tz_convert("UTC").isoformat(),
+            edge_type,
+            int(occurrence),
+        )
+        for u, v, available_time, edge_type, occurrence in work[
+            [*occurrence_keys, "_source_occurrence"]
+        ].itertuples(index=False, name=None)
+    ]
+    work["canonical_pair_group_id"] = [
+        "pair:" + _stable_digest(*sorted((str(u), str(v))), edge_type)
+        for u, v, edge_type in work[["u", "v", "edge_type"]].itertuples(
+            index=False, name=None
+        )
+    ]
+    if work["source_row_id"].isna().any():
+        raise RuntimeError("generated source_row_id provenance contains null values")
+    if work["source_row_id"].duplicated().any():
+        raise RuntimeError("generated source_row_id provenance is not unique")
+    return work.drop(columns="_source_occurrence")
+
+
+def caught_feature_names(num_rel):
+    """Names aligned exactly to ``learned_cell._asof_x_caught`` columns."""
+    num_rel = int(num_rel)
+    ordered = sorted(REL_PLATE.items(), key=lambda item: item[1])
+    relation_names = [name for name, relation in ordered if relation < num_rel]
+    relation_ids = [relation for _, relation in ordered if relation < num_rel]
+    if relation_ids != list(range(num_rel)):
+        raise ValueError(f"no complete relation-name mapping for num_rel={num_rel}")
+    return (
+        "bias",
+        *(f"degree_{name.lower()}" for name in relation_names),
+        "log1p_cotravel_component_size",
+        "log1p_households_spanned",
+        "caught_before_snapshot",
+    )
 
 class RelationSAGEEncoder(torch.nn.Module):
     def __init__(self, in_dim, hidden=32, out=32, num_relations=4):
@@ -92,9 +166,20 @@ def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=
     e["avail_time"] = pd.to_datetime(e["avail_time"], utc=True, errors="coerce")
     e = e[e["avail_time"].notna()].copy()
     e["rel"] = e["edge_type"].map(rel_map).astype(int)
+    e = _add_edge_provenance(e)
     node_ids = sorted(set(e["u"]) | set(e["v"]))
     node_feat = {p: np.array([1.0]) for p in node_ids}
-    return e[["u", "v", "avail_time", "rel"]].copy(), node_ids, node_feat
+    return e[
+        [
+            "u",
+            "v",
+            "avail_time",
+            "rel",
+            "edge_type",
+            "source_row_id",
+            "canonical_pair_group_id",
+        ]
+    ].copy(), node_ids, node_feat
 
 def _asof_x(node_ids, node_feat, active_edges, num_rel=NUM_REL):
     index = {p: i for i, p in enumerate(node_ids)}
@@ -110,14 +195,71 @@ def _asof_x(node_ids, node_feat, active_edges, num_rel=NUM_REL):
                         deg[index[p], r] = float(c)
     return torch.tensor(np.hstack([base, deg]), dtype=torch.float)
 
-def _edge_index_typed(edges, index):
+def _edge_index_typed_with_provenance(edges, index):
     if len(edges) == 0:
-        return torch.zeros((2,0), dtype=torch.long), torch.zeros((0,), dtype=torch.long)
-    u = edges["u"].map(index).values; v = edges["v"].map(index).values
-    r = edges["rel"].values
+        return (
+            torch.zeros((2, 0), dtype=torch.long),
+            torch.zeros((0,), dtype=torch.long),
+            np.zeros((0,), dtype=object),
+        )
+
+    required = {"source_row_id", "u", "v", "rel"}
+    missing = sorted(required.difference(edges.columns))
+    if missing:
+        raise ValueError(
+            f"typed edges require columns including immutable provenance: "
+            f"{', '.join(missing)}"
+        )
+    if edges[["u", "v"]].isna().any().any():
+        raise ValueError("typed edge node endpoints cannot be null")
+    unknown_nodes = sorted(
+        (set(edges["u"]) | set(edges["v"])).difference(index), key=str
+    )
+    if unknown_nodes:
+        raise ValueError(f"typed edges reference unknown nodes: {unknown_nodes}")
+    if edges["source_row_id"].isna().any():
+        raise ValueError("typed edge source_row_id provenance cannot be null")
+    source_rows = edges["source_row_id"].astype(str)
+    if source_rows.eq("").any():
+        raise ValueError("typed edge source_row_id provenance cannot be empty")
+    if source_rows.duplicated().any():
+        raise ValueError("typed edge source_row_id provenance must be unique")
+    if edges["rel"].isna().any():
+        raise ValueError("typed edge relation values cannot be null")
+
+    try:
+        relation = edges["rel"].to_numpy(dtype=np.int64, copy=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("typed edge relation values must be integers") from exc
+    if not np.array_equal(
+        relation.astype(object), edges["rel"].to_numpy(dtype=object, copy=True)
+    ):
+        raise ValueError("typed edge relation values must be integers")
+
+    u = edges["u"].map(index).to_numpy(dtype=np.int64, copy=True)
+    v = edges["v"].map(index).to_numpy(dtype=np.int64, copy=True)
     ei = np.stack([np.concatenate([u, v]), np.concatenate([v, u])])
-    et = np.concatenate([r, r])
-    return torch.tensor(ei, dtype=torch.long), torch.tensor(et, dtype=torch.long)
+    et = np.concatenate([relation, relation])
+    provenance = np.concatenate(
+        [
+            source_rows.to_numpy(dtype=object, copy=True),
+            source_rows.to_numpy(dtype=object, copy=True),
+        ]
+    )
+    return (
+        torch.tensor(ei, dtype=torch.long),
+        torch.tensor(et, dtype=torch.long),
+        provenance,
+    )
+
+
+def _edge_index_typed(edges, index):
+    work = edges
+    if len(edges) and "source_row_id" not in edges.columns:
+        work = edges.copy(deep=True)
+        work["source_row_id"] = [f"legacy-edge:{i}" for i in range(len(work))]
+    edge_index, edge_type, _ = _edge_index_typed_with_provenance(work, index)
+    return edge_index, edge_type
 
 def train_rgcn(edges, node_ids, node_feat, labels, train_mask,
                *, seed=0, epochs=30, lr=1e-2, device="cpu"):
