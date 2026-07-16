@@ -7,6 +7,8 @@ import pytest
 import torch
 
 from gnn import graphmodel_rgcn as gm
+from gnn import learned_cell
+from gnn import sage_explainer as se
 from gnn.graphmodel_rgcn import _RGCN
 from gnn.learned_cell import _asof_x_caught, _score_pool
 from gnn.recovery_observability import build_rank_reference
@@ -24,7 +26,7 @@ from gnn.sage_explainer import (
 SCORING_DAY = pd.Timestamp("2025-01-02T00:00:00Z")
 
 
-def _explanation_fixture(*, return_components=False, rank_reference=None):
+def _explanation_fixture(*, return_components=False, bind_rank_reference=False):
     from gnn.sage_explainer import Seed0ExplanationEngine
 
     torch.manual_seed(0)
@@ -97,15 +99,6 @@ def _explanation_fixture(*, return_components=False, rank_reference=None):
         "hop2": SCORING_DAY + pd.Timedelta(seconds=1),
     }
     model = _RGCN(in_dim=8, hidden=4, out=4, num_relations=4)
-    engine = Seed0ExplanationEngine(
-        model=model,
-        edges_typed=edges,
-        node_ids=node_ids,
-        node_feat=node_feat,
-        caught_time=caught_times,
-        num_rel=4,
-        rank_reference=rank_reference,
-    )
     pool = pd.DataFrame(
         {
             "event_id": ["event-target"],
@@ -123,6 +116,23 @@ def _explanation_fixture(*, return_components=False, rank_reference=None):
         caught_times,
         {person_id: i for i, person_id in enumerate(node_ids)},
         num_rel=4,
+    )
+    constructor_kwargs = {}
+    if bind_rank_reference:
+        constructor_kwargs = {
+            "rank_reference": _counterfactual_reference(
+                target_probability=float(production[0])
+            ),
+            "rank_row_bindings": _counterfactual_row_bindings(),
+        }
+    engine = Seed0ExplanationEngine(
+        model=model,
+        edges_typed=edges,
+        node_ids=node_ids,
+        node_feat=node_feat,
+        caught_time=caught_times,
+        num_rel=4,
+        **constructor_kwargs,
     )
     if return_components:
         return (
@@ -438,13 +448,24 @@ def test_caught_feature_names_exactly_align_with_feature_width():
     assert len(gm.caught_feature_names(4)) == x.shape[1]
 
 
-def _counterfactual_reference(*, blend_weight=0.75):
+def _counterfactual_reference(*, blend_weight=0.75, target_probability=0.80):
     return build_rank_reference(
         pd.DataFrame({"event_id": ["target-a", "target-b", "peer-a", "peer-b"]}),
         np.array([0.40, 0.40, 0.60, 0.20]),
-        np.array([0.80, 0.80, 0.50, 0.10]),
+        np.array(
+            [target_probability, target_probability, 0.50, 0.10]
+        ),
         blend_weight,
     )
+
+
+def _counterfactual_row_bindings():
+    return {
+        0: ("target", SCORING_DAY + pd.Timedelta(hours=6)),
+        1: ("target", SCORING_DAY + pd.Timedelta(hours=18)),
+        2: ("peer-a", SCORING_DAY),
+        3: ("peer-b", SCORING_DAY),
+    }
 
 
 def _counterfactual_context(*, candidates=(0, 1, 2, 3), original_rank=1):
@@ -456,6 +477,181 @@ def _counterfactual_context(*, candidates=(0, 1, 2, 3), original_rank=1):
         candidate_row_indices=candidates,
         original_hybrid_rank=original_rank,
     )
+
+
+def _caught_factor(engine):
+    return next(
+        spec
+        for spec in build_ablation_specs(
+            engine.snapshot(SCORING_DAY),
+            "target",
+            engine.community("target", SCORING_DAY),
+        )
+        if spec.kind == "caught_flag" and spec.caught_person_ids == ("hop1",)
+    )
+
+
+def _bind_matching_reference(engine, *, row_bindings=None):
+    probability = float(
+        engine.snapshot(SCORING_DAY).probabilities[
+            engine.person_index["target"]
+        ]
+    )
+    reference = _counterfactual_reference(target_probability=probability)
+    engine.bind_rank_reference(
+        reference,
+        _counterfactual_row_bindings()
+        if row_bindings is None
+        else row_bindings,
+    )
+    return reference
+
+
+def test_counterfactual_rejects_stale_original_rank():
+    engine, _ = _explanation_fixture()
+    _bind_matching_reference(engine)
+
+    with pytest.raises(ValueError, match="original_hybrid_rank.*frozen"):
+        engine.score_counterfactual(
+            _counterfactual_context(original_rank=2),
+            _caught_factor(engine),
+        )
+
+
+def test_counterfactual_rejects_wrong_person_row_binding():
+    engine, _ = _explanation_fixture()
+    bindings = _counterfactual_row_bindings()
+    bindings[1] = ("peer-a", SCORING_DAY)
+    _bind_matching_reference(engine, row_bindings=bindings)
+
+    with pytest.raises(ValueError, match="same-day person row.*person_id"):
+        engine.score_counterfactual(
+            _counterfactual_context(), _caught_factor(engine)
+        )
+
+
+def test_counterfactual_rejects_wrong_day_row_binding():
+    engine, _ = _explanation_fixture()
+    bindings = _counterfactual_row_bindings()
+    bindings[1] = ("target", SCORING_DAY + pd.Timedelta(days=1))
+    _bind_matching_reference(engine, row_bindings=bindings)
+
+    with pytest.raises(ValueError, match="same-day person row.*scoring_day"):
+        engine.score_counterfactual(
+            _counterfactual_context(), _caught_factor(engine)
+        )
+
+
+def test_counterfactual_rejects_mismatched_frozen_probability():
+    engine, _ = _explanation_fixture()
+    engine.bind_rank_reference(
+        _counterfactual_reference(target_probability=0.80),
+        _counterfactual_row_bindings(),
+    )
+
+    with pytest.raises(ValueError, match="frozen seed0.*snapshot probability"):
+        engine.score_counterfactual(
+            _counterfactual_context(), _caught_factor(engine)
+        )
+
+
+def test_rank_reference_binding_is_defensive_and_not_publicly_assignable():
+    engine, _ = _explanation_fixture()
+    bindings = _counterfactual_row_bindings()
+    reference = _bind_matching_reference(engine, row_bindings=bindings)
+    expected = np.array(engine.rank_reference.seed0_gnn_raw, copy=True)
+
+    bindings[0] = ("poisoned", SCORING_DAY + pd.Timedelta(days=20))
+    object.__setattr__(
+        reference,
+        "seed0_gnn_raw",
+        np.full(len(reference.event_ids), 0.01),
+    )
+
+    np.testing.assert_array_equal(
+        engine.rank_reference.seed0_gnn_raw, expected
+    )
+    with pytest.raises(AttributeError):
+        engine.rank_reference = reference
+
+
+@pytest.mark.parametrize(
+    ("row_bindings", "message"),
+    [
+        (
+            {0: ("target", SCORING_DAY)},
+            "exactly row indices",
+        ),
+        (
+            {
+                **_counterfactual_row_bindings(),
+                4: ("extra", SCORING_DAY),
+            },
+            "exactly row indices",
+        ),
+        (
+            [
+                (0, "target", SCORING_DAY),
+                (0, "target", SCORING_DAY),
+                (2, "peer-a", SCORING_DAY),
+                (3, "peer-b", SCORING_DAY),
+            ],
+            "duplicate rows",
+        ),
+        (
+            {
+                **_counterfactual_row_bindings(),
+                0: (7, SCORING_DAY),
+            },
+            "person_id.*string",
+        ),
+        (
+            {
+                **_counterfactual_row_bindings(),
+                0: ("target", [SCORING_DAY]),
+            },
+            "scalar timestamp",
+        ),
+    ],
+)
+def test_rank_reference_binding_rejects_incomplete_or_invalid_metadata(
+    row_bindings, message
+):
+    engine, _ = _explanation_fixture()
+
+    with pytest.raises(ValueError, match=message):
+        engine.bind_rank_reference(_counterfactual_reference(), row_bindings)
+
+
+def test_failed_rank_reference_binding_preserves_previous_state_atomically():
+    engine, _ = _explanation_fixture()
+    reference = _bind_matching_reference(engine)
+    expected_id = engine.rank_reference.percentile_reference_id
+    expected_raw = np.array(engine.rank_reference.seed0_gnn_raw, copy=True)
+
+    with pytest.raises(ValueError, match="exactly row indices"):
+        engine.bind_rank_reference(reference, {0: ("target", SCORING_DAY)})
+
+    assert engine.rank_reference.percentile_reference_id == expected_id
+    np.testing.assert_array_equal(
+        engine.rank_reference.seed0_gnn_raw, expected_raw
+    )
+
+
+def test_counterfactual_requires_complete_bound_identity_day_group():
+    engine, _ = _explanation_fixture()
+    _bind_matching_reference(engine)
+    incomplete = CounterfactualContext(
+        person_id="target",
+        row_index=0,
+        scoring_day=SCORING_DAY,
+        same_day_person_row_indices=(0,),
+        candidate_row_indices=(0, 1, 2, 3),
+        original_hybrid_rank=1,
+    )
+
+    with pytest.raises(ValueError, match="complete bound identity-day group"):
+        engine.score_counterfactual(incomplete, _caught_factor(engine))
 
 
 def test_ablation_spec_is_frozen_and_canonicalizes_unique_evidence():
@@ -593,6 +789,32 @@ def test_frozen_peer_rank_updates_all_identity_rows_and_freezes_candidates():
     )
 
 
+def test_frozen_peer_rank_no_op_preserves_exact_original_rank():
+    result = frozen_peer_rank(
+        _counterfactual_reference(),
+        anchor_row_index=0,
+        affected_row_indices=(0, 1),
+        ablated_seed0_probability=0.80,
+        candidate_row_indices=(0, 1, 2, 3),
+        original_hybrid_rank=1,
+    )
+
+    assert result["ablated_hybrid_rank"] == 1
+    assert result["hybrid_rank_delta"] == 0
+
+
+def test_frozen_peer_rank_rejects_stale_original_rank():
+    with pytest.raises(ValueError, match="original_hybrid_rank.*frozen"):
+        frozen_peer_rank(
+            _counterfactual_reference(),
+            anchor_row_index=0,
+            affected_row_indices=(0, 1),
+            ablated_seed0_probability=0.80,
+            candidate_row_indices=(0, 1, 2, 3),
+            original_hybrid_rank=2,
+        )
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -642,6 +864,29 @@ def test_structural_provenance_expands_components_without_dropping_observations(
         "res-b",
     ]
     assert len(rows.loc[(rows["u"] == "a") & (rows["v"] == "b")]) == 2
+
+
+def test_structural_provenance_scans_each_relation_graph_once(monkeypatch):
+    active_edges = pd.DataFrame(
+        {
+            "source_row_id": ["cot-a", "cot-b", "res-a", "res-b"],
+            "u": ["a", "b", "c", "d"],
+            "v": ["b", "c", "d", "e"],
+            "edge_type": ["COTRAVEL", "COTRAVEL", "RESIDENCE", "RESIDENCE"],
+        }
+    )
+    calls = {"connected_components": 0}
+    original = se.nx.connected_components
+
+    def counted_components(graph):
+        calls["connected_components"] += 1
+        return original(graph)
+
+    monkeypatch.setattr(se.nx, "connected_components", counted_components)
+
+    structural_provenance_rows(active_edges, {"a", "b", "c"})
+
+    assert calls == {"connected_components": 2}
 
 
 def test_ablation_specs_are_deterministic_complete_and_relation_qualified():
@@ -724,9 +969,47 @@ def test_cotravel_pool_factors_exclude_groups_with_redundant_pair_connectivity()
     assert not any(spec.kind == "cotravel_pool" for spec in specs)
 
 
+def test_cotravel_factor_construction_builds_one_graph_for_many_groups(monkeypatch):
+    active_edges = pd.DataFrame(
+        {
+            "source_row_id": ["row-a", "row-b", "row-c", "row-d"],
+            "canonical_pair_group_id": ["g-a", "g-b", "g-c", "g-d"],
+            "u": ["p0", "p1", "p2", "p3"],
+            "v": ["p1", "p2", "p3", "p4"],
+            "rel": [0, 0, 0, 0],
+            "edge_type": ["COTRAVEL"] * 4,
+        }
+    )
+    snapshot = SimpleNamespace(
+        active_edges=active_edges,
+        caught_before_snapshot=frozenset(),
+    )
+    community = {
+        "base_source_row_ids": list(active_edges["source_row_id"]),
+        "nodes_by_id": {f"p{index}": {} for index in range(5)},
+    }
+    calls = {"graph": 0}
+    original_graph = se.nx.Graph
+
+    def counted_graph(*args, **kwargs):
+        calls["graph"] += 1
+        return original_graph(*args, **kwargs)
+
+    monkeypatch.setattr(
+        se,
+        "structural_provenance_rows",
+        lambda active, visible: active.iloc[0:0].copy(deep=True),
+    )
+    monkeypatch.setattr(se.nx, "Graph", counted_graph)
+
+    specs = build_ablation_specs(snapshot, "p0", community)
+
+    assert len([spec for spec in specs if spec.kind == "cotravel_pool"]) == 4
+    assert calls == {"graph": 1}
+
+
 def test_cotravel_counterfactual_rebuilds_features_pooling_and_component():
-    reference = _counterfactual_reference()
-    engine, _ = _explanation_fixture(rank_reference=reference)
+    engine, _ = _explanation_fixture(bind_rank_reference=True)
     community = engine.community("target", SCORING_DAY)
     factor = next(
         spec
@@ -754,9 +1037,8 @@ def test_cotravel_counterfactual_rebuilds_features_pooling_and_component():
 
 
 def test_caught_counterfactual_removes_caught_feature_and_matches_full_rescore():
-    reference = _counterfactual_reference()
     engine, _, components = _explanation_fixture(
-        rank_reference=reference, return_components=True
+        bind_rank_reference=True, return_components=True
     )
     model, edges, node_ids, node_feat, caught_times = components
     factor = AblationSpec(
@@ -807,7 +1089,7 @@ def test_counterfactual_requires_reference_and_rejects_unknown_evidence_ids():
             ),
         )
 
-    engine, _ = _explanation_fixture(rank_reference=_counterfactual_reference())
+    engine, _ = _explanation_fixture(bind_rank_reference=True)
     with pytest.raises(ValueError, match="incomplete or invalid factor"):
         engine.score_counterfactual(
             context,
@@ -841,8 +1123,8 @@ def test_counterfactual_rejects_caught_ids_that_are_not_graph_nodes():
         node_feat=node_feat,
         caught_time=caught_times,
         num_rel=4,
-        rank_reference=_counterfactual_reference(),
     )
+    _bind_matching_reference(engine)
 
     with pytest.raises(ValueError, match="incomplete or invalid factor"):
         engine.score_counterfactual(
@@ -876,12 +1158,16 @@ def test_caught_counterfactual_supports_an_empty_lifetime_graph():
         node_feat={"target": np.array([1.0])},
         caught_time={"target": SCORING_DAY - pd.Timedelta(hours=1)},
         num_rel=4,
-        rank_reference=build_rank_reference(
+    )
+    original_probability = float(engine.snapshot(SCORING_DAY).probabilities[0])
+    engine.bind_rank_reference(
+        build_rank_reference(
             pd.DataFrame({"event_id": ["target-event"]}),
             np.array([0.5]),
-            np.array([0.5]),
+            np.array([original_probability]),
             0.75,
         ),
+        {0: ("target", SCORING_DAY)},
     )
     context = CounterfactualContext(
         person_id="target",
@@ -911,9 +1197,7 @@ def test_caught_counterfactual_supports_an_empty_lifetime_graph():
 
 
 def test_counterfactual_rejects_partial_duplicate_pair_group():
-    engine, _ = _explanation_fixture(
-        rank_reference=_counterfactual_reference()
-    )
+    engine, _ = _explanation_fixture(bind_rank_reference=True)
     partial = AblationSpec(
         factor_id="pair:g1:rel:0",
         kind="pair_relation",
@@ -924,18 +1208,22 @@ def test_counterfactual_rejects_partial_duplicate_pair_group():
         engine.score_counterfactual(_counterfactual_context(), partial)
 
 
-def test_generated_pair_caught_and_cotravel_factors_are_scoreable():
-    engine, _ = _explanation_fixture(
-        rank_reference=_counterfactual_reference()
-    )
+def test_generated_pair_caught_relation_star_and_cotravel_factors_are_scoreable():
+    engine, _ = _explanation_fixture(bind_rank_reference=True)
     snapshot = engine.snapshot(SCORING_DAY)
     community = engine.community("target", SCORING_DAY)
     specs_by_kind = {
         spec.kind: spec
         for spec in build_ablation_specs(snapshot, "target", community)
-        if spec.kind in {"pair_relation", "caught_flag", "cotravel_pool"}
+        if spec.kind
+        in {
+            "pair_relation",
+            "caught_flag",
+            "relation_star",
+            "cotravel_pool",
+        }
         and (
-            spec.kind == "caught_flag"
+            spec.kind in {"caught_flag", "relation_star"}
             or spec.factor_id.endswith("g1:rel:0")
         )
     }
@@ -943,9 +1231,15 @@ def test_generated_pair_caught_and_cotravel_factors_are_scoreable():
     assert set(specs_by_kind) == {
         "pair_relation",
         "caught_flag",
+        "relation_star",
         "cotravel_pool",
     }
-    for kind in ("pair_relation", "caught_flag", "cotravel_pool"):
+    for kind in (
+        "pair_relation",
+        "caught_flag",
+        "relation_star",
+        "cotravel_pool",
+    ):
         result = engine.score_counterfactual(
             _counterfactual_context(), specs_by_kind[kind]
         )
@@ -953,8 +1247,72 @@ def test_generated_pair_caught_and_cotravel_factors_are_scoreable():
         assert result["kind"] == kind
 
 
+def test_generated_structural_provenance_factor_is_scoreable():
+    from gnn.sage_explainer import Seed0ExplanationEngine
+
+    torch.manual_seed(0)
+    node_ids = ["target", "a", "b", "c"]
+    edges = pd.DataFrame(
+        {
+            "source_row_id": ["target-res", "a-b-cot", "b-c-cot"],
+            "canonical_pair_group_id": ["g-res", "g-ab", "g-bc"],
+            "u": ["target", "a", "b"],
+            "v": ["a", "b", "c"],
+            "avail_time": [SCORING_DAY - pd.Timedelta(hours=1)] * 3,
+            "rel": [1, 0, 0],
+            "edge_type": ["RESIDENCE", "COTRAVEL", "COTRAVEL"],
+        }
+    )
+    engine = Seed0ExplanationEngine(
+        model=_RGCN(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=edges,
+        node_ids=node_ids,
+        node_feat={person_id: np.array([1.0]) for person_id in node_ids},
+        caught_time={},
+        num_rel=4,
+    )
+    original_probability = float(
+        engine.snapshot(SCORING_DAY).probabilities[
+            engine.person_index["target"]
+        ]
+    )
+    engine.bind_rank_reference(
+        build_rank_reference(
+            pd.DataFrame({"event_id": ["target-event"]}),
+            np.array([0.5]),
+            np.array([original_probability]),
+            0.75,
+        ),
+        {0: ("target", SCORING_DAY)},
+    )
+    context = CounterfactualContext(
+        person_id="target",
+        row_index=0,
+        scoring_day=SCORING_DAY,
+        same_day_person_row_indices=(0,),
+        candidate_row_indices=(0,),
+        original_hybrid_rank=1,
+    )
+    community = engine.community("target", SCORING_DAY)
+    factor = next(
+        spec
+        for spec in build_ablation_specs(
+            engine.snapshot(SCORING_DAY), "target", community
+        )
+        if spec.kind == "structural_provenance"
+    )
+
+    result = engine.score_counterfactual(context, factor)
+
+    assert factor.provenance_node_ids == ("c",)
+    assert result["factor_id"] == factor.factor_id
+    assert result["kind"] == "structural_provenance"
+    assert result["features_rebuilt"] is True
+    assert result["pooling_rebuilt"] is True
+
+
 def test_counterfactual_cache_returns_copies_and_separates_candidate_contexts():
-    engine, _ = _explanation_fixture(rank_reference=_counterfactual_reference())
+    engine, _ = _explanation_fixture(bind_rank_reference=True)
     factor = AblationSpec(
         factor_id="caught:hop1",
         kind="caught_flag",
@@ -974,6 +1332,111 @@ def test_counterfactual_cache_returns_copies_and_separates_candidate_contexts():
     assert second == expected
     assert shorter["unchanged_peer_row_indices"] == []
     assert second["unchanged_peer_row_indices"] == [2, 3]
+
+
+def test_identical_counterfactual_cache_skips_all_expensive_work(monkeypatch):
+    engine, _ = _explanation_fixture(bind_rank_reference=True)
+    factor = _caught_factor(engine)
+    counters = {
+        "snapshot": 0,
+        "community": 0,
+        "specs": 0,
+        "prepare": 0,
+        "day_inputs": 0,
+        "rescore": 0,
+    }
+
+    original_snapshot = engine.snapshot
+    original_community = se.build_complete_community
+    original_specs = se.build_ablation_specs
+    original_prepare = learned_cell.prepare_snapshot_source
+    original_day_inputs = learned_cell.build_day_snapshot_inputs
+    encoder = engine._Seed0ExplanationEngine__model.enc
+    original_forward = encoder.forward
+
+    def counted_snapshot(*args, **kwargs):
+        counters["snapshot"] += 1
+        return original_snapshot(*args, **kwargs)
+
+    def counted_community(*args, **kwargs):
+        counters["community"] += 1
+        return original_community(*args, **kwargs)
+
+    def counted_specs(*args, **kwargs):
+        counters["specs"] += 1
+        return original_specs(*args, **kwargs)
+
+    def counted_prepare(*args, **kwargs):
+        counters["prepare"] += 1
+        return original_prepare(*args, **kwargs)
+
+    def counted_day_inputs(*args, **kwargs):
+        counters["day_inputs"] += 1
+        return original_day_inputs(*args, **kwargs)
+
+    def counted_forward(*args, **kwargs):
+        counters["rescore"] += 1
+        return original_forward(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "snapshot", counted_snapshot)
+    monkeypatch.setattr(se, "build_complete_community", counted_community)
+    monkeypatch.setattr(se, "build_ablation_specs", counted_specs)
+    monkeypatch.setattr(
+        learned_cell, "prepare_snapshot_source", counted_prepare
+    )
+    monkeypatch.setattr(
+        learned_cell, "build_day_snapshot_inputs", counted_day_inputs
+    )
+    monkeypatch.setattr(encoder, "forward", counted_forward)
+
+    first = engine.score_counterfactual(_counterfactual_context(), factor)
+    after_first = counters.copy()
+    second = engine.score_counterfactual(_counterfactual_context(), factor)
+
+    assert after_first == {
+        "snapshot": 2,
+        "community": 1,
+        "specs": 1,
+        "prepare": 1,
+        "day_inputs": 1,
+        "rescore": 1,
+    }
+    assert second == first
+    assert counters == after_first
+
+
+def test_generated_factor_specs_are_cached_across_different_factors(monkeypatch):
+    engine, _ = _explanation_fixture(bind_rank_reference=True)
+    snapshot = engine.snapshot(SCORING_DAY)
+    community = engine.community("target", SCORING_DAY)
+    factors = {
+        spec.kind: spec
+        for spec in build_ablation_specs(snapshot, "target", community)
+        if spec.kind in {"relation_star", "caught_flag"}
+    }
+    counters = {"community": 0, "specs": 0}
+    original_community = se.build_complete_community
+    original_specs = se.build_ablation_specs
+
+    def counted_community(*args, **kwargs):
+        counters["community"] += 1
+        return original_community(*args, **kwargs)
+
+    def counted_specs(*args, **kwargs):
+        counters["specs"] += 1
+        return original_specs(*args, **kwargs)
+
+    monkeypatch.setattr(se, "build_complete_community", counted_community)
+    monkeypatch.setattr(se, "build_ablation_specs", counted_specs)
+
+    engine.score_counterfactual(
+        _counterfactual_context(), factors["relation_star"]
+    )
+    engine.score_counterfactual(
+        _counterfactual_context(), factors["caught_flag"]
+    )
+
+    assert counters == {"community": 1, "specs": 1}
 
 
 @pytest.mark.parametrize(

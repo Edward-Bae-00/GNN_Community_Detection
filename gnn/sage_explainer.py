@@ -235,6 +235,127 @@ class DaySnapshot:
     caught_before_snapshot: frozenset[str]
 
 
+@dataclass(frozen=True)
+class _BoundRankReference:
+    reference: FrozenRankReference
+    row_bindings: tuple[tuple[str, pd.Timestamp], ...]
+    fingerprint: str
+
+
+def _detached_rank_reference(reference):
+    if not isinstance(reference, FrozenRankReference):
+        raise ValueError("reference must be a FrozenRankReference")
+    return FrozenRankReference(
+        percentile_reference_id=reference.percentile_reference_id,
+        event_ids=reference.event_ids,
+        baseline_raw=reference.baseline_raw,
+        seed0_gnn_raw=reference.seed0_gnn_raw,
+        baseline_percentile=reference.baseline_percentile,
+        seed0_gnn_percentile=reference.seed0_gnn_percentile,
+        seed0_hybrid_score=reference.seed0_hybrid_score,
+        baseline_selection_score=reference.baseline_selection_score,
+        seed0_gnn_selection_score=reference.seed0_gnn_selection_score,
+        seed0_hybrid_selection_score=reference.seed0_hybrid_selection_score,
+        blend_weight=reference.blend_weight,
+    )
+
+
+def _canonical_rank_row_bindings(row_bindings, *, n_rows):
+    if isinstance(row_bindings, Mapping):
+        items = tuple(row_bindings.items())
+    else:
+        if isinstance(row_bindings, (str, bytes)):
+            raise ValueError("row_bindings must map row indices to metadata")
+        try:
+            records = tuple(row_bindings)
+        except TypeError as exc:
+            raise ValueError(
+                "row_bindings must map row indices to metadata"
+            ) from exc
+        items = []
+        for record in records:
+            if isinstance(record, (str, bytes)):
+                raise ValueError(
+                    "row_bindings records must contain row_index, person_id, and scoring_day"
+                )
+            try:
+                row_index, person_id, scoring_day = tuple(record)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "row_bindings records must contain row_index, person_id, and scoring_day"
+                ) from exc
+            items.append((row_index, (person_id, scoring_day)))
+        items = tuple(items)
+
+    normalized = {}
+    for row_index, metadata in items:
+        if (
+            not isinstance(row_index, (int, np.integer))
+            or isinstance(row_index, (bool, np.bool_))
+            or not 0 <= row_index < n_rows
+        ):
+            raise ValueError(
+                "row_bindings must cover exactly row indices 0..n-1"
+            )
+        row_index = int(row_index)
+        if row_index in normalized:
+            raise ValueError("row_bindings must not contain duplicate rows")
+        if isinstance(metadata, (str, bytes)):
+            raise ValueError(
+                "row binding metadata must contain person_id and scoring_day"
+            )
+        try:
+            person_id, scoring_day = tuple(metadata)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "row binding metadata must contain person_id and scoring_day"
+            ) from exc
+        if not isinstance(person_id, str) or not person_id.strip():
+            raise ValueError(
+                "row binding person_id must be a non-blank string"
+            )
+        normalized[row_index] = (
+            person_id.strip(),
+            _scoring_day(scoring_day),
+        )
+
+    expected_rows = set(range(n_rows))
+    if set(normalized) != expected_rows:
+        raise ValueError("row_bindings must cover exactly row indices 0..n-1")
+    return tuple(normalized[index] for index in range(n_rows))
+
+
+def _rank_reference_fingerprint(reference, row_bindings):
+    metadata = {
+        "percentile_reference_id": reference.percentile_reference_id,
+        "event_ids": reference.event_ids,
+        "blend_weight": reference.blend_weight,
+        "row_bindings": tuple(
+            (person_id, scoring_day.isoformat())
+            for person_id, scoring_day in row_bindings
+        ),
+    }
+    digest = hashlib.sha256(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    for field_name in (
+        "baseline_raw",
+        "seed0_gnn_raw",
+        "baseline_percentile",
+        "seed0_gnn_percentile",
+        "seed0_hybrid_score",
+        "baseline_selection_score",
+        "seed0_gnn_selection_score",
+        "seed0_hybrid_selection_score",
+    ):
+        values = np.asarray(getattr(reference, field_name), dtype=np.float64)
+        digest.update(field_name.encode("utf-8"))
+        digest.update(values.tobytes(order="C"))
+    return f"sha256:{digest.hexdigest()}"
+
+
 class Seed0ExplanationEngine:
     def __init__(
         self,
@@ -246,6 +367,7 @@ class Seed0ExplanationEngine:
         caught_time,
         num_rel,
         rank_reference=None,
+        rank_row_bindings=None,
     ):
         self.__model = copy.deepcopy(model).eval()
         self.__model.requires_grad_(False)
@@ -264,9 +386,41 @@ class Seed0ExplanationEngine:
         self.node_ids = self.__prepared_source.node_ids
         self.num_rel = self.__prepared_source.num_rel
         self.person_index = self.__prepared_source.index
-        self.rank_reference = copy.deepcopy(rank_reference)
+        self.__rank_state = None
         self.__snapshot_cache: dict[pd.Timestamp, DaySnapshot] = {}
         self.__counterfactual_cache: dict[str, dict[str, object]] = {}
+        self.__factor_specs_cache: dict[
+            tuple[str, pd.Timestamp, str], tuple[AblationSpec, ...]
+        ] = {}
+        if (rank_reference is None) != (rank_row_bindings is None):
+            raise ValueError(
+                "rank_reference and rank_row_bindings must be provided together"
+            )
+        if rank_reference is not None:
+            self.bind_rank_reference(rank_reference, rank_row_bindings)
+
+    @property
+    def rank_reference(self):
+        if self.__rank_state is None:
+            return None
+        return self.__rank_state.reference
+
+    def bind_rank_reference(self, reference, row_bindings):
+        detached_reference = _detached_rank_reference(reference)
+        detached_bindings = _canonical_rank_row_bindings(
+            row_bindings,
+            n_rows=len(detached_reference.event_ids),
+        )
+        new_state = _BoundRankReference(
+            reference=detached_reference,
+            row_bindings=detached_bindings,
+            fingerprint=_rank_reference_fingerprint(
+                detached_reference, detached_bindings
+            ),
+        )
+        self.__rank_state = new_state
+        self.__counterfactual_cache.clear()
+        self.__factor_specs_cache.clear()
 
     def snapshot(self, scoring_day) -> DaySnapshot:
         day = _scoring_day(scoring_day)
@@ -340,23 +494,69 @@ class Seed0ExplanationEngine:
             raise ValueError("context must be a CounterfactualContext")
         if not isinstance(factor, AblationSpec):
             raise ValueError("factor must be an AblationSpec")
-        reference = self.rank_reference
-        if not isinstance(reference, FrozenRankReference):
+        rank_state = self.__rank_state
+        if rank_state is None:
             raise ValueError(
                 "counterfactual scoring requires a frozen rank reference"
             )
+        reference = rank_state.reference
         if context.person_id not in self.person_index:
             raise KeyError(f"unknown person_id: {context.person_id}")
+        _validate_bound_counterfactual_context(rank_state, context)
+        cache_key = _counterfactual_fingerprint(
+            context, factor, rank_state.fingerprint
+        )
+        cached = self.__counterfactual_cache.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
 
         original = self.snapshot(context.scoring_day)
-        community = build_complete_community(
-            self, context.person_id, context.scoring_day
+        target_index = self.person_index[context.person_id]
+        original_probability = float(original.probabilities[target_index])
+        frozen_probabilities = reference.seed0_gnn_raw[
+            list(context.same_day_person_row_indices)
+        ]
+        if not np.allclose(
+            frozen_probabilities,
+            original_probability,
+            rtol=1e-7,
+            atol=1e-8,
+        ):
+            raise ValueError(
+                "affected frozen seed0 probabilities do not match the strict "
+                "as-of snapshot probability"
+            )
+        no_op_rank = frozen_peer_rank(
+            reference,
+            anchor_row_index=context.row_index,
+            affected_row_indices=context.same_day_person_row_indices,
+            ablated_seed0_probability=original_probability,
+            candidate_row_indices=context.candidate_row_indices,
+            original_hybrid_rank=context.original_hybrid_rank,
         )
+        if no_op_rank["hybrid_rank_delta"] != 0:
+            raise ValueError(
+                "original probability no-op must preserve the frozen hybrid rank"
+            )
+        specs_cache_key = (
+            rank_state.fingerprint,
+            context.scoring_day,
+            context.person_id,
+        )
+        generated_specs = self.__factor_specs_cache.get(specs_cache_key)
+        if generated_specs is None:
+            community = build_complete_community(
+                self, context.person_id, context.scoring_day
+            )
+            generated_specs = tuple(
+                build_ablation_specs(
+                    original, context.person_id, community
+                )
+            )
+            self.__factor_specs_cache[specs_cache_key] = generated_specs
         allowed_specs = {
             spec.factor_id: spec
-            for spec in build_ablation_specs(
-                original, context.person_id, community
-            )
+            for spec in generated_specs
         }
         expected_factor = allowed_specs.get(factor.factor_id)
         if expected_factor is None or factor != expected_factor:
@@ -396,11 +596,6 @@ class Seed0ExplanationEngine:
                 "unknown provenance node_id requested for ablation: "
                 f"{unknown_provenance_nodes}"
             )
-
-        cache_key = _counterfactual_fingerprint(context, factor, reference)
-        cached = self.__counterfactual_cache.get(cache_key)
-        if cached is not None:
-            return copy.deepcopy(cached)
 
         modified_edges = source._edges_typed.copy(deep=True)
         if factor.edge_source_row_ids:
@@ -444,8 +639,6 @@ class Seed0ExplanationEngine:
                 .copy()
             )
 
-        target_index = self.person_index[context.person_id]
-        original_probability = float(original.probabilities[target_index])
         ablated_probability = float(probabilities[target_index])
         if not (
             np.isfinite(original_probability)
@@ -511,13 +704,11 @@ def score_grouped_counterfactual(engine, context, factor):
     )
 
 
-def _counterfactual_fingerprint(context, factor, reference):
+def _counterfactual_fingerprint(context, factor, rank_reference_fingerprint):
     payload = {
         "context": asdict(context),
         "factor": asdict(factor),
-        "reference_id": reference.percentile_reference_id,
-        "reference_event_ids": reference.event_ids,
-        "blend_weight": reference.blend_weight,
+        "rank_reference_fingerprint": rank_reference_fingerprint,
     }
     payload["context"]["scoring_day"] = context.scoring_day.isoformat()
     digest = hashlib.sha256(
@@ -525,16 +716,6 @@ def _counterfactual_fingerprint(context, factor, reference):
             "utf-8"
         )
     )
-    for field_name in (
-        "baseline_raw",
-        "seed0_gnn_raw",
-        "baseline_percentile",
-        "seed0_gnn_percentile",
-        "seed0_hybrid_score",
-    ):
-        values = np.asarray(getattr(reference, field_name), dtype=np.float64)
-        digest.update(field_name.encode("utf-8"))
-        digest.update(values.tobytes(order="C"))
     return f"sha256:{digest.hexdigest()}"
 
 
@@ -575,6 +756,54 @@ def _reference_indices(values, *, field_name, n_rows):
     if any(index >= n_rows for index in indices):
         raise ValueError(f"{field_name} contains a row index out of range")
     return indices
+
+
+def _validate_bound_counterfactual_context(rank_state, context):
+    reference = rank_state.reference
+    n_rows = len(reference.event_ids)
+    same_day_rows = _reference_indices(
+        context.same_day_person_row_indices,
+        field_name="same_day_person_row_indices",
+        n_rows=n_rows,
+    )
+    candidates = _reference_indices(
+        context.candidate_row_indices,
+        field_name="candidate_row_indices",
+        n_rows=n_rows,
+    )
+    expected_binding = (context.person_id, context.scoring_day)
+    for row_index in same_day_rows:
+        person_id, scoring_day = rank_state.row_bindings[row_index]
+        if person_id != context.person_id:
+            raise ValueError(
+                "same-day person row binding does not match context person_id"
+            )
+        if scoring_day != context.scoring_day:
+            raise ValueError(
+                "same-day person row binding does not match context scoring_day"
+            )
+    complete_same_day_rows = tuple(
+        row_index
+        for row_index, binding in enumerate(rank_state.row_bindings)
+        if binding == expected_binding
+    )
+    if set(same_day_rows) != set(complete_same_day_rows):
+        raise ValueError(
+            "same_day_person_row_indices must contain the complete bound identity-day group"
+        )
+
+    ordered_candidates = sorted(
+        candidates,
+        key=lambda index: (
+            -float(reference.seed0_hybrid_selection_score[index]),
+            index,
+        ),
+    )
+    exact_rank = ordered_candidates.index(context.row_index) + 1
+    if exact_rank != context.original_hybrid_rank:
+        raise ValueError(
+            "original_hybrid_rank does not match the frozen hybrid selection score"
+        )
 
 
 def frozen_peer_rank(
@@ -621,6 +850,20 @@ def frozen_peer_rank(
     ):
         raise ValueError(
             "original_hybrid_rank must be positive and within the candidate reference"
+        )
+    original_ordered_candidates = sorted(
+        candidates,
+        key=lambda index: (
+            -float(reference.seed0_hybrid_selection_score[index]),
+            index,
+        ),
+    )
+    exact_original_rank = (
+        original_ordered_candidates.index(anchor_row_index) + 1
+    )
+    if int(original_hybrid_rank) != exact_original_rank:
+        raise ValueError(
+            "original_hybrid_rank does not match the frozen hybrid selection score"
         )
     try:
         probability = float(ablated_seed0_probability)
@@ -739,23 +982,29 @@ def structural_provenance_rows(active_edges, visible_people):
     cotravel_graph.add_edges_from(
         cotravel[["u", "v"]].itertuples(index=False, name=None)
     )
+    cotravel_components = {}
+    for component_values in nx.connected_components(cotravel_graph):
+        component = frozenset(component_values)
+        cotravel_components.update(
+            {person_id: component for person_id in component}
+        )
     cotravel_people = set(visible_set)
     for person_id in visible:
-        if person_id in cotravel_graph:
-            cotravel_people.update(
-                nx.node_connected_component(cotravel_graph, person_id)
-            )
+        cotravel_people.update(cotravel_components.get(person_id, ()))
 
     residence_graph = nx.Graph()
     residence_graph.add_edges_from(
         residence[["u", "v"]].itertuples(index=False, name=None)
     )
+    residence_components = {}
+    for component_values in nx.connected_components(residence_graph):
+        component = frozenset(component_values)
+        residence_components.update(
+            {person_id: component for person_id in component}
+        )
     residence_people = set(cotravel_people)
     for person_id in sorted(cotravel_people):
-        if person_id in residence_graph:
-            residence_people.update(
-                nx.node_connected_component(residence_graph, person_id)
-            )
+        residence_people.update(residence_components.get(person_id, ()))
 
     cotravel_rows = cotravel.loc[
         cotravel["u"].isin(cotravel_people)
@@ -777,18 +1026,35 @@ def structural_provenance_rows(active_edges, visible_people):
     return rows.reset_index(drop=True)
 
 
-def _cotravel_group_changes_pooling(active_edges, source_row_ids, endpoint_pair):
+def _cotravel_groups_changing_pooling(active_edges, groups):
     relation = active_edges["edge_type"].astype(str).str.upper()
-    remaining = active_edges.loc[
-        (relation == "COTRAVEL")
-        & ~active_edges["source_row_id"].astype(str).isin(source_row_ids)
-    ]
+    cotravel = active_edges.loc[relation == "COTRAVEL"]
     graph = nx.Graph()
-    graph.add_nodes_from(endpoint_pair)
     graph.add_edges_from(
-        remaining[["u", "v"]].itertuples(index=False, name=None)
+        cotravel[["u", "v"]].itertuples(index=False, name=None)
     )
-    return not nx.has_path(graph, *endpoint_pair)
+    bridge_pairs = {
+        tuple(sorted((str(u), str(v)))) for u, v in nx.bridges(graph)
+    }
+    pair_source_ids = {}
+    for source_row_id, u, v in cotravel[
+        ["source_row_id", "u", "v"]
+    ].itertuples(index=False, name=None):
+        endpoint_pair = tuple(sorted((str(u), str(v))))
+        pair_source_ids.setdefault(endpoint_pair, set()).add(
+            str(source_row_id)
+        )
+
+    changing = set()
+    for group_key, source_row_ids, endpoint_pair in groups:
+        if (
+            endpoint_pair in bridge_pairs
+            and pair_source_ids.get(endpoint_pair, set()).issubset(
+                source_row_ids
+            )
+        ):
+            changing.add(group_key)
+    return frozenset(changing)
 
 
 def build_ablation_specs(snapshot, person_id, community):
@@ -888,6 +1154,7 @@ def build_ablation_specs(snapshot, person_id, community):
     cotravel = internal.loc[
         internal["edge_type"].astype(str).str.upper() == "COTRAVEL"
     ]
+    cotravel_groups = []
     for (group_id, relation_id), frame in cotravel.groupby(
         group_columns, sort=True, dropna=False
     ):
@@ -903,16 +1170,25 @@ def build_ablation_specs(snapshot, person_id, community):
             )
         source_ids = tuple(sorted(frame["source_row_id"].astype(str)))
         endpoint_pair = next(iter(endpoint_pairs))
-        if _cotravel_group_changes_pooling(
-            active, source_ids, endpoint_pair
-        ):
+        cotravel_groups.append(
+            (
+                (group_id, int(relation_id)),
+                frozenset(source_ids),
+                endpoint_pair,
+            )
+        )
+    pooling_changes = _cotravel_groups_changing_pooling(
+        active, cotravel_groups
+    )
+    for (group_id, relation_id), source_ids, _ in cotravel_groups:
+        if (group_id, relation_id) in pooling_changes:
             specs.append(
                 AblationSpec(
                     factor_id=(
                         f"cotravel-pool:{group_id}:rel:{int(relation_id)}"
                     ),
                     kind="cotravel_pool",
-                    edge_source_row_ids=source_ids,
+                    edge_source_row_ids=tuple(source_ids),
                 )
             )
 
