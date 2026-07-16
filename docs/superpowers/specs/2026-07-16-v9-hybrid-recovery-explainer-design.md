@@ -281,6 +281,8 @@ stability
 faithfulness
 evidence_boundary
 llm_narrative.source          # llm or deterministic_template
+llm_narrative.model           # gemma4:12b when source is llm
+llm_narrative.prompt_version
 llm_narrative.summary
 llm_narrative.claims[]        # text plus source-field references
 llm_narrative.validated
@@ -291,11 +293,13 @@ relation type, availability time, and explainer/counterfactual values. Hidden
 organization/community labels, lifetime outcomes, future edges, and future
 catch information are prohibited.
 
-### 5. Grounded LLM narrative
+### 5. Grounded Gemma narrative
 
-An optional build-time LLM step converts each validated structured explanation
-into a short plain-language “Why this person was surfaced” narrative. The LLM is
-a narrator, not an attribution method.
+Use the locally installed Ollama model `gemma4:12b` at dashboard-build time to
+convert each validated structured explanation into a short plain-language “Why
+this person was surfaced” narrative. Gemma is a narrator, not an attribution
+method. Do not call an external LLM provider or expose the Ollama service to the
+browser.
 
 The input is a minimal fact packet containing only:
 
@@ -315,12 +319,14 @@ source-field references for every claim. A validator rejects any narrative that:
 - omits the single-seed scope when comparing ranks; or
 - uses hidden, lifetime, future, or ground-truth community information.
 
-Use deterministic generation settings where the chosen provider supports them
-and store the accepted narrative in the static artifact. The browser never calls
-an LLM or receives an API key. If no LLM is configured or validation fails,
-generate the same section from a deterministic evidence template. Label accepted
-LLM text “AI-generated summary” and keep the measured factor panel and graph
-authoritative.
+Use deterministic generation settings supported by the local Ollama runtime and
+store the accepted narrative, model tag, and prompt version in the static
+artifact. The browser never calls Ollama or receives service credentials. If the
+Ollama daemon or `gemma4:12b` is unavailable, generation fails, or validation
+rejects the result, generate the same section from a deterministic evidence
+template. Do not automatically download a replacement model. Label accepted
+Gemma text “AI-generated summary · Gemma 4 12B” and keep the measured factor
+panel and graph authoritative.
 
 ### 6. Dashboard builder and UI
 
@@ -388,13 +394,18 @@ evidence.
 - Verify frozen-peer percentile and rank recalculation.
 - Verify restart aggregation and stability labels.
 
-### LLM narrative tests
+### Gemma narrative tests
 
 - Verify every generated claim references existing fact-packet fields.
 - Reject invented IDs, relationships, numbers, causal claims, and unsupported
   model descriptions.
 - Verify the narrative labels its single-seed scope and AI-generated status.
-- Verify deterministic template fallback with no network or LLM configuration.
+- Verify the artifact records `gemma4:12b` and the prompt version for accepted
+  model output.
+- Stub the Ollama client in automated tests; do not require a running local model
+  for the source test suite.
+- Verify deterministic template fallback when Ollama or `gemma4:12b` is
+  unavailable or returns invalid output.
 
 ### Community tests
 
@@ -424,6 +435,7 @@ evidence.
   version.
 - Do not use the LLM to discover factors, assign influence, recalculate scores,
   or replace measured evidence.
+- Do not call an external LLM provider or automatically pull an Ollama model.
 - Do not change existing three-seed V9 Results to single-seed results.
 - Do not replace or redesign unrelated Results charts.
 
