@@ -8,6 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gnn.explanation_narrative import render_template
+from gnn.observability_artifact import (
+    build_observability_artifact,
+    explain_representatives,
+)
 from gnn.recovery_observability import (
     HybridOnlyCase,
     RecoveryAnchor,
@@ -19,6 +24,95 @@ from gnn.recovery_observability import (
     simulate_recovery_run,
 )
 from gnn.run_demo import _rank_fuse
+
+
+class FakeExplanationEngine:
+    def __init__(self, *, explanation_overrides=None):
+        self.bind_calls = []
+        self.explained_cases = []
+        self.explanation_overrides = explanation_overrides or {}
+
+    def bind_rank_reference(self, reference, row_bindings):
+        self.bind_calls.append((reference, tuple(row_bindings)))
+
+    def relationship_categories(self, person_id, scoring_day):
+        return ("COTRAVEL",)
+
+    def explain_case(self, case):
+        self.explained_cases.append(case)
+        explanation = {
+            "case_id": f"case:{case.person_id}",
+            "person_id": case.person_id,
+            "event_id": case.anchor.event_id,
+            "scoring_day": case.anchor.scoring_day.isoformat(),
+            "decision_trace": case.decision_trace_jsonable(),
+            "factors": [],
+            "community": {
+                "complete": True,
+                "nodes": [],
+                "edges": [],
+                "provenance_expansions": [],
+            },
+            "flow_stages": [
+                {"stage_id": "first_hop", "emphasized_edge_ids": []},
+                {"stage_id": "second_hop", "emphasized_edge_ids": []},
+                {"stage_id": "component_pool", "emphasized_edge_ids": []},
+                {"stage_id": "rank_fusion", "emphasized_edge_ids": []},
+            ],
+            "stable_factor_status": "unstable",
+            "stability": {"stable_factor_count": 0},
+            "faithfulness": {"points": []},
+            "parity": {
+                "production_seed0_probability": True,
+                "pooled_logit_decomposition": True,
+                "frozen_percentile": True,
+                "frozen_daily_hybrid_rank": True,
+            },
+            "evidence_boundary": {
+                "snapshot": case.anchor.scoring_day.isoformat(),
+                "edge_rule": "available_time < snapshot",
+                "caught_rule": "label_available_time_utc < snapshot",
+            },
+        }
+        explanation.update(self.explanation_overrides)
+        return explanation
+
+
+def _fake_narrative(packet):
+    return render_template(packet)
+
+
+def _artifact_fixture(**overrides):
+    values = {
+        "pool": pd.DataFrame(
+            {
+                "event_id": ["e1", "e2", "e3", "e4"],
+                "primary_person_id": ["p1", "p1", "p2", "p3"],
+                "t": pd.to_datetime(
+                    [
+                        "2025-01-01T01:00:00Z",
+                        "2025-01-01T02:00:00Z",
+                        "2025-01-01T03:00:00Z",
+                        "2025-01-02T01:00:00Z",
+                    ]
+                ),
+                "hidden": [True, True, True, True],
+            },
+            index=[10, 20, 30, 40],
+        ),
+        "baseline_raw": np.array([0.9, 0.8, 0.7, 0.6]),
+        "seed0_gnn_raw": np.array([0.1, 0.2, 0.9, 0.95]),
+        "blend_weight": 0.75,
+        "caught_times": {},
+        "gnn_arm": "sage",
+        "surrounding_seeds": (0, 1, 2),
+        "explanation_engine": FakeExplanationEngine(),
+        "explanation_limit": 40,
+        "inspections_per_day": 1,
+        "narrative_builder": _fake_narrative,
+    }
+    values.update(overrides)
+    return values
 
 
 def _pool(
@@ -916,3 +1010,313 @@ def test_direct_overlap_construction_rejects_contradictory_sets(
 
     with pytest.raises(ValueError, match=rf"{field_name} is inconsistent"):
         RecoveryOverlap(**values)
+
+
+def test_observability_artifact_has_exact_seed_zero_summary_and_coverage() -> None:
+    engine = FakeExplanationEngine()
+
+    artifact = build_observability_artifact(
+        **_artifact_fixture(explanation_engine=engine)
+    )
+
+    assert artifact["schema_version"] == "1.0"
+    assert artifact["policy"] == {
+        "observability_seed": 0,
+        "gnn_arm": "sage",
+        "surrounding_results_seeds": [0, 1, 2],
+        "inspections_per_day": 1,
+        "hybrid_blend_weight": 0.75,
+        "percentile_reference_id": artifact["policy"][
+            "percentile_reference_id"
+        ],
+    }
+    assert artifact["summary"] == {
+        "overlap_ids_available": True,
+        "baseline_recovered": 2,
+        "recovered_by_both": 1,
+        "hybrid_only_recovered": 1,
+        "baseline_only_recovered": 1,
+        "hybrid_total": 2,
+        "net_gain": 0,
+    }
+    assert artifact["coverage"] == {
+        "hybrid_only_count": 1,
+        "explanation_limit": 40,
+        "attempted_count": 1,
+        "explained_count": 1,
+        "failed_count": 0,
+    }
+    assert [case["person_id"] for case in artifact["hybrid_only_cases"]] == [
+        "p2"
+    ]
+    assert [case["person_id"] for case in artifact["explanations"]] == ["p2"]
+    assert artifact["generation_diagnostics"] == {"failed_attempts": []}
+    json.dumps(artifact, sort_keys=True, allow_nan=False)
+
+
+def test_observability_binds_complete_positional_identity_day_reference_once() -> None:
+    engine = FakeExplanationEngine()
+
+    artifact = build_observability_artifact(
+        **_artifact_fixture(explanation_engine=engine)
+    )
+
+    assert artifact["coverage"]["explained_count"] == 1
+    assert len(engine.bind_calls) == 1
+    reference, row_bindings = engine.bind_calls[0]
+    assert reference.event_ids == ("e1", "e2", "e3", "e4")
+    assert row_bindings == (
+        (0, "p1", pd.Timestamp("2025-01-01T00:00:00Z")),
+        (1, "p1", pd.Timestamp("2025-01-01T00:00:00Z")),
+        (2, "p2", pd.Timestamp("2025-01-01T00:00:00Z")),
+        (3, "p3", pd.Timestamp("2025-01-02T00:00:00Z")),
+    )
+    case = engine.explained_cases[0]
+    assert case.same_day_person_row_indices == (2,)
+    assert set(case.baseline_candidate_row_indices) == {0, 1, 2}
+    assert set(case.hybrid_candidate_row_indices) == {0, 1, 2}
+
+
+@pytest.mark.parametrize(
+    ("surrounding_seeds", "gnn_arm"),
+    [((1, 2), "sage"), ((0, 1, 2), "rgcn")],
+)
+def test_observability_fails_closed_without_exact_seed_zero_sage_scope(
+    surrounding_seeds: tuple[int, ...], gnn_arm: str
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="requires the surrounding three-seed GraphSAGE run",
+    ):
+        build_observability_artifact(
+            **_artifact_fixture(
+                surrounding_seeds=surrounding_seeds,
+                gnn_arm=gnn_arm,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "explanation_overrides",
+    [
+        {
+            "parity": {
+                "production_seed0_probability": True,
+                "pooled_logit_decomposition": True,
+                "frozen_percentile": True,
+                "frozen_daily_hybrid_rank": False,
+            }
+        },
+        {
+            "community": {
+                "complete": False,
+                "nodes": [],
+                "edges": [],
+                "provenance_expansions": [],
+            }
+        },
+        {
+            "community": {
+                "complete": True,
+                "nodes": None,
+                "edges": [],
+                "provenance_expansions": [],
+            }
+        },
+        {"person_id": "wrong-person"},
+        {"false_negative_flag": True},
+    ],
+)
+def test_invalid_detailed_explanations_fail_but_keep_lightweight_cohort(
+    explanation_overrides: dict[str, object],
+) -> None:
+    engine = FakeExplanationEngine(
+        explanation_overrides=explanation_overrides
+    )
+
+    artifact = build_observability_artifact(
+        **_artifact_fixture(explanation_engine=engine)
+    )
+
+    assert [case["person_id"] for case in artifact["hybrid_only_cases"]] == [
+        "p2"
+    ]
+    assert artifact["explanations"] == []
+    assert artifact["coverage"] == {
+        "hybrid_only_count": 1,
+        "explanation_limit": 40,
+        "attempted_count": 1,
+        "explained_count": 0,
+        "failed_count": 1,
+    }
+    failure = artifact["generation_diagnostics"]["failed_attempts"][0]
+    assert failure["person_id"] == "p2"
+    assert failure["event_id"] == "e3"
+    assert failure["reason_code"] == "ValueError"
+
+
+@pytest.mark.parametrize(
+    "evidence_kind",
+    ["edge", "caught", "empty_edge", "boundary", "provenance"],
+)
+def test_exact_at_snapshot_evidence_is_rejected_as_not_strictly_asof(
+    evidence_kind: str,
+) -> None:
+    snapshot = "2025-01-01T00:00:00+00:00"
+    community = {
+        "complete": True,
+        "nodes": [],
+        "edges": [],
+        "provenance_expansions": [],
+    }
+    overrides = {"community": community}
+    if evidence_kind == "edge":
+        community["edges"] = [
+            {
+                "edge_id": "pair-1:rel:0",
+                "u": "p2",
+                "v": "px",
+                "edge_type": "COTRAVEL",
+                "source_row_ids": ["r1"],
+                "observations": [
+                    {"source_row_id": "r1", "available_time": snapshot}
+                ],
+            }
+        ]
+    elif evidence_kind == "caught":
+        community["nodes"] = [
+            {
+                "node_id": "px",
+                "caught_before_snapshot": True,
+                "caught_label_available_time": snapshot,
+            }
+        ]
+    elif evidence_kind == "empty_edge":
+        community["edges"] = [
+            {
+                "edge_id": "pair-1:rel:0",
+                "u": "p2",
+                "v": "px",
+                "edge_type": "COTRAVEL",
+                "source_row_ids": [],
+                "observations": [],
+            }
+        ]
+    elif evidence_kind == "boundary":
+        overrides["evidence_boundary"] = {
+            "snapshot": "2024-12-31T00:00:00+00:00",
+            "edge_rule": "available_time < snapshot",
+            "caught_rule": "label_available_time_utc < snapshot",
+        }
+    else:
+        community["edges"] = [
+            {
+                "edge_id": "pair-1:rel:0",
+                "u": "p2",
+                "v": "px",
+                "edge_type": "COTRAVEL",
+                "source_row_ids": ["different-row"],
+                "observations": [
+                    {
+                        "source_row_id": "r1",
+                        "available_time": "2024-12-31T23:59:59+00:00",
+                    }
+                ],
+            }
+        ]
+    engine = FakeExplanationEngine(
+        explanation_overrides=overrides
+    )
+
+    artifact = build_observability_artifact(
+        **_artifact_fixture(explanation_engine=engine)
+    )
+
+    assert artifact["explanations"] == []
+    assert artifact["coverage"]["failed_count"] == 1
+    assert "strictly as-of" in artifact["generation_diagnostics"][
+        "failed_attempts"
+    ][0]["message"]
+
+
+def test_ungrounded_narrative_is_rejected_despite_validated_flag() -> None:
+    def invented_narrative(packet):
+        return {
+            "source": "deterministic_template",
+            "model": None,
+            "prompt_version": "v1",
+            "summary": "In seed 0, invented person P-999 had rank 999.",
+            "summary_source_refs": ["scope.observability_seed"],
+            "claims": [],
+            "validated": True,
+        }
+
+    artifact = build_observability_artifact(
+        **_artifact_fixture(narrative_builder=invented_narrative)
+    )
+
+    assert artifact["explanations"] == []
+    assert artifact["coverage"]["failed_count"] == 1
+    assert "narrative" in artifact["generation_diagnostics"][
+        "failed_attempts"
+    ][0]["message"]
+
+
+def test_narrative_builder_cannot_mutate_its_grounding_reference() -> None:
+    def mutating_narrative(packet):
+        packet["ranks"]["seed0_hybrid"] = 999
+        return render_template(packet)
+
+    artifact = build_observability_artifact(
+        **_artifact_fixture(narrative_builder=mutating_narrative)
+    )
+
+    assert artifact["explanations"] == []
+    assert artifact["coverage"]["failed_count"] == 1
+    assert "narrative" in artifact["generation_diagnostics"][
+        "failed_attempts"
+    ][0]["message"]
+
+
+def test_explanation_limit_counts_successes_not_failed_attempts() -> None:
+    cases = [
+        _hybrid_only_case(
+            person_id,
+            row_index,
+            baseline_rank=3,
+            gnn_rank=2,
+            hybrid_rank=1,
+            baseline_percentile=0.25,
+            gnn_percentile=0.75,
+            categories=("COTRAVEL",),
+            period="2025-01",
+            decision_trace={
+                "baseline_rank": 3,
+                "seed0_gnn_rank": 2,
+                "seed0_hybrid_rank": 1,
+            },
+        )
+        for row_index, person_id in enumerate(("fail", "success", "unattempted"))
+    ]
+
+    class FailThenExplain(FakeExplanationEngine):
+        def explain_case(self, case):
+            if case.person_id == "fail":
+                self.explained_cases.append(case)
+                raise ValueError("planned failure")
+            return super().explain_case(case)
+
+    engine = FailThenExplain()
+    explanations, failures = explain_representatives(
+        cases,
+        engine,
+        narrative_builder=_fake_narrative,
+        limit=1,
+    )
+
+    assert [item["person_id"] for item in explanations] == ["success"]
+    assert [item["person_id"] for item in failures] == ["fail"]
+    assert [case.person_id for case in engine.explained_cases] == [
+        "fail",
+        "success",
+    ]

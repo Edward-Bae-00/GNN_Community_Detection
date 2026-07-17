@@ -1,6 +1,7 @@
 """End-to-end smoke of the V9 baseline-vs-GNN demo on the tiny v9dev corpus.
 See tasks/v9_demo_corpus_plan.md (Task 10)."""
 from dataclasses import FrozenInstanceError
+import json
 import pathlib
 from types import SimpleNamespace
 
@@ -530,3 +531,118 @@ def test_run_demo_smoke():
             )
             assert (arm[f"later_hidden_events_removed@{k}"]
                     <= arm[f"later_candidate_events_removed@{k}"])
+
+
+def test_atomic_json_write_replaces_target_without_leaving_temporary_file(
+    tmp_path,
+):
+    target = tmp_path / "nested" / "result.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("stale")
+
+    rd._atomic_json_write(target, {"value": 3})
+
+    assert json.loads(target.read_text()) == {"value": 3}
+    assert not target.with_suffix(".json.tmp").exists()
+
+
+def test_observability_output_failure_removes_stale_and_temporary_files(
+    tmp_path,
+):
+    comparison = tmp_path / "comparison.json"
+    comparison.write_text('{"comparison": "valid"}')
+    target = tmp_path / "observability.json"
+    temporary = target.with_suffix(".json.tmp")
+    target.write_text('{"stale": true}')
+    temporary.write_text("partial")
+
+    def fail_generation():
+        temporary.write_text("new partial")
+        raise RuntimeError("artifact failed")
+
+    with pytest.raises(RuntimeError, match="artifact failed"):
+        rd._write_observability_output(target, fail_generation)
+
+    assert comparison.read_text() == '{"comparison": "valid"}'
+    assert not target.exists()
+    assert not temporary.exists()
+
+
+@pytest.mark.parametrize(
+    ("seeds", "gnn_arm"),
+    [((1, 2), "sage"), ((0, 1, 2), "rgcn")],
+)
+def test_observability_main_fails_before_work_without_exact_sage_scope(
+    seeds, gnn_arm
+):
+    with pytest.raises(
+        ValueError,
+        match="requires the surrounding three-seed GraphSAGE run",
+    ):
+        rd.main(
+            corpus_dir=CD,
+            seeds=seeds,
+            gnn_arm=gnn_arm,
+            observability=True,
+        )
+
+
+def test_observability_generation_is_separate_and_comparison_is_byte_identical(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(rd.FC, "RESULTS", tmp_path)
+    captured = {}
+    score_bundles = []
+    artifact = {"schema_version": "1.0", "kind": "observability-only"}
+    original_gnn_scores = rd._gnn_scores
+
+    def recording_gnn_scores(*args, **kwargs):
+        bundle = original_gnn_scores(*args, **kwargs)
+        score_bundles.append(bundle)
+        return bundle
+
+    def fake_build_observability_artifact(**kwargs):
+        captured.update(kwargs)
+        return artifact
+
+    monkeypatch.setattr(rd, "_gnn_scores", recording_gnn_scores)
+    monkeypatch.setattr(
+        rd, "build_observability_artifact", fake_build_observability_artifact
+    )
+    arguments = {
+        "corpus_dir": CD,
+        "seeds": (0, 1, 2),
+        "n_boot": 5,
+        "epochs": 1,
+        "ks": (50,),
+        "daily_ks": (25,),
+        "valid_sample": 100,
+    }
+
+    without = rd.main(
+        **arguments,
+        out_name="without.json",
+        observability=False,
+    )
+    with_observability = rd.main(
+        **arguments,
+        out_name="with.json",
+        observability=True,
+        observability_out_name="observability.json",
+        narrative=False,
+    )
+
+    assert without == with_observability
+    assert (tmp_path / "without.json").read_bytes() == (
+        tmp_path / "with.json"
+    ).read_bytes()
+    assert json.loads((tmp_path / "observability.json").read_text()) == artifact
+    assert "observability" not in with_observability
+    assert captured["gnn_arm"] == "sage"
+    assert captured["surrounding_seeds"] == (0, 1, 2)
+    assert captured["inspections_per_day"] == 25
+    assert len(captured["seed0_gnn_raw"]) == with_observability["pool_size"]
+    np.testing.assert_array_equal(
+        captured["seed0_gnn_raw"], score_bundles[-1].scores_by_seed[0][1]
+    )
+    assert captured["narrative_builder"] is rd.render_template

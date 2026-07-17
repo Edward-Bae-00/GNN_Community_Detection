@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import json
+from pathlib import Path
 import re
 from types import MappingProxyType
 
@@ -389,10 +390,47 @@ from gnn.learned_cell import (
 from scipy.stats import rankdata
 from gnn.detector import fit_predict
 from gnn.demo_baseline import build_baseline_features, FEATURE_NAMES
+from gnn.explanation_narrative import generate_narrative, render_template
+from gnn.observability_artifact import build_observability_artifact
+from gnn.sage_explainer import Seed0ExplanationEngine
 
 KS = (50, 100, 200, 500, 1000, 2000, 5000)
 DAILY_KS = (5, 10, 25, 50)   # per-day inspection budgets for the capacity-aware view
 SUBSTRATE = "oracle"   # detection demo: perfect ER, shared by both arms (fair)
+
+
+def _result_path(name_or_path):
+    path = Path(name_or_path)
+    return path if path.is_absolute() else FC.RESULTS / path
+
+
+def _atomic_json_write(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2, default=str))
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_observability_output(path, build_payload):
+    """Replace one observability artifact or remove all current-run ambiguity."""
+    path = Path(path)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    path.unlink(missing_ok=True)
+    temporary.unlink(missing_ok=True)
+    completed = False
+    try:
+        payload = build_payload()
+        _atomic_json_write(path, payload)
+        completed = True
+        return payload
+    finally:
+        temporary.unlink(missing_ok=True)
+        if not completed:
+            path.unlink(missing_ok=True)
 
 MODEL_ARMS = {
     "baseline": {
@@ -685,7 +723,19 @@ def _train_pool_and_labels(corpus_dir, train_cutoff):
 
 def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_comparison_v9.json",
          epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS, gnn_arm="sage",
-         valid_sample=20000):
+         valid_sample=20000, observability=False,
+         observability_out_name="hybrid_recovery_explanations_v9.json",
+         explanation_limit=40, narrative=True):
+    if observability and (
+        gnn_arm != "sage" or tuple(seeds) != (0, 1, 2)
+    ):
+        raise ValueError(
+            "observability requires the surrounding three-seed GraphSAGE run"
+        )
+    comparison_path = _result_path(out_name)
+    observability_path = _result_path(observability_out_name)
+    if observability and comparison_path.absolute() == observability_path.absolute():
+        raise ValueError("comparison and observability outputs must be separate files")
     cd = corpus_dir or FC.CORPUS_DIR
     train_cutoff, test_deployment_cutoff = _split_label_cutoffs(cd)
     obs2id = _build_oracle(cd)
@@ -805,8 +855,35 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
            "win_whole_pool": win, "win_observable": win_obs,
            "win_hybrid_whole_pool": win_hybrid, "win_hybrid_observable": win_hybrid_obs,
            "win_hybrid_daily": win_hybrid_daily}
-    FC.RESULTS.mkdir(parents=True, exist_ok=True)
-    (FC.RESULTS / out_name).write_text(json.dumps(out, indent=2, default=str))
+    _atomic_json_write(comparison_path, out)
+
+    if observability:
+        def build_artifact():
+            engine = Seed0ExplanationEngine(
+                model=score_bundle.models_by_seed[0],
+                edges_typed=edges_typed,
+                node_ids=node_ids,
+                node_feat=node_feat,
+                caught_time=caught_time,
+                num_rel=spec["num_rel"],
+            )
+            return build_observability_artifact(
+                pool=pool,
+                baseline_raw=base_raw,
+                seed0_gnn_raw=score_bundle.scores_by_seed[0][1],
+                blend_weight=w_gnn,
+                caught_times=caught_time,
+                gnn_arm=gnn_arm,
+                surrounding_seeds=score_bundle.seed_order,
+                explanation_engine=engine,
+                explanation_limit=explanation_limit,
+                inspections_per_day=25,
+                narrative_builder=(
+                    generate_narrative if narrative else render_template
+                ),
+            )
+
+        _write_observability_output(observability_path, build_artifact)
 
     print(f"hybrid fusion weight w_gnn = {w_gnn:.3f} (tuned on CAUGHT, deployable) | "
           f"{w_gnn_oracle:.3f} (tuned on MISSED, oracle ceiling)")
