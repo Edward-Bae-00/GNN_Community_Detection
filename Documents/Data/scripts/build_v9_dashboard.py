@@ -213,7 +213,7 @@ def _inject_dashboard_tab_scripts(html, helper_js, renderer_js):
 
 
 def _inject_recovery_assets(html, css, js):
-    """Idempotently place recovery state helpers and styles in the shell."""
+    """Idempotently place recovery explorer behavior and styles in the shell."""
     if not isinstance(css, str) or not css or not isinstance(js, str) or not js:
         raise ValueError("recovery assets must be non-empty strings")
     if html.count(css) > 1 or html.count(js) > 1:
@@ -241,6 +241,18 @@ def _inject_recovery_assets(html, css, js):
         html = html.replace("</style>", css + "\n</style>", 1)
     if js not in html:
         html = html.replace(tabs_marker, js + "\n" + tabs_marker, 1)
+    return html
+
+
+def _validate_recovery_explorer_mount(html):
+    """Fail closed if the local artifact explorer mount is missing or ambiguous."""
+    exact_once = (
+        'href="#v9-case-evidence"',
+        'id="v9-case-evidence"',
+        "DATA.v9RecoveryExplainer",
+    )
+    if any(html.count(token) != 1 for token in exact_once):
+        raise ValueError("dashboard recovery explorer mount is invalid")
     return html
 
 
@@ -308,6 +320,7 @@ def main():
         V9_RECOVERY_EXPLAINER_JS,
     )
     html = _inject_dashboard_tab_scripts(html, "", V9_RESULTS_JS)
+    html = _validate_recovery_explorer_mount(html)
     html = html.replace("</style>", V9_RESULTS_CSS + "\n</style>", 1)
     html = _make_d3_optional(html)
 

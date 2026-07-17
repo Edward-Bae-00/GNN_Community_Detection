@@ -2,7 +2,92 @@
 
 
 V9_RECOVERY_EXPLAINER_CSS = r"""
-#tab-v9Results .v9-recovery-warning { color: #b45309; }
+#tab-v9Results .v9-recovery { margin: 30px 0; padding: 24px 0; border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); }
+#tab-v9Results .v9-recovery-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 18px; }
+#tab-v9Results .v9-recovery-eyebrow { color: var(--accent-hover); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+#tab-v9Results .v9-recovery-title { margin: 6px 0; color: var(--text1); font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+#tab-v9Results .v9-recovery-intro { max-width: 720px; margin: 0; color: var(--text2); font-size: 12px; line-height: 1.55; }
+#tab-v9Results .v9-recovery-scope { flex: 0 0 auto; max-width: 270px; padding: 10px 12px; border: 1px solid rgba(52,211,153,.32); border-radius: 999px; background: var(--accent-soft); color: var(--accent-hover); font-size: 10px; font-weight: 700; line-height: 1.4; text-align: center; }
+#tab-v9Results .v9-recovery-scope small { display: block; margin-top: 2px; color: var(--text2); font-size: 9px; font-weight: 500; }
+#tab-v9Results .v9-recovery-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+#tab-v9Results .v9-recovery-stat { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+#tab-v9Results .v9-recovery-stat b { display: block; color: var(--text1); font-family: var(--font-mono); font-size: 18px; font-variant-numeric: tabular-nums; }
+#tab-v9Results .v9-recovery-stat span { display: block; margin-top: 4px; color: var(--text2); font-size: 9px; line-height: 1.3; letter-spacing: .045em; text-transform: uppercase; }
+#tab-v9Results .v9-recovery-stat.is-warning { border-color: rgba(245,158,11,.5); background: rgba(245,158,11,.08); }
+#tab-v9Results .v9-recovery-stat.is-warning b, #tab-v9Results .v9-recovery-stat.is-warning span { color: #fbbf24; }
+#tab-v9Results .v9-recovery-containment, #tab-v9Results .v9-recovery-warning, #tab-v9Results .v9-recovery-status { margin-top: 9px; padding: 9px 11px; border-left: 3px solid var(--accent); background: var(--accent-soft); color: var(--text2); font-size: 11px; line-height: 1.45; }
+#tab-v9Results .v9-recovery-warning { border-left-color: #f59e0b; background: rgba(245,158,11,.08); color: #fbbf24; }
+#tab-v9Results .v9-recovery-status { border-left-color: var(--border-strong); background: var(--elevated); color: var(--text2); }
+#tab-v9Results .v9-recovery-coverage { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0 18px; color: var(--text2); font-size: 10px; }
+#tab-v9Results .v9-recovery-workspace { display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr); min-height: 620px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
+#tab-v9Results .v9-recovery-rail { min-width: 0; padding: 14px; border-right: 1px solid var(--border); background: var(--sunk); }
+#tab-v9Results .v9-recovery-filter-grid { display: grid; gap: 8px; }
+#tab-v9Results .v9-recovery-field { display: grid; gap: 4px; color: var(--text2); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+#tab-v9Results .v9-recovery-select, #tab-v9Results .v9-recovery-search { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text1); padding: 7px 8px; font: inherit; font-size: 11px; }
+#tab-v9Results .v9-recovery-case-count { margin: 12px 0 7px; color: var(--text2); font-size: 10px; }
+#tab-v9Results .v9-recovery-case-list { display: grid; gap: 6px; max-height: 470px; overflow: auto; }
+#tab-v9Results .v9-recovery-case { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text2); text-align: left; cursor: pointer; }
+#tab-v9Results .v9-recovery-case:hover { border-color: var(--border-strong); color: var(--text1); }
+#tab-v9Results .v9-recovery-case[aria-current="true"] { border-color: rgba(52,211,153,.5); box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
+#tab-v9Results .v9-recovery-case-top { display: flex; justify-content: space-between; gap: 8px; color: var(--text1); font-size: 11px; font-weight: 700; }
+#tab-v9Results .v9-recovery-case-ranks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 8px; font-family: var(--font-mono); font-size: 9px; }
+#tab-v9Results .v9-recovery-case-meta { margin-top: 7px; color: var(--text2); font-size: 9px; line-height: 1.35; }
+#tab-v9Results .v9-recovery-detail { min-width: 0; padding: 18px; }
+#tab-v9Results .v9-recovery-case-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
+#tab-v9Results .v9-recovery-case-header h4 { margin: 0 0 4px; color: var(--text1); font-size: 15px; }
+#tab-v9Results .v9-recovery-case-header p { margin: 0; color: var(--text2); font-size: 10px; }
+#tab-v9Results .v9-recovery-ranks { display: grid; grid-template-columns: repeat(3, minmax(90px, 1fr)); gap: 6px; }
+#tab-v9Results .v9-recovery-rank { padding: 8px; border-left: 2px solid var(--border-strong); background: var(--elevated); }
+#tab-v9Results .v9-recovery-rank b { display: block; color: var(--text1); font-family: var(--font-mono); font-size: 13px; }
+#tab-v9Results .v9-recovery-rank span { display: block; margin-top: 2px; color: var(--text2); font-size: 8px; letter-spacing: .04em; text-transform: uppercase; }
+#tab-v9Results .v9-recovery-evidence-grid { display: grid; grid-template-columns: minmax(190px, .62fr) minmax(0, 1.38fr); gap: 12px; }
+#tab-v9Results .v9-recovery-panel { min-width: 0; border: 1px solid var(--border); border-radius: 9px; background: var(--elevated); }
+#tab-v9Results .v9-recovery-panel-head { padding: 11px 12px; border-bottom: 1px solid var(--border); }
+#tab-v9Results .v9-recovery-panel-head h5 { margin: 0; color: var(--text1); font-size: 11px; }
+#tab-v9Results .v9-recovery-panel-head p { margin: 4px 0 0; color: var(--text2); font-size: 9px; line-height: 1.4; }
+#tab-v9Results .v9-recovery-factor-list { display: grid; gap: 1px; background: var(--border); }
+#tab-v9Results .v9-recovery-factor { width: 100%; padding: 10px 12px; border: 0; background: var(--surface); color: var(--text2); text-align: left; cursor: pointer; }
+#tab-v9Results .v9-recovery-factor[aria-pressed="true"] { box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
+#tab-v9Results .v9-recovery-factor strong { display: block; color: var(--text1); font-size: 10px; line-height: 1.35; }
+#tab-v9Results .v9-recovery-factor span { display: block; margin-top: 4px; color: var(--text2); font-family: var(--font-mono); font-size: 9px; }
+#tab-v9Results .v9-recovery-narrative { margin-top: 12px; padding: 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+#tab-v9Results .v9-recovery-narrative h5 { margin: 0 0 8px; color: var(--text1); font-size: 11px; }
+#tab-v9Results .v9-recovery-narrative p { margin: 6px 0; color: var(--text2); font-size: 11px; line-height: 1.55; }
+#tab-v9Results .v9-recovery-source-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+#tab-v9Results .v9-recovery-source { padding: 2px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font-family: var(--font-mono); font-size: 8px; }
+#tab-v9Results .v9-recovery-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px; border-bottom: 1px solid var(--border); }
+#tab-v9Results .v9-recovery-toolgroup { display: inline-flex; align-items: center; gap: 3px; }
+#tab-v9Results .v9-recovery-button { min-height: 29px; padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text2); font: inherit; font-size: 9px; cursor: pointer; }
+#tab-v9Results .v9-recovery-button:hover { color: var(--text1); border-color: var(--text2); }
+#tab-v9Results .v9-recovery-button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-hover); }
+#tab-v9Results .v9-recovery-search { width: 118px; min-height: 29px; padding: 5px 7px; font-size: 9px; }
+#tab-v9Results .v9-recovery-toolbar .v9-recovery-select { width: auto; min-height: 29px; padding: 5px 7px; font-size: 9px; }
+#tab-v9Results .v9-recovery-canvas-note { padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text2); font-size: 9px; line-height: 1.4; }
+#tab-v9Results .v9-recovery-canvas-wrap { position: relative; height: 410px; min-height: 300px; background: var(--sunk); }
+#tab-v9Results .v9-recovery-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+#tab-v9Results .v9-recovery-canvas:active { cursor: grabbing; }
+#tab-v9Results .v9-recovery-case:focus-visible, #tab-v9Results .v9-recovery-factor:focus-visible, #tab-v9Results .v9-recovery-button:focus-visible, #tab-v9Results .v9-recovery-select:focus-visible, #tab-v9Results .v9-recovery-search:focus-visible, #tab-v9Results .v9-recovery-canvas:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+#tab-v9Results .v9-recovery-empty { padding: 28px; border: 1px dashed var(--border-strong); border-radius: 9px; color: var(--text2); font-size: 12px; line-height: 1.55; text-align: center; }
+@media(max-width:900px){
+  #tab-v9Results .v9-recovery-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #tab-v9Results .v9-recovery-workspace { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-rail { border-right: 0; border-bottom: 1px solid var(--border); }
+  #tab-v9Results .v9-recovery-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #tab-v9Results .v9-recovery-case-list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 260px; }
+}
+@media(max-width:700px){
+  #tab-v9Results .v9-recovery { margin: 24px 0; padding: 20px 0; }
+  #tab-v9Results .v9-recovery-header, #tab-v9Results .v9-recovery-case-header { display: block; }
+  #tab-v9Results .v9-recovery-scope { max-width: none; margin-top: 12px; }
+  #tab-v9Results .v9-recovery-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #tab-v9Results .v9-recovery-filter-grid, #tab-v9Results .v9-recovery-case-list, #tab-v9Results .v9-recovery-evidence-grid { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-detail { padding: 12px; }
+  #tab-v9Results .v9-recovery-ranks { margin-top: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #tab-v9Results .v9-recovery-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #tab-v9Results .v9-recovery-toolgroup { flex: 0 0 auto; }
+  #tab-v9Results .v9-recovery-button, #tab-v9Results .v9-recovery-toolbar .v9-recovery-select, #tab-v9Results .v9-recovery-search { min-height: 44px; }
+  #tab-v9Results .v9-recovery-canvas-wrap { height: 340px; }
+}
 """
 
 
@@ -185,6 +270,22 @@ function validateRecoveryNarrative(narrative){
   };
 }
 
+function validateRecoveryEvidenceBoundary(explanation,scoringDay){
+  const boundary=recoveryIsRecord(explanation)
+    ?explanation.evidence_boundary:null;
+  const valid=recoveryIsRecord(boundary)
+    &&boundary.snapshot===scoringDay
+    &&boundary.edge_rule==='available_time < snapshot'
+    &&boundary.caught_rule==='label_available_time_utc < snapshot';
+  if(!valid) return recoveryUnavailable('invalid-evidence-boundary');
+  return {
+    available:true,
+    snapshot:boundary.snapshot,
+    edgeRule:boundary.edge_rule,
+    caughtRule:boundary.caught_rule
+  };
+}
+
 function filterAndSortRecoveryCases(cases,options){
   if(!Array.isArray(cases)) return [];
   const settings=recoveryIsRecord(options)?options:{};
@@ -250,5 +351,964 @@ function buildCommunityStageView(explanation,options){
       ?settings.selectedFactorId:null,
     query:typeof settings.query==='string'?settings.query:''
   };
+}
+
+function recoveryFiniteUnit(value){
+  return typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=1;
+}
+
+function recoverySameIds(values,expected){
+  return recoveryUniqueStrings(values)
+    &&values.slice().sort().join('\u0000')===expected.slice().sort().join('\u0000');
+}
+
+function buildCommunityDrawCommands(explanation,options){
+  const stageView=buildCommunityStageView(explanation,options);
+  if(!stageView.available) return stageView;
+  const community=explanation.community;
+  if(!community.nodes.every(node=>recoveryFiniteUnit(node.x)
+      &&recoveryFiniteUnit(node.y))){
+    return recoveryUnavailable('invalid-community-coordinates');
+  }
+  const requiredStages=['first_hop','second_hop','component_pool','rank_fusion'];
+  if(!Array.isArray(explanation.flow_stages)
+      ||explanation.flow_stages.length!==requiredStages.length){
+    return recoveryUnavailable('invalid-flow-stages');
+  }
+  const stagesById=new Map();
+  for(const stage of explanation.flow_stages){
+    if(!recoveryIsRecord(stage)||!requiredStages.includes(stage.stage_id)
+        ||stagesById.has(stage.stage_id)
+        ||!recoverySameIds(stage.node_ids,stageView.nodeIds)
+        ||!recoverySameIds(stage.edge_ids,stageView.edgeIds)
+        ||!recoveryUniqueStrings(stage.emphasized_edge_ids)
+        ||stage.emphasized_edge_ids.some(id=>!stageView.edgeIds.includes(id))){
+      return recoveryUnavailable('invalid-flow-stages');
+    }
+    stagesById.set(stage.stage_id,stage);
+  }
+  if(requiredStages.some(id=>!stagesById.has(id))){
+    return recoveryUnavailable('invalid-flow-stages');
+  }
+  const selectedStage=stagesById.get(stageView.stageId);
+  const emphasized=new Set(selectedStage.emphasized_edge_ids);
+  const query=stageView.query.trim().toLowerCase();
+  const nodes=community.nodes.slice().sort((a,b)=>
+    recoveryCompareId(a.node_id,b.node_id)).map(node=>({
+      id:node.node_id,
+      x:node.x,
+      y:node.y,
+      target:node.target===true,
+      pooledMember:node.pooled_member===true,
+      caughtBeforeSnapshot:node.caught_before_snapshot===true,
+      matched:query.length>0&&node.node_id.toLowerCase().includes(query)
+    }));
+  const edges=community.edges.slice().sort((a,b)=>
+    recoveryCompareId(a.edge_id,b.edge_id)).map(edge=>({
+      id:edge.edge_id,
+      u:edge.u,
+      v:edge.v,
+      relation:recoveryNonBlankString(edge.edge_type)?edge.edge_type:'RELATION',
+      importance:typeof edge.explainer_median==='number'
+        &&Number.isFinite(edge.explainer_median)
+        ?Math.max(0,Math.min(1,edge.explainer_median)):0,
+      emphasized:stageView.mode==='all'||emphasized.has(edge.edge_id)
+    }));
+
+  const provenanceNodes=[];
+  const provenanceEdges=[];
+  if(stageView.selectedFactorId!==null){
+    if(!Array.isArray(explanation.factors)){
+      return recoveryUnavailable('invalid-selected-factor');
+    }
+    const factor=explanation.factors.find(item=>recoveryIsRecord(item)
+      &&item.factor_id===stageView.selectedFactorId);
+    if(!factor||!recoveryUniqueStrings(factor.provenance_expansion_ids)){
+      return recoveryUnavailable('invalid-selected-factor');
+    }
+    if(!Array.isArray(community.provenance_expansions)){
+      return recoveryUnavailable('invalid-provenance-expansion');
+    }
+    const expansionsById=new Map();
+    for(const expansion of community.provenance_expansions){
+      if(!recoveryIsRecord(expansion)
+          ||!recoveryNonBlankString(expansion.expansion_id)
+          ||expansionsById.has(expansion.expansion_id)){
+        return recoveryUnavailable('invalid-provenance-expansion');
+      }
+      expansionsById.set(expansion.expansion_id,expansion);
+    }
+    const selectedExpansions=[];
+    for(const expansionId of factor.provenance_expansion_ids){
+      const expansion=expansionsById.get(expansionId);
+      if(!expansion) return recoveryUnavailable('invalid-provenance-expansion');
+      selectedExpansions.push(expansion);
+    }
+    const baseIds=new Set(nodes.map(node=>node.id));
+    const availableIds=new Set(baseIds);
+    const outsideById=new Map();
+    for(const expansion of selectedExpansions){
+      if(expansion.label!=='outside message community'
+          ||!Array.isArray(expansion.nodes)||!Array.isArray(expansion.edges)){
+        return recoveryUnavailable('invalid-provenance-expansion');
+      }
+      const localIds=new Set();
+      for(const node of expansion.nodes){
+        if(!recoveryIsRecord(node)||!recoveryNonBlankString(node.node_id)
+            ||localIds.has(node.node_id)||!recoveryFiniteUnit(node.x)
+            ||!recoveryFiniteUnit(node.y)){
+          return recoveryUnavailable('invalid-provenance-expansion');
+        }
+        localIds.add(node.node_id);
+        availableIds.add(node.node_id);
+        if(!baseIds.has(node.node_id)){
+          const existing=outsideById.get(node.node_id);
+          if(existing&&(existing.x!==node.x||existing.y!==node.y)){
+            return recoveryUnavailable('invalid-provenance-expansion');
+          }
+          outsideById.set(node.node_id,{id:node.node_id,x:node.x,y:node.y});
+        }
+      }
+    }
+    const provenanceEdgeIds=new Set();
+    for(const expansion of selectedExpansions){
+      for(const edge of expansion.edges){
+        if(!recoveryIsRecord(edge)||!recoveryNonBlankString(edge.edge_id)
+            ||!recoveryNonBlankString(edge.u)||!recoveryNonBlankString(edge.v)
+            ||provenanceEdgeIds.has(edge.edge_id)
+            ||!availableIds.has(edge.u)||!availableIds.has(edge.v)){
+          return recoveryUnavailable('invalid-provenance-expansion');
+        }
+        provenanceEdgeIds.add(edge.edge_id);
+        provenanceEdges.push({
+          id:edge.edge_id,
+          u:edge.u,
+          v:edge.v,
+          relation:recoveryNonBlankString(edge.edge_type)
+            ?edge.edge_type:'RELATION',
+          label:'outside message community',
+          dashed:true
+        });
+      }
+    }
+    provenanceNodes.push(...Array.from(outsideById.values()).sort((a,b)=>
+      recoveryCompareId(a.id,b.id)));
+    provenanceEdges.sort((a,b)=>recoveryCompareId(a.id,b.id));
+  }
+  return {
+    available:true,
+    mode:stageView.mode,
+    stageId:stageView.stageId,
+    nodes,
+    edges,
+    provenanceNodes,
+    provenanceEdges
+  };
+}
+
+function graphPoint(point,viewport){
+  const width=Number(viewport.width);
+  const height=Number(viewport.height);
+  const padding=Number(viewport.padding);
+  const scale=Number(viewport.scale);
+  const offsetX=Number(viewport.offsetX);
+  const offsetY=Number(viewport.offsetY);
+  const baseX=padding+point.x*Math.max(0,width-padding*2);
+  const baseY=padding+point.y*Math.max(0,height-padding*2);
+  return {
+    x:(baseX-width/2)*scale+width/2+offsetX,
+    y:(baseY-height/2)*scale+height/2+offsetY
+  };
+}
+
+function recoveryVisibleText(value){
+  return String(value===null||value===undefined?'':value)
+    .replace(/[\u2013\u2014]/g,'-').replace(/\u00b7/g,' / ');
+}
+
+function recoveryElement(doc,tag,className,text){
+  const element=doc.createElement(tag);
+  if(className) element.className=className;
+  if(text!==undefined) element.textContent=recoveryVisibleText(text);
+  return element;
+}
+
+function recoverySetData(element,action,value){
+  element.dataset.recoveryAction=action;
+  if(value!==undefined) element.dataset.recoveryValue=String(value);
+  return element;
+}
+
+function recoveryRestoreFocus(root,datasetKey,action,value){
+  const selector=datasetKey==='recoveryAction'
+    ?'[data-recovery-action]':'[data-recovery-change]';
+  const expectedValue=value===undefined?null:String(value);
+  for(const control of root.querySelectorAll(selector)){
+    const matchesAction=control.dataset
+      &&control.dataset[datasetKey]===action;
+    const matchesValue=expectedValue===null
+      ||control.dataset.recoveryValue===expectedValue;
+    if(matchesAction&&matchesValue){
+      control.focus();
+      return true;
+    }
+  }
+  return false;
+}
+
+function recoverySelect(doc,labelText,action,options,value){
+  const label=recoveryElement(doc,'label','v9-recovery-field',labelText);
+  const select=recoveryElement(doc,'select','v9-recovery-select');
+  select.dataset.recoveryChange=action;
+  for(const option of options){
+    const node=recoveryElement(doc,'option','',option.label);
+    node.value=option.value;
+    select.appendChild(node);
+  }
+  select.value=value;
+  label.appendChild(select);
+  return label;
+}
+
+function recoveryAppendSources(doc,parent,refs){
+  const row=recoveryElement(doc,'div','v9-recovery-source-row');
+  for(const ref of refs){
+    row.appendChild(recoveryElement(doc,'span','v9-recovery-source',ref));
+  }
+  parent.appendChild(row);
+}
+
+function recoveryRelationColor(relation){
+  const key=String(relation||'').toUpperCase();
+  if(key==='COTRAVEL') return '#34d399';
+  if(key==='RESIDENCE') return '#60a5fa';
+  if(key==='SHARED_PLATE') return '#a78bfa';
+  return '#8b8b96';
+}
+
+function recoveryDrawArrow(context,from,to,color){
+  const angle=Math.atan2(to.y-from.y,to.x-from.x);
+  const x=from.x+(to.x-from.x)*.62;
+  const y=from.y+(to.y-from.y)*.62;
+  context.beginPath();
+  context.moveTo(x,y);
+  context.lineTo(x-7*Math.cos(angle-Math.PI/6),y-7*Math.sin(angle-Math.PI/6));
+  context.lineTo(x-7*Math.cos(angle+Math.PI/6),y-7*Math.sin(angle+Math.PI/6));
+  context.closePath();
+  context.fillStyle=color;
+  context.fill();
+}
+
+function recoveryEdgeStyle(edge){
+  const importance=typeof edge.importance==='number'
+    &&Number.isFinite(edge.importance)
+    ?Math.max(0,Math.min(1,edge.importance)):0;
+  return edge.emphasized
+    ?{alpha:0.45+0.5*importance,lineWidth:1.5+3*importance}
+    :{alpha:0.18+0.12*importance,lineWidth:0.85+0.65*importance};
+}
+
+function bindRecoveryCanvas(canvas,commands,state){
+  const view=canvas.ownerDocument&&canvas.ownerDocument.defaultView;
+  const context=canvas.getContext('2d');
+  if(!context) return function(){};
+  const pointers=new Map();
+  let lastPoint=null;
+  let lastPinchDistance=null;
+  let observer=null;
+  const positionById=new Map();
+
+  function draw(){
+    const rect=canvas.getBoundingClientRect();
+    const width=Math.max(1,Math.round(rect.width||canvas.clientWidth||640));
+    const height=Math.max(1,Math.round(rect.height||canvas.clientHeight||410));
+    const dpr=Math.max(1,Number(view&&view.devicePixelRatio)||1);
+    canvas.width=Math.round(width*dpr);
+    canvas.height=Math.round(height*dpr);
+    context.setTransform(dpr,0,0,dpr,0,0);
+    context.clearRect(0,0,width,height);
+    const viewport={
+      width,
+      height,
+      padding:42,
+      scale:state.scale,
+      offsetX:state.offsetX,
+      offsetY:state.offsetY
+    };
+    positionById.clear();
+    for(const node of commands.nodes.concat(commands.provenanceNodes)){
+      positionById.set(node.id,graphPoint(node,viewport));
+    }
+    context.lineCap='round';
+    for(const edge of commands.edges){
+      const from=positionById.get(edge.u);
+      const to=positionById.get(edge.v);
+      const color=recoveryRelationColor(edge.relation);
+      const style=recoveryEdgeStyle(edge);
+      context.beginPath();
+      context.setLineDash([]);
+      context.moveTo(from.x,from.y);
+      context.lineTo(to.x,to.y);
+      context.strokeStyle=color;
+      context.globalAlpha=style.alpha;
+      context.lineWidth=style.lineWidth;
+      context.stroke();
+      if(commands.mode==='flow'&&edge.emphasized){
+        context.globalAlpha=.95;
+        recoveryDrawArrow(context,from,to,color);
+      }
+    }
+    for(const edge of commands.provenanceEdges){
+      const from=positionById.get(edge.u);
+      const to=positionById.get(edge.v);
+      context.beginPath();
+      context.setLineDash([6,5]);
+      context.moveTo(from.x,from.y);
+      context.lineTo(to.x,to.y);
+      context.strokeStyle='#f59e0b';
+      context.globalAlpha=.9;
+      context.lineWidth=1.5;
+      context.stroke();
+      context.setLineDash([]);
+      context.fillStyle='#fbbf24';
+      context.font='9px JetBrains Mono, monospace';
+      context.fillText(edge.label,(from.x+to.x)/2+5,(from.y+to.y)/2-5);
+    }
+    context.globalAlpha=1;
+    for(const node of commands.provenanceNodes){
+      const point=positionById.get(node.id);
+      context.beginPath();
+      context.arc(point.x,point.y,5,0,Math.PI*2);
+      context.fillStyle='#f59e0b';
+      context.fill();
+    }
+    const emphasizedNodes=new Set(commands.edges.filter(edge=>edge.emphasized)
+      .flatMap(edge=>[edge.u,edge.v]));
+    for(const node of commands.nodes){
+      const point=positionById.get(node.id);
+      const radius=node.target?8:(node.pooledMember?6:4.5);
+      context.beginPath();
+      context.arc(point.x,point.y,radius,0,Math.PI*2);
+      context.fillStyle=node.target?'#34d399':(node.caughtBeforeSnapshot?'#60a5fa':'#8b8b96');
+      context.fill();
+      if(node.matched){
+        context.beginPath();
+        context.arc(point.x,point.y,radius+4,0,Math.PI*2);
+        context.strokeStyle='#fbbf24';
+        context.lineWidth=2;
+        context.stroke();
+      }
+      const showLabel=state.labelDensity==='all'
+        ||(state.labelDensity==='auto'
+          &&(node.target||node.matched||emphasizedNodes.has(node.id)));
+      if(showLabel){
+        context.fillStyle='#e8e8ec';
+        context.font='10px JetBrains Mono, monospace';
+        context.fillText(recoveryVisibleText(node.id),point.x+radius+4,point.y+3);
+      }
+    }
+    context.globalAlpha=1;
+  }
+
+  function pointerDistance(){
+    const values=Array.from(pointers.values());
+    if(values.length<2) return null;
+    return Math.hypot(values[0].x-values[1].x,values[0].y-values[1].y);
+  }
+  function onPointerDown(event){
+    pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+    if(canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
+    lastPoint={x:event.clientX,y:event.clientY};
+    lastPinchDistance=pointerDistance();
+  }
+  function onPointerMove(event){
+    if(!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+    const distance=pointerDistance();
+    if(distance!==null&&lastPinchDistance!==null&&lastPinchDistance>0){
+      state.scale=Math.max(.5,Math.min(4,state.scale*distance/lastPinchDistance));
+      lastPinchDistance=distance;
+    }else if(pointers.size===1&&lastPoint){
+      state.offsetX+=event.clientX-lastPoint.x;
+      state.offsetY+=event.clientY-lastPoint.y;
+      lastPoint={x:event.clientX,y:event.clientY};
+    }
+    draw();
+  }
+  function onPointerUp(event){
+    pointers.delete(event.pointerId);
+    lastPoint=null;
+    lastPinchDistance=pointerDistance();
+  }
+  function onWheel(event){
+    event.preventDefault();
+    state.scale=Math.max(.5,Math.min(4,state.scale*(event.deltaY<0?1.12:.89)));
+    draw();
+  }
+  canvas.addEventListener('pointerdown',onPointerDown);
+  canvas.addEventListener('pointermove',onPointerMove);
+  canvas.addEventListener('pointerup',onPointerUp);
+  canvas.addEventListener('pointercancel',onPointerUp);
+  canvas.addEventListener('wheel',onWheel,{passive:false});
+  const ResizeObserver=view&&view.ResizeObserver;
+  if(ResizeObserver){
+    observer=new ResizeObserver(draw);
+    observer.observe(canvas);
+  }else if(view){
+    view.addEventListener('resize',draw);
+  }
+  draw();
+  return function(){
+    canvas.removeEventListener('pointerdown',onPointerDown);
+    canvas.removeEventListener('pointermove',onPointerMove);
+    canvas.removeEventListener('pointerup',onPointerUp);
+    canvas.removeEventListener('pointercancel',onPointerUp);
+    canvas.removeEventListener('wheel',onWheel);
+    if(observer) observer.disconnect();
+    if(!observer&&view) view.removeEventListener('resize',draw);
+  };
+}
+
+function recoveryValidFactor(factor){
+  const counterfactual=recoveryIsRecord(factor)&&factor.counterfactual;
+  return recoveryIsRecord(factor)&&recoveryNonBlankString(factor.factor_id)
+    &&recoveryNonBlankString(factor.label)
+    &&['stable','unstable','countervailing'].includes(factor.stability)
+    &&recoveryIsRecord(counterfactual)
+    &&recoverySafeInteger(counterfactual.original_hybrid_rank,false)
+    &&counterfactual.original_hybrid_rank>0
+    &&recoverySafeInteger(counterfactual.ablated_hybrid_rank,false)
+    &&counterfactual.ablated_hybrid_rank>0;
+}
+
+function recoverySigned(value){
+  return (value>0?'+':'')+String(value);
+}
+
+const recoveryMounts=new WeakMap();
+
+function mountV9RecoveryExplainer(root,artifact,tools){
+  if(!root||!root.ownerDocument||!root.classList) return;
+  const prior=recoveryMounts.get(root);
+  if(prior) prior();
+  const doc=root.ownerDocument;
+  const helpers=recoveryIsRecord(tools)?tools:{};
+  const fmt=typeof helpers.fmt==='function'?helpers.fmt:
+    value=>Number(value||0).toLocaleString();
+  const view=buildRecoveryEvidenceViewModel(artifact);
+  const state={
+    caseId:null,
+    sortBy:'hybrid_rank_uplift',
+    stableStatus:'all',
+    relationshipCategory:'all',
+    mode:'flow',
+    stageId:'first_hop',
+    selectedFactorId:null,
+    query:'',
+    scale:1,
+    offsetX:0,
+    offsetY:0,
+    labelDensity:'auto'
+  };
+  let canvasCleanup=function(){};
+  let pendingCanvas=null;
+  root.classList.add('v9-recovery');
+
+  function addHeader(fragment){
+    const header=recoveryElement(doc,'header','v9-recovery-header');
+    const copy=recoveryElement(doc,'div');
+    copy.appendChild(recoveryElement(doc,'div','v9-recovery-eyebrow','Seed-0 evidence audit'));
+    const title=recoveryElement(doc,'h3','v9-recovery-title','Why Hybrid recovered more cases');
+    title.id='v9-recovery-title';
+    copy.appendChild(title);
+    copy.appendChild(recoveryElement(
+      doc,'p','v9-recovery-intro',
+      'Inspect measured rank changes, complete message communities, and validated narrative evidence for Hybrid-only recoveries.'
+    ));
+    header.appendChild(copy);
+    const scope=recoveryElement(doc,'div','v9-recovery-scope');
+    scope.textContent='Single-seed observability \u00b7 GraphSAGE seed 0';
+    scope.appendChild(recoveryElement(
+      doc,'small','',
+      'Main results remain three-seed'
+    ));
+    header.appendChild(scope);
+    fragment.appendChild(header);
+  }
+
+  function addSummary(fragment){
+    if(view.summary.unavailable){
+      fragment.appendChild(recoveryElement(
+        doc,'div','v9-recovery-status',
+        'Overlap unavailable; no values are inferred.'
+      ));
+    }else{
+      const labels=[
+        ['baseline_recovered','Baseline recovered'],
+        ['recovered_by_both','Recovered by both'],
+        ['hybrid_only_recovered','Hybrid-only recovered'],
+        ['baseline_only_recovered','Baseline-only recovered'],
+        ['hybrid_total','Hybrid total'],
+        ['net_gain','Net gain']
+      ];
+      const grid=recoveryElement(doc,'div','v9-recovery-summary');
+      grid.setAttribute('aria-label','Seed-0 recovery overlap summary');
+      for(const pair of labels){
+        const card=recoveryElement(doc,'article','v9-recovery-stat');
+        if(pair[0]==='baseline_only_recovered'&&!view.summary.containment){
+          card.classList.add('is-warning');
+        }
+        card.appendChild(recoveryElement(doc,'b','',fmt(view.summary.values[pair[0]])));
+        card.appendChild(recoveryElement(doc,'span','',pair[1]));
+        grid.appendChild(card);
+      }
+      fragment.appendChild(grid);
+      fragment.appendChild(recoveryElement(
+        doc,'div',view.summary.containment
+          ?'v9-recovery-containment':'v9-recovery-warning',
+        view.summary.containment
+          ?'Observed containment: every baseline recovery also appears in Hybrid for this seed-0 run.'
+          :view.summary.warning
+      ));
+    }
+    const coverage=view.coverage;
+    const validCoverage=recoveryIsRecord(coverage)
+      &&['hybrid_only_count','explanation_limit','attempted_count','explained_count','failed_count']
+        .every(key=>recoverySafeInteger(coverage[key],false));
+    const coverageRow=recoveryElement(doc,'div','v9-recovery-coverage');
+    coverageRow.appendChild(recoveryElement(
+      doc,'span','',validCoverage
+        ?fmt(coverage.explained_count)+' of '+fmt(coverage.hybrid_only_count)
+          +' Hybrid-only cases explained; '+fmt(coverage.attempted_count)
+          +' attempted under limit '+fmt(coverage.explanation_limit)+'.'
+        :'Coverage unavailable; artifact fields failed validation.'
+    ));
+    coverageRow.appendChild(recoveryElement(
+      doc,'span','',validCoverage
+        ?fmt(coverage.failed_count)+' explanation attempts failed validation.'
+        :'Failure count unavailable.'
+    ));
+    fragment.appendChild(coverageRow);
+  }
+
+  function renderCaseRail(workspace,filtered){
+    const rail=recoveryElement(doc,'aside','v9-recovery-rail');
+    rail.setAttribute('aria-label','Recovery case filters and cases');
+    const filters=recoveryElement(doc,'div','v9-recovery-filter-grid');
+    filters.appendChild(recoverySelect(doc,'Sort','sort',[
+      {value:'hybrid_rank_uplift',label:'Hybrid rank uplift'},
+      {value:'gnn_percentile_uplift',label:'GNN percentile uplift'}
+    ],state.sortBy));
+    filters.appendChild(recoverySelect(doc,'Stable factor','stable',[
+      {value:'all',label:'All statuses'},
+      {value:'stable',label:'Stable'},
+      {value:'unstable',label:'Unstable'},
+      {value:'not_explained',label:'Not explained'}
+    ],state.stableStatus));
+    const relations=Array.from(new Set(view.cases.flatMap(item=>
+      item.relationship_categories))).sort();
+    filters.appendChild(recoverySelect(doc,'Relationship','relation',[
+      {value:'all',label:'All relationships'},
+      ...relations.map(value=>({value,label:recoveryVisibleText(value)}))
+    ],state.relationshipCategory));
+    rail.appendChild(filters);
+    rail.appendChild(recoveryElement(
+      doc,'div','v9-recovery-case-count',
+      fmt(filtered.length)+' of '+fmt(view.cases.length)+' cases'
+    ));
+    const list=recoveryElement(doc,'div','v9-recovery-case-list');
+    for(const item of filtered){
+      const button=recoverySetData(
+        recoveryElement(doc,'button','v9-recovery-case'),'case',item.case_id
+      );
+      button.type='button';
+      button.setAttribute('aria-current',String(item.case_id===state.caseId));
+      button.setAttribute('aria-label','Inspect recovery case '+item.person_id);
+      const top=recoveryElement(doc,'div','v9-recovery-case-top');
+      top.appendChild(recoveryElement(doc,'span','',item.person_id));
+      top.appendChild(recoveryElement(
+        doc,'span','',recoverySigned(item.hybrid_rank_uplift)+' ranks'
+      ));
+      button.appendChild(top);
+      const ranks=recoveryElement(doc,'div','v9-recovery-case-ranks');
+      ranks.appendChild(recoveryElement(doc,'span','','B '+fmt(item.baseline_rank)));
+      ranks.appendChild(recoveryElement(doc,'span','','G '+fmt(item.seed0_gnn_rank)));
+      ranks.appendChild(recoveryElement(doc,'span','','H '+fmt(item.seed0_hybrid_rank)));
+      button.appendChild(ranks);
+      button.appendChild(recoveryElement(
+        doc,'div','v9-recovery-case-meta',
+        item.stable_factor_status+' / '+item.relationship_categories.join(' / ')
+      ));
+      list.appendChild(button);
+    }
+    rail.appendChild(list);
+    workspace.appendChild(rail);
+  }
+
+  function renderNarrative(detail,explanation){
+    const panel=recoveryElement(doc,'section','v9-recovery-narrative');
+    panel.appendChild(recoveryElement(doc,'h5','','Grounded narrative'));
+    const narrative=validateRecoveryNarrative(explanation.llm_narrative);
+    if(!narrative.visible){
+      panel.appendChild(recoveryElement(
+        doc,'p','',
+        'Validated narrative unavailable. Measured factors remain authoritative.'
+      ));
+    }else{
+      panel.appendChild(recoveryElement(
+        doc,'p','',narrative.source==='llm'
+          ?'Validated local Gemma: '+narrative.model
+          :'Deterministic evidence summary. Local Gemma output was unavailable or rejected.'
+      ));
+      panel.appendChild(recoveryElement(doc,'p','',narrative.summary));
+      recoveryAppendSources(doc,panel,narrative.summarySourceRefs);
+      for(const claim of narrative.claims){
+        panel.appendChild(recoveryElement(doc,'p','',claim.text));
+        recoveryAppendSources(doc,panel,claim.source_refs);
+      }
+    }
+    detail.appendChild(panel);
+  }
+
+  function renderFactors(column,explanation){
+    const panel=recoveryElement(doc,'section','v9-recovery-panel');
+    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
+    head.appendChild(recoveryElement(doc,'h5','','Measured factor effects'));
+    head.appendChild(recoveryElement(
+      doc,'p','',
+      'Signed effect is ablated rank minus original rank. Positive values mean removal worsened rank.'
+    ));
+    panel.appendChild(head);
+    const factors=Array.isArray(explanation.factors)
+      ?explanation.factors.filter(recoveryValidFactor).slice():[];
+    factors.sort((left,right)=>
+      Number(right.stability==='stable')-Number(left.stability==='stable')
+      ||Math.abs(right.counterfactual.ablated_hybrid_rank-right.counterfactual.original_hybrid_rank)
+        -Math.abs(left.counterfactual.ablated_hybrid_rank-left.counterfactual.original_hybrid_rank)
+      ||recoveryCompareId(left.factor_id,right.factor_id));
+    if(!factors.some(factor=>factor.stability==='stable')){
+      panel.appendChild(recoveryElement(
+        doc,'div','v9-recovery-status',
+        'No stable factor found; inspect measured effects below.'
+      ));
+    }
+    if(!factors.length){
+      panel.appendChild(recoveryElement(
+        doc,'div','v9-recovery-status',
+        'No measured factors are available for this explanation.'
+      ));
+    }else{
+      const list=recoveryElement(doc,'div','v9-recovery-factor-list');
+      for(const factor of factors){
+        const button=recoverySetData(
+          recoveryElement(doc,'button','v9-recovery-factor'),
+          'factor',factor.factor_id
+        );
+        button.type='button';
+        button.setAttribute('aria-pressed',String(
+          state.selectedFactorId===factor.factor_id
+        ));
+        button.setAttribute('aria-label','Show provenance for '+recoveryVisibleText(factor.label));
+        button.appendChild(recoveryElement(
+          doc,'strong','',factor.label+' / '+factor.stability
+        ));
+        const effect=factor.counterfactual.ablated_hybrid_rank
+          -factor.counterfactual.original_hybrid_rank;
+        button.appendChild(recoveryElement(
+          doc,'span','',
+          recoverySigned(effect)+' ranks / Ablated minus original'
+        ));
+        list.appendChild(button);
+      }
+      panel.appendChild(list);
+    }
+    column.appendChild(panel);
+  }
+
+  function graphButton(label,action,value,pressed,ariaLabel){
+    const button=recoverySetData(
+      recoveryElement(doc,'button','v9-recovery-button',label),action,value
+    );
+    button.type='button';
+    if(pressed!==null) button.setAttribute('aria-pressed',String(pressed));
+    button.setAttribute('aria-label',ariaLabel||label);
+    return button;
+  }
+
+  function renderGraph(column,explanation){
+    const panel=recoveryElement(doc,'section','v9-recovery-panel');
+    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
+    head.appendChild(recoveryElement(doc,'h5','','Complete as-of message community'));
+    head.appendChild(recoveryElement(
+      doc,'p','',
+      'Base nodes and edges remain visible in every mode. Flow changes emphasis only.'
+    ));
+    panel.appendChild(head);
+    const toolbar=recoveryElement(doc,'div','v9-recovery-toolbar');
+    toolbar.setAttribute('role','toolbar');
+    toolbar.setAttribute('aria-label','Community graph controls');
+    const modes=recoveryElement(doc,'div','v9-recovery-toolgroup');
+    modes.appendChild(graphButton('All','mode','all',state.mode==='all','Show all relationships'));
+    modes.appendChild(graphButton('Flow','mode','flow',state.mode==='flow','Show influence flow emphasis'));
+    toolbar.appendChild(modes);
+    const stages=recoveryElement(doc,'div','v9-recovery-toolgroup');
+    const stageLabels={
+      first_hop:'First hop',
+      second_hop:'Second hop',
+      component_pool:'Component pool',
+      rank_fusion:'Rank fusion'
+    };
+    for(const stageId of Object.keys(stageLabels)){
+      stages.appendChild(graphButton(
+        stageLabels[stageId],'stage',stageId,state.stageId===stageId,
+        'Show '+stageLabels[stageId].toLowerCase()+' stage'
+      ));
+    }
+    toolbar.appendChild(stages);
+    const zoom=recoveryElement(doc,'div','v9-recovery-toolgroup');
+    zoom.appendChild(graphButton('+','zoom','in',null,'Zoom in'));
+    zoom.appendChild(graphButton('-','zoom','out',null,'Zoom out'));
+    zoom.appendChild(graphButton('Reset','zoom','reset',null,'Reset zoom'));
+    zoom.appendChild(graphButton('Fit','zoom','fit',null,'Fit to community'));
+    toolbar.appendChild(zoom);
+    const search=recoveryElement(doc,'input','v9-recovery-search');
+    search.type='search';
+    search.value=state.query;
+    search.placeholder='Find node';
+    search.dataset.recoveryInput='search';
+    search.setAttribute('aria-label','Search node identifiers');
+    toolbar.appendChild(search);
+    const density=recoveryElement(doc,'select','v9-recovery-select');
+    density.dataset.recoveryChange='density';
+    density.setAttribute('aria-label','Node label density');
+    for(const pair of [['auto','Labels: auto'],['all','Labels: all'],['none','Labels: none']]){
+      const option=recoveryElement(doc,'option','',pair[1]);
+      option.value=pair[0];
+      density.appendChild(option);
+    }
+    density.value=state.labelDensity;
+    toolbar.appendChild(density);
+    panel.appendChild(toolbar);
+    const description=recoveryElement(
+      doc,'p','v9-recovery-canvas-note',
+      'Relation colors show observable context, not relation-specific GraphSAGE parameters. Dashed amber links are selected factor provenance outside the message community.'
+    );
+    description.id='v9-recovery-canvas-description';
+    panel.appendChild(description);
+    const commands=buildCommunityDrawCommands(explanation,{
+      mode:state.mode,
+      stageId:state.stageId,
+      selectedFactorId:state.selectedFactorId,
+      query:state.query
+    });
+    if(!commands.available){
+      panel.appendChild(recoveryElement(
+        doc,'div','v9-recovery-empty',
+        'Complete community unavailable. '+commands.reason+'.'
+      ));
+    }else{
+      const wrap=recoveryElement(doc,'div','v9-recovery-canvas-wrap');
+      const canvas=recoveryElement(doc,'canvas','v9-recovery-canvas');
+      canvas.tabIndex=0;
+      canvas.setAttribute('role','img');
+      canvas.setAttribute('aria-label','Interactive complete community for the selected seed-0 recovery case');
+      canvas.setAttribute('aria-describedby','v9-recovery-canvas-description');
+      canvas.textContent='Interactive community graph. Use the toolbar for keyboard controls.';
+      wrap.appendChild(canvas);
+      panel.appendChild(wrap);
+      pendingCanvas={canvas,commands};
+    }
+    column.appendChild(panel);
+  }
+
+  function renderDetail(workspace,selected){
+    const detail=recoveryElement(doc,'div','v9-recovery-detail');
+    if(!selected){
+      detail.appendChild(recoveryElement(
+        doc,'div','v9-recovery-empty','No cases match the current filters.'
+      ));
+      workspace.appendChild(detail);
+      return;
+    }
+    const header=recoveryElement(doc,'header','v9-recovery-case-header');
+    const identity=recoveryElement(doc,'div');
+    identity.appendChild(recoveryElement(doc,'h4','','Case '+selected.person_id));
+    identity.appendChild(recoveryElement(
+      doc,'p','',
+      'Event '+selected.event_id+' / scoring day '+selected.scoring_day
+        +' / Selected at 25 inspections/day.'
+    ));
+    header.appendChild(identity);
+    const ranks=recoveryElement(doc,'div','v9-recovery-ranks');
+    for(const item of [
+      ['Baseline',selected.baseline_rank],
+      ['GraphSAGE seed 0',selected.seed0_gnn_rank],
+      ['Hybrid seed 0',selected.seed0_hybrid_rank]
+    ]){
+      const rank=recoveryElement(doc,'div','v9-recovery-rank');
+      rank.appendChild(recoveryElement(doc,'b','',fmt(item[1])));
+      rank.appendChild(recoveryElement(doc,'span','',item[0]+' rank'));
+      ranks.appendChild(rank);
+    }
+    header.appendChild(ranks);
+    detail.appendChild(header);
+    const explanation=view.explanations.get(selected.case_id);
+    if(!explanation){
+      detail.appendChild(recoveryElement(
+        doc,'div','v9-recovery-empty',
+        'Explanation attempt failed or was not selected.'
+      ));
+      workspace.appendChild(detail);
+      return;
+    }
+    const boundaryView=validateRecoveryEvidenceBoundary(
+      explanation,selected.scoring_day
+    );
+    if(!boundaryView.available){
+      detail.appendChild(recoveryElement(
+        doc,'div','v9-recovery-empty',
+        'Strict as-of evidence boundary unavailable. Evidence details are not rendered.'
+      ));
+      workspace.appendChild(detail);
+      return;
+    }
+    detail.appendChild(recoveryElement(
+      doc,'div','v9-recovery-status',
+      'Strict as-of evidence boundary: snapshot '+boundaryView.snapshot
+        +'. Edges: '+boundaryView.edgeRule+'. Caught labels: '
+        +boundaryView.caughtRule+'.'
+    ));
+    const evidence=recoveryElement(doc,'div','v9-recovery-evidence-grid');
+    const left=recoveryElement(doc,'div');
+    const right=recoveryElement(doc,'div');
+    renderFactors(left,explanation);
+    renderNarrative(left,explanation);
+    renderGraph(right,explanation);
+    evidence.appendChild(left);
+    evidence.appendChild(right);
+    detail.appendChild(evidence);
+    workspace.appendChild(detail);
+  }
+
+  function render(){
+    canvasCleanup();
+    canvasCleanup=function(){};
+    pendingCanvas=null;
+    const fragment=doc.createDocumentFragment();
+    addHeader(fragment);
+    if(!view.available){
+      fragment.appendChild(recoveryElement(
+        doc,'div','v9-recovery-empty',
+        'Case evidence unavailable. '+view.reason+'.'
+      ));
+      root.replaceChildren(fragment);
+      return;
+    }
+    addSummary(fragment);
+    if(view.cases.length===0){
+      fragment.appendChild(recoveryElement(
+        doc,'div','v9-recovery-empty',
+        'No Hybrid-only recoveries in this seed-0 run.'
+      ));
+      root.replaceChildren(fragment);
+      return;
+    }
+    const filtered=filterAndSortRecoveryCases(view.cases,{
+      sortBy:state.sortBy,
+      stableStatus:state.stableStatus,
+      relationshipCategory:state.relationshipCategory
+    });
+    if(!filtered.some(item=>item.case_id===state.caseId)){
+      state.caseId=filtered.length?filtered[0].case_id:null;
+      state.selectedFactorId=null;
+      state.scale=1;
+      state.offsetX=0;
+      state.offsetY=0;
+    }
+    const selected=filtered.find(item=>item.case_id===state.caseId)||null;
+    const workspace=recoveryElement(doc,'div','v9-recovery-workspace');
+    renderCaseRail(workspace,filtered);
+    renderDetail(workspace,selected);
+    fragment.appendChild(workspace);
+    root.replaceChildren(fragment);
+    if(pendingCanvas){
+      canvasCleanup=bindRecoveryCanvas(
+        pendingCanvas.canvas,pendingCanvas.commands,state
+      );
+    }
+  }
+
+  function onClick(event){
+    const target=event.target;
+    if(!target||typeof target.closest!=='function') return;
+    const control=target.closest('[data-recovery-action]');
+    if(!control||!root.contains(control)) return;
+    const action=control.dataset.recoveryAction;
+    const value=control.dataset.recoveryValue;
+    if(action==='case'){
+      state.caseId=value;
+      state.selectedFactorId=null;
+      state.scale=1;
+      state.offsetX=0;
+      state.offsetY=0;
+    }else if(action==='factor'){
+      state.selectedFactorId=state.selectedFactorId===value?null:value;
+    }else if(action==='mode'){
+      state.mode=value;
+    }else if(action==='stage'){
+      state.stageId=value;
+    }else if(action==='zoom'){
+      if(value==='in') state.scale=Math.min(4,state.scale*1.2);
+      if(value==='out') state.scale=Math.max(.5,state.scale/1.2);
+      if(value==='reset'){
+        state.scale=1;
+        state.offsetX=0;
+        state.offsetY=0;
+      }
+      if(value==='fit'){
+        state.scale=1;
+        state.offsetX=0;
+        state.offsetY=0;
+      }
+    }
+    render();
+    recoveryRestoreFocus(root,'recoveryAction',action,value);
+  }
+  function onChange(event){
+    const control=event.target;
+    if(!control||!control.dataset) return;
+    const action=control.dataset.recoveryChange;
+    if(action==='sort') state.sortBy=control.value;
+    if(action==='stable') state.stableStatus=control.value;
+    if(action==='relation') state.relationshipCategory=control.value;
+    if(action==='density') state.labelDensity=control.value;
+    if(action){
+      render();
+      recoveryRestoreFocus(root,'recoveryChange',action);
+    }
+  }
+  function onInput(event){
+    const control=event.target;
+    if(!control||!control.dataset||control.dataset.recoveryInput!=='search') return;
+    state.query=control.value;
+    render();
+    const replacement=root.querySelector('[data-recovery-input="search"]');
+    if(replacement){
+      replacement.focus();
+      replacement.setSelectionRange(state.query.length,state.query.length);
+    }
+  }
+  root.addEventListener('click',onClick);
+  root.addEventListener('change',onChange);
+  root.addEventListener('input',onInput);
+  const cleanup=function(){
+    canvasCleanup();
+    root.removeEventListener('click',onClick);
+    root.removeEventListener('change',onChange);
+    root.removeEventListener('input',onInput);
+    recoveryMounts.delete(root);
+  };
+  recoveryMounts.set(root,cleanup);
+  render();
 }
 """

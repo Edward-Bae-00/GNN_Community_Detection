@@ -213,7 +213,7 @@ def test_v9_ui_adds_independent_simulated_catch_contract():
     ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
-    assert "Simulated catches — first-time recoveries" in ui
+    assert "Simulated catches - first-time recoveries" in ui
     assert 'id="v9-simulated-catches"' in ui
     assert 'id="v9-simulated-k"' in ui
     assert 'id="v9-simulated-summary"' in ui
@@ -449,6 +449,77 @@ def test_v9_results_injection_contains_simulated_helper_before_renderer_use():
         template, "", V9_UI.V9_RESULTS_JS
     )
     assert injected.index(helper) < injected.index(renderer_use)
+
+
+def test_v9_results_mounts_recovery_explorer_in_the_approved_story_position():
+    js = V9_UI.V9_RESULTS_JS
+
+    assert 'href="#v9-case-evidence"' in js
+    assert 'id="v9-case-evidence"' in js
+    assert js.count('id="v9-case-evidence"') == 1
+    assert js.index('class="v9-story"') < js.index('id="v9-case-evidence"')
+    assert js.index('id="v9-case-evidence"') < js.index(
+        "Baseline vs Hybrid vs GNN"
+    )
+    assert "mountV9RecoveryExplainer(" in js
+    assert "DATA.v9RecoveryExplainer" in js
+    assert "DATA.explorer" not in js
+    assert "ground_truth_community" not in js
+    assert "community_propensity" not in js
+    assert "data-navigate-tab=\"explorer\"" not in js
+    assert "—" not in js
+    assert "–" not in js
+
+
+def test_recovery_assets_precede_renderer_that_mounts_them():
+    template = (
+        "<style>base</style><script>const Tabs={\n"
+        "explorer:{rendered:false,render(){}}\n};</script>"
+    )
+    recovery_js = "function mountV9RecoveryExplainer(){}"
+    recovery_css = ".v9-recovery{}"
+    renderer = (
+        "v9Results:{rendered:false,render(){"
+        "mountV9RecoveryExplainer();}},\n"
+    )
+
+    injected = BUILDER._inject_recovery_assets(
+        template, recovery_css, recovery_js
+    )
+    injected = BUILDER._inject_dashboard_tab_scripts(
+        injected, "", renderer
+    )
+
+    assert injected.index(recovery_js) < injected.index(renderer)
+    subprocess.run(
+        ["node", "--check", "-"],
+        input=injected.split("<script>", 1)[1].split("</script>", 1)[0],
+        text=True,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_recovery_mount_validation_requires_one_local_artifact_mount():
+    valid = (
+        '<a href="#v9-case-evidence">Evidence</a>'
+        '<section id="v9-case-evidence"></section>'
+        '<script>mountV9RecoveryExplainer(node,'
+        'DATA.v9RecoveryExplainer,helpers);</script>'
+    )
+
+    assert BUILDER._validate_recovery_explorer_mount(valid) == valid
+
+    for invalid in (
+        valid.replace('<section id="v9-case-evidence"></section>', ''),
+        valid.replace(
+            '<section id="v9-case-evidence"></section>',
+            '<section id="v9-case-evidence"></section>' * 2,
+        ),
+        valid.replace('DATA.v9RecoveryExplainer', 'DATA.explorer'),
+    ):
+        with pytest.raises(ValueError, match="recovery explorer mount"):
+            BUILDER._validate_recovery_explorer_mount(invalid)
 
 
 def _recovery_artifact():

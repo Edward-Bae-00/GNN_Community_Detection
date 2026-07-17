@@ -77,16 +77,115 @@ def _valid_recovery_artifact(*, baseline_only=0):
             {
                 "case_id": "case:p1",
                 "person_id": "p1",
+                "decision_trace": {
+                    "baseline_rank": 40,
+                    "seed0_gnn_rank": 3,
+                    "seed0_hybrid_rank": 8,
+                },
+                "factors": [
+                    {
+                        "factor_id": "factor:rel:1",
+                        "label": "COTRAVEL factor",
+                        "kind": "edge_source_set",
+                        "counterfactual": {
+                            "original_hybrid_rank": 8,
+                            "ablated_hybrid_rank": 14,
+                        },
+                        "restart": {
+                            "selection_frequency": 1.0,
+                            "iqr": 0.1,
+                            "source": "edge_mask",
+                        },
+                        "stability": "stable",
+                        "provenance_expansion_ids": [
+                            "provenance:factor:rel:1"
+                        ],
+                    }
+                ],
                 "community": {
                     "complete": True,
                     "nodes": [
-                        {"node_id": "p2", "x": 0.8, "y": 0.5},
-                        {"node_id": "p1", "x": 0.5, "y": 0.5},
+                        {
+                            "node_id": "p2",
+                            "x": 0.8,
+                            "y": 0.5,
+                            "target": False,
+                            "pooled_member": True,
+                        },
+                        {
+                            "node_id": "p1",
+                            "x": 0.5,
+                            "y": 0.5,
+                            "target": True,
+                            "pooled_member": True,
+                        },
                     ],
                     "edges": [
-                        {"edge_id": "edge-1", "u": "p1", "v": "p2"},
+                        {
+                            "edge_id": "edge-1",
+                            "u": "p1",
+                            "v": "p2",
+                            "edge_type": "COTRAVEL",
+                            "explainer_median": 0.8,
+                        },
                     ],
-                    "provenance_expansions": [],
+                    "provenance_expansions": [
+                        {
+                            "expansion_id": "provenance:factor:rel:1",
+                            "label": "outside message community",
+                            "nodes": [
+                                {
+                                    "node_id": "p2",
+                                    "x": 0.8,
+                                    "y": 0.5,
+                                },
+                                {
+                                    "node_id": "p3",
+                                    "x": 0.95,
+                                    "y": 0.2,
+                                },
+                            ],
+                            "edges": [
+                                {
+                                    "edge_id": "provenance-edge-1",
+                                    "u": "p2",
+                                    "v": "p3",
+                                    "edge_type": "SHARED_PLATE",
+                                }
+                            ],
+                        }
+                    ],
+                },
+                "flow_stages": [
+                    {
+                        "stage_id": "first_hop",
+                        "node_ids": ["p1", "p2"],
+                        "edge_ids": ["edge-1"],
+                        "emphasized_edge_ids": ["edge-1"],
+                    },
+                    {
+                        "stage_id": "second_hop",
+                        "node_ids": ["p1", "p2"],
+                        "edge_ids": ["edge-1"],
+                        "emphasized_edge_ids": [],
+                    },
+                    {
+                        "stage_id": "component_pool",
+                        "node_ids": ["p1", "p2"],
+                        "edge_ids": ["edge-1"],
+                        "emphasized_edge_ids": ["edge-1"],
+                    },
+                    {
+                        "stage_id": "rank_fusion",
+                        "node_ids": ["p1", "p2"],
+                        "edge_ids": ["edge-1"],
+                        "emphasized_edge_ids": [],
+                    },
+                ],
+                "evidence_boundary": {
+                    "snapshot": "2025-01-02T00:00:00Z",
+                    "edge_rule": "available_time < snapshot",
+                    "caught_rule": "label_available_time_utc < snapshot",
                 },
                 "llm_narrative": {
                     "source": "deterministic_template",
@@ -101,12 +200,27 @@ def _valid_recovery_artifact(*, baseline_only=0):
             {
                 "case_id": "case:p2",
                 "person_id": "p2",
+                "factors": [],
                 "community": {
                     "complete": True,
-                    "nodes": [{"node_id": "p2"}],
+                    "nodes": [{"node_id": "p2", "x": 0.5, "y": 0.5}],
                     "edges": [],
                     "provenance_expansions": [],
                 },
+                "flow_stages": [
+                    {
+                        "stage_id": stage_id,
+                        "node_ids": ["p2"],
+                        "edge_ids": [],
+                        "emphasized_edge_ids": [],
+                    }
+                    for stage_id in (
+                        "first_hop",
+                        "second_hop",
+                        "component_pool",
+                        "rank_fusion",
+                    )
+                ],
                 "llm_narrative": {
                     "source": "deterministic_template",
                     "model": None,
@@ -156,6 +270,22 @@ def _run_filter_with_input_snapshot(cases, options):
     return json.loads(completed.stdout)
 
 
+def _run_draw_with_input_snapshot(explanation, options):
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nconst input="
+        + json.dumps(explanation)
+        + ";const before=JSON.stringify(input);"
+        + "const result=buildCommunityDrawCommands(input,"
+        + json.dumps(options)
+        + ");process.stdout.write(JSON.stringify({result,input,before}));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    return json.loads(completed.stdout)
+
+
 def test_ui_javascript_is_valid_and_has_no_rendering_side_effects():
     subprocess.run(
         ["node", "--check", "-"],
@@ -166,6 +296,228 @@ def test_ui_javascript_is_valid_and_has_no_rendering_side_effects():
     )
     for forbidden in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document."):
         assert forbidden not in UI.V9_RECOVERY_EXPLAINER_JS
+
+
+def test_explorer_source_contract_covers_accessibility_lifecycle_and_states():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    css = UI.V9_RECOVERY_EXPLAINER_CSS
+
+    for token in (
+        "function mountV9RecoveryExplainer",
+        "function buildCommunityDrawCommands",
+        "function graphPoint",
+        "textContent",
+        "createElement",
+        "ResizeObserver",
+        "devicePixelRatio",
+        "disconnect",
+        "removeEventListener",
+        "pointerdown",
+        "pointermove",
+        "pointerup",
+        "wheel",
+        "aria-label",
+        "aria-describedby",
+        "Single-seed observability",
+        "GraphSAGE seed 0",
+        "Main results remain three-seed",
+        "No Hybrid-only recoveries in this seed-0 run.",
+        "Explanation attempt failed or was not selected.",
+        "No stable factor found; inspect measured effects below.",
+        "Complete community unavailable.",
+        "Local Gemma output was unavailable or rejected.",
+        "Overlap unavailable; no values are inferred.",
+        "explanation attempts failed validation.",
+        "outside message community",
+        "Relation colors show observable context",
+        "Selected at 25 inspections/day.",
+        "Strict as-of evidence boundary",
+        "scoring day",
+        "recoveryEdgeStyle",
+    ):
+        assert token in js
+
+    assert js.count("root.addEventListener('click'") == 1
+    assert "new WeakMap" in js
+    assert "innerHTML" not in js
+    assert "window.addEventListener('scroll'" not in js
+    assert "ground_truth_community" not in js
+    assert "community_propensity" not in js
+    assert "future_truth" not in js
+
+    for token in (
+        "touch-action: none",
+        ":focus-visible",
+        "@media(max-width:900px)",
+        "@media(max-width:700px)",
+        "var(--surface)",
+        "var(--accent)",
+        ".v9-recovery-stat.is-warning",
+        "overflow-x: auto",
+        "min-height: 44px",
+    ):
+        assert token in css
+
+    visible_sources = js + css
+    assert "—" not in visible_sources
+    assert "–" not in visible_sources
+
+
+def test_mount_without_a_root_is_a_safe_noop():
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nmountV9RecoveryExplainer(null,null,{});"
+        + "process.stdout.write('ok');"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert completed.stdout == "ok"
+
+
+def test_countervailing_factor_is_a_valid_signed_effect():
+    factor = copy.deepcopy(
+        _valid_recovery_artifact()["explanations"][0]["factors"][0]
+    )
+    factor["stability"] = "countervailing"
+    factor["counterfactual"] = {
+        "original_hybrid_rank": 8,
+        "ablated_hybrid_rank": 5,
+    }
+
+    assert _run_ui("recoveryValidFactor", factor) is True
+
+
+def test_edge_style_uses_restart_aggregated_influence_without_hiding_edges():
+    low = _run_ui(
+        "recoveryEdgeStyle", {"importance": 0.0, "emphasized": True}
+    )
+    high = _run_ui(
+        "recoveryEdgeStyle", {"importance": 1.0, "emphasized": True}
+    )
+    background = _run_ui(
+        "recoveryEdgeStyle", {"importance": 0.0, "emphasized": False}
+    )
+
+    assert low == {"alpha": 0.45, "lineWidth": 1.5}
+    assert high == {"alpha": 0.95, "lineWidth": 4.5}
+    assert background == {"alpha": 0.18, "lineWidth": 0.85}
+
+
+def test_warning_card_and_reset_transform_contract_are_explicit():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    reset_branch = js.split("if(value==='reset')", 1)[1].split(
+        "if(value==='fit')", 1
+    )[0]
+
+    assert "baseline_only_recovered" in js
+    assert "is-warning" in js
+    assert "state.scale=1" in reset_branch
+    assert "state.offsetX=0" in reset_branch
+    assert "state.offsetY=0" in reset_branch
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda explanation: explanation.pop("evidence_boundary"),
+        lambda explanation: explanation["evidence_boundary"].update(
+            {"snapshot": "2025-01-03T00:00:00Z"}
+        ),
+        lambda explanation: explanation["evidence_boundary"].update(
+            {"edge_rule": "available_time <= snapshot"}
+        ),
+        lambda explanation: explanation["evidence_boundary"].update(
+            {"caught_rule": "label_available_time_utc <= snapshot"}
+        ),
+    ],
+    ids=["missing", "wrong-snapshot", "bad-edge-rule", "bad-caught-rule"],
+)
+def test_strict_as_of_boundary_validation_fails_closed(mutate):
+    explanation = _valid_recovery_artifact()["explanations"][0]
+    mutate(explanation)
+
+    assert _run_ui(
+        "validateRecoveryEvidenceBoundary",
+        explanation,
+        "2025-01-02T00:00:00Z",
+    ) == {"available": False, "reason": "invalid-evidence-boundary"}
+
+
+def test_valid_strict_as_of_boundary_preserves_only_display_fields():
+    explanation = _valid_recovery_artifact()["explanations"][0]
+
+    assert _run_ui(
+        "validateRecoveryEvidenceBoundary",
+        explanation,
+        "2025-01-02T00:00:00Z",
+    ) == {
+        "available": True,
+        "snapshot": "2025-01-02T00:00:00Z",
+        "edgeRule": "available_time < snapshot",
+        "caughtRule": "label_available_time_utc < snapshot",
+    }
+
+
+def test_detail_stops_before_evidence_renderers_when_boundary_is_invalid():
+    detail_source = UI.V9_RECOVERY_EXPLAINER_JS.split(
+        "function renderDetail", 1
+    )[1].split("function render(){", 1)[0]
+
+    validation_index = detail_source.index(
+        "validateRecoveryEvidenceBoundary"
+    )
+    stop_index = detail_source.index("if(!boundaryView.available)")
+    factors_index = detail_source.index("renderFactors")
+    graph_index = detail_source.index("renderGraph")
+
+    assert validation_index < stop_index < factors_index < graph_index
+    invalid_branch = detail_source.split(
+        "if(!boundaryView.available)", 1
+    )[1].split("const evidence=", 1)[0]
+    assert "return;" in invalid_branch
+
+
+def test_focus_restoration_selects_the_exact_replacement_control():
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nconst focused=[];"
+        + "const other={dataset:{recoveryAction:'zoom',recoveryValue:'out'},"
+        + "focus(){focused.push('other');}};"
+        + "const target={dataset:{recoveryAction:'zoom',recoveryValue:'in'},"
+        + "focus(){focused.push('target');}};"
+        + "const root={querySelectorAll(){return [other,target];}};"
+        + "recoveryRestoreFocus(root,'recoveryAction','zoom','in');"
+        + "process.stdout.write(JSON.stringify(focused));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == ["target"]
+
+
+def test_delegated_click_and_change_restore_focus_after_render():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    click_source = js.split("function onClick", 1)[1].split(
+        "function onChange", 1
+    )[0]
+    change_source = js.split("function onChange", 1)[1].split(
+        "function onInput", 1
+    )[0]
+
+    assert click_source.index("render();") < click_source.index(
+        "recoveryRestoreFocus(root,'recoveryAction',action,value)"
+    )
+    assert change_source.index("render();") < change_source.index(
+        "recoveryRestoreFocus(root,'recoveryChange',action)"
+    )
+
+
+def test_essential_explorer_labels_use_the_contrast_safe_text_token():
+    assert "var(--text3)" not in UI.V9_RECOVERY_EXPLAINER_CSS
+    assert UI.V9_RECOVERY_EXPLAINER_CSS.count("var(--text2)") >= 12
 
 
 def test_build_recovery_view_model_accepts_exact_policy_and_overlap_algebra():
@@ -560,3 +912,153 @@ def test_community_view_rejects_invalid_mode_or_stage_without_throwing():
         explanation,
         {"mode": "flow", "stageId": "future_truth"},
     ) == {"available": False, "reason": "invalid-view-options"}
+
+
+@pytest.mark.parametrize(
+    ("mode", "stage_id", "expected_emphasis"),
+    [
+        ("all", "first_hop", ["edge-1"]),
+        ("flow", "first_hop", ["edge-1"]),
+        ("flow", "second_hop", []),
+        ("flow", "component_pool", ["edge-1"]),
+        ("flow", "rank_fusion", []),
+    ],
+)
+def test_draw_commands_preserve_base_membership_and_only_change_emphasis(
+    mode, stage_id, expected_emphasis
+):
+    explanation = _valid_recovery_artifact()["explanations"][0]
+    snapshot = _run_draw_with_input_snapshot(
+        explanation,
+        {
+            "mode": mode,
+            "stageId": stage_id,
+            "selectedFactorId": None,
+            "query": "p1",
+        },
+    )
+    result = snapshot["result"]
+
+    assert result["available"] is True
+    assert [node["id"] for node in result["nodes"]] == ["p1", "p2"]
+    assert [edge["id"] for edge in result["edges"]] == ["edge-1"]
+    assert [
+        edge["id"] for edge in result["edges"] if edge["emphasized"]
+    ] == expected_emphasis
+    assert result["provenanceNodes"] == []
+    assert result["provenanceEdges"] == []
+    assert next(node for node in result["nodes"] if node["id"] == "p1")[
+        "matched"
+    ] is True
+    assert snapshot["input"] == explanation
+    assert json.loads(snapshot["before"]) == explanation
+
+
+def test_selected_factor_adds_only_its_labeled_dashed_provenance():
+    explanation = _valid_recovery_artifact()["explanations"][0]
+
+    result = _run_ui(
+        "buildCommunityDrawCommands",
+        explanation,
+        {
+            "mode": "flow",
+            "stageId": "first_hop",
+            "selectedFactorId": "factor:rel:1",
+            "query": "",
+        },
+    )
+
+    assert result["available"] is True
+    assert [node["id"] for node in result["nodes"]] == ["p1", "p2"]
+    assert [node["id"] for node in result["provenanceNodes"]] == ["p3"]
+    assert result["provenanceEdges"] == [
+        {
+            "id": "provenance-edge-1",
+            "u": "p2",
+            "v": "p3",
+            "relation": "SHARED_PLATE",
+            "label": "outside message community",
+            "dashed": True,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [
+        (
+            lambda explanation: explanation["community"]["nodes"][0].update(
+                {"x": None}
+            ),
+            "invalid-community-coordinates",
+        ),
+        (
+            lambda explanation: explanation["community"]["nodes"][0].update(
+                {"y": 1.1}
+            ),
+            "invalid-community-coordinates",
+        ),
+        (
+            lambda explanation: explanation["flow_stages"][0].update(
+                {"edge_ids": ["missing"]}
+            ),
+            "invalid-flow-stages",
+        ),
+        (
+            lambda explanation: explanation["community"]
+            ["provenance_expansions"][0]["edges"][0].update(
+                {"v": "missing"}
+            ),
+            "invalid-provenance-expansion",
+        ),
+        (
+            lambda explanation: explanation["community"]
+            ["provenance_expansions"][0]["nodes"][1].update(
+                {"x": float("nan")}
+            ),
+            "invalid-provenance-expansion",
+        ),
+    ],
+    ids=[
+        "missing-coordinate",
+        "coordinate-out-of-range",
+        "stage-membership-diverges",
+        "provenance-endpoint-missing",
+        "provenance-coordinate-nonfinite",
+    ],
+)
+def test_draw_commands_fail_closed_on_invalid_graph_data(mutate, reason):
+    explanation = _valid_recovery_artifact()["explanations"][0]
+    mutate(explanation)
+
+    result = _run_ui(
+        "buildCommunityDrawCommands",
+        explanation,
+        {
+            "mode": "flow",
+            "stageId": "first_hop",
+            "selectedFactorId": "factor:rel:1",
+            "query": "",
+        },
+    )
+
+    assert result == {"available": False, "reason": reason}
+
+
+def test_graph_point_is_deterministic_and_does_not_mutate_inputs():
+    point = {"x": 0.25, "y": 0.75}
+    viewport = {
+        "width": 100,
+        "height": 50,
+        "padding": 10,
+        "scale": 2,
+        "offsetX": 3,
+        "offsetY": -2,
+    }
+    original = copy.deepcopy([point, viewport])
+
+    first = _run_ui("graphPoint", point, viewport)
+    second = _run_ui("graphPoint", point, viewport)
+
+    assert first == second == {"x": 13, "y": 38}
+    assert [point, viewport] == original
