@@ -2223,6 +2223,98 @@ def test_compose_case_explanation_collapses_member_masks_and_proves_parity():
     json.dumps(explanation, allow_nan=False, sort_keys=True)
 
 
+def test_compose_case_explanation_rejects_oversized_component_before_work(
+    monkeypatch,
+):
+    component_size = 17
+    node_ids = ["target"] + [
+        f"poolmate-{index:02d}" for index in range(1, component_size)
+    ]
+    edges = pd.DataFrame(
+        {
+            "source_row_id": [
+                f"cot-{index:02d}" for index in range(1, component_size)
+            ],
+            "canonical_pair_group_id": [
+                f"g-cot-{index:02d}" for index in range(1, component_size)
+            ],
+            "u": ["target"] * (component_size - 1),
+            "v": node_ids[1:],
+            "avail_time": [
+                SCORING_DAY - pd.Timedelta(hours=1)
+            ] * (component_size - 1),
+            "rel": [0] * (component_size - 1),
+            "edge_type": ["COTRAVEL"] * (component_size - 1),
+        }
+    )
+    engine = se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=edges,
+        node_ids=node_ids,
+        node_feat={person_id: np.array([1.0]) for person_id in node_ids},
+        caught_time={},
+        num_rel=4,
+    )
+    probability = float(
+        engine.snapshot(SCORING_DAY).probabilities[
+            engine.person_index["target"]
+        ]
+    )
+    reference = _counterfactual_reference(target_probability=probability)
+    engine.bind_rank_reference(reference, _counterfactual_row_bindings())
+    trace = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        daily_budget=25,
+    )
+    case = HybridOnlyCase(
+        person_id="target",
+        anchor=RecoveryAnchor(
+            person_id="target",
+            event_id="target-a",
+            row_index=0,
+            scoring_day=SCORING_DAY,
+            inspected_rank=trace["seed0_hybrid_rank"],
+        ),
+        baseline_rank=trace["baseline_rank"],
+        gnn_rank=trace["seed0_gnn_rank"],
+        hybrid_rank=trace["seed0_hybrid_rank"],
+        baseline_percentile=trace["baseline_percentile"],
+        gnn_percentile=trace["seed0_gnn_percentile"],
+        relationship_categories=("COTRAVEL",),
+        scoring_period="2025-01",
+        same_day_person_row_indices=(0, 1),
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        decision_trace=trace,
+    )
+
+    def forbidden_work(*args, **kwargs):
+        raise AssertionError(
+            "oversized components must not enter explanation work"
+        )
+
+    monkeypatch.setattr(engine, "community", forbidden_work)
+    monkeypatch.setattr(
+        se, "diagnostic_edge_source_set_probability", forbidden_work
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "pooled component size 17 exceeds maximum explainable "
+            "component size 16"
+        ),
+    ):
+        se.compose_case_explanation(
+            engine,
+            case,
+            member_explainer=forbidden_work,
+        )
+
+
 def test_compose_case_explanation_is_deterministic_and_cache_safe():
     engine, case = _sage_case_fixture()
 

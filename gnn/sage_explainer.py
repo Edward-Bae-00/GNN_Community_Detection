@@ -2258,12 +2258,27 @@ def compose_case_explanation(
     member_explainer=None,
     restart_seeds=(0, 1, 2),
     explainer_epochs=150,
+    max_explainable_component_size=16,
 ):
-    """Compose one deterministic, leak-safe seed-0 explanation payload."""
+    """Compose one deterministic, leak-safe seed-0 explanation payload.
+
+    Pooled components larger than ``max_explainable_component_size`` fail
+    closed before any per-member GNNExplainer optimization. The default of 16
+    covers the intended V9 cell size of 4--12 members with modest slack.
+    """
     if not isinstance(engine, Seed0ExplanationEngine):
         raise ValueError("engine must be a Seed0ExplanationEngine")
     if not isinstance(case, HybridOnlyCase):
         raise ValueError("case must be a HybridOnlyCase")
+    if (
+        not isinstance(max_explainable_component_size, (int, np.integer))
+        or isinstance(max_explainable_component_size, (bool, np.bool_))
+        or max_explainable_component_size <= 0
+    ):
+        raise ValueError(
+            "max_explainable_component_size must be a positive integer"
+        )
+    max_explainable_component_size = int(max_explainable_component_size)
     seeds = _validated_restart_seeds(restart_seeds)
     reference = engine.rank_reference
     if reference is None:
@@ -2340,6 +2355,31 @@ def compose_case_explanation(
         raise ValueError(
             "case rank fields do not match the frozen references"
         )
+    component_root = snapshot.component_roots[target_index]
+    member_indices = np.flatnonzero(
+        snapshot.component_roots == component_root
+    ).tolist()
+    member_ids = sorted(engine.node_ids[index] for index in member_indices)
+    if len(member_ids) > max_explainable_component_size:
+        raise ValueError(
+            f"pooled component size {len(member_ids)} exceeds maximum "
+            "explainable component size "
+            f"{max_explainable_component_size}"
+        )
+    member_indices = [engine.person_index[person_id] for person_id in member_ids]
+    member_logits = snapshot.prepool_logits[member_indices]
+    pooled_logit = snapshot.pooled_logits[target_index]
+    pooled_parity = bool(
+        torch.isclose(
+            pooled_logit,
+            member_logits.mean(),
+            rtol=1e-6,
+            atol=1e-6,
+        ).item()
+    )
+    if not pooled_parity:
+        raise ValueError("component member logits failed pooled-logit parity")
+
     probability_parity = snapshot_probability_parity
     percentile_parity = True
     rank_parity = True
@@ -2354,24 +2394,6 @@ def compose_case_explanation(
     )
     diagnostic_edge_source_set_probability(engine, context, ())
     community = engine.community(case.person_id, case.anchor.scoring_day)
-    component_root = snapshot.component_roots[target_index]
-    member_indices = np.flatnonzero(
-        snapshot.component_roots == component_root
-    ).tolist()
-    member_ids = sorted(engine.node_ids[index] for index in member_indices)
-    member_indices = [engine.person_index[person_id] for person_id in member_ids]
-    member_logits = snapshot.prepool_logits[member_indices]
-    pooled_logit = snapshot.pooled_logits[target_index]
-    pooled_parity = bool(
-        torch.isclose(
-            pooled_logit,
-            member_logits.mean(),
-            rtol=1e-6,
-            atol=1e-6,
-        ).item()
-    )
-    if not pooled_parity:
-        raise ValueError("component member logits failed pooled-logit parity")
 
     edges = community["edges"]
     edge_ids = [edge["edge_id"] for edge in edges]
