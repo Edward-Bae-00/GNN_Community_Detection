@@ -328,6 +328,7 @@ def _run_local_gemma(prompt, *, runner, timeout_seconds):
             "--think=false",
             "--keepalive",
             "10m",
+            "--nowordwrap",
         ],
         input=prompt,
         capture_output=True,

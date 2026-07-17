@@ -379,6 +379,7 @@ def test_generate_narrative_uses_installed_gemma_without_pull_or_shell():
         "--think=false",
         "--keepalive",
         "10m",
+        "--nowordwrap",
     ]
     assert all("pull" not in command for command in runner.commands)
     assert all(kwargs.get("shell") is not True for _command, kwargs in runner.calls)
