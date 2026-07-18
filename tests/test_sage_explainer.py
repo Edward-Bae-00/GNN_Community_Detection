@@ -2223,10 +2223,7 @@ def test_compose_case_explanation_collapses_member_masks_and_proves_parity():
     json.dumps(explanation, allow_nan=False, sort_keys=True)
 
 
-def test_compose_case_explanation_rejects_oversized_component_before_work(
-    monkeypatch,
-):
-    component_size = 17
+def _sage_pooled_component_case_fixture(component_size):
     node_ids = ["target"] + [
         f"poolmate-{index:02d}" for index in range(1, component_size)
     ]
@@ -2290,6 +2287,11 @@ def test_compose_case_explanation_rejects_oversized_component_before_work(
         hybrid_candidate_row_indices=(0, 1, 2, 3),
         decision_trace=trace,
     )
+    return engine, case
+
+
+def test_compose_case_explanation_rejects_size_seven_before_work(monkeypatch):
+    engine, case = _sage_pooled_component_case_fixture(7)
 
     def forbidden_work(*args, **kwargs):
         raise AssertionError(
@@ -2304,14 +2306,47 @@ def test_compose_case_explanation_rejects_oversized_component_before_work(
     with pytest.raises(
         ValueError,
         match=(
-            "pooled component size 17 exceeds maximum explainable "
-            "component size 16"
+            "pooled component size 7 exceeds maximum explainable "
+            "component size 6"
         ),
     ):
         se.compose_case_explanation(
             engine,
             case,
             member_explainer=forbidden_work,
+        )
+
+
+def test_compose_case_explanation_admits_size_six_into_diagnostic(monkeypatch):
+    engine, case = _sage_pooled_component_case_fixture(6)
+
+    def diagnostic_sentinel(*args, **kwargs):
+        raise AssertionError("size-six component entered diagnostic work")
+
+    monkeypatch.setattr(
+        se, "diagnostic_edge_source_set_probability", diagnostic_sentinel
+    )
+
+    with pytest.raises(
+        AssertionError,
+        match="size-six component entered diagnostic work",
+    ):
+        se.compose_case_explanation(engine, case)
+
+
+@pytest.mark.parametrize(
+    "limit",
+    [0, -1, True, 1.5, "6", None],
+)
+def test_compose_case_explanation_rejects_invalid_component_limit(limit):
+    engine, case = _sage_case_fixture()
+
+    with pytest.raises(ValueError, match="positive integer"):
+        se.compose_case_explanation(
+            engine,
+            case,
+            member_explainer=_deterministic_member_explainer,
+            max_explainable_component_size=limit,
         )
 
 

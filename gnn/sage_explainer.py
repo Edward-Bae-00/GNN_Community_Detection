@@ -2258,13 +2258,14 @@ def compose_case_explanation(
     member_explainer=None,
     restart_seeds=(0, 1, 2),
     explainer_epochs=150,
-    max_explainable_component_size=16,
+    max_explainable_component_size=6,
 ):
     """Compose one deterministic, leak-safe seed-0 explanation payload.
 
     Pooled components larger than ``max_explainable_component_size`` fail
-    closed before any per-member GNNExplainer optimization. The default of 16
-    covers the intended V9 cell size of 4--12 members with modest slack.
+    closed before any diagnostic, community, factor, or per-member explainer
+    work. The default of 6 matches the measured full-V9 component-size p99 at
+    every sampled scoring day.
     """
     if not isinstance(engine, Seed0ExplanationEngine):
         raise ValueError("engine must be a Seed0ExplanationEngine")
