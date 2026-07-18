@@ -163,6 +163,29 @@ def test_snapshot_excludes_edges_and_catches_at_or_after_day_start():
     assert engine.relationship_categories("target", SCORING_DAY) == ("COTRAVEL",)
 
 
+def test_relationship_categories_filters_prepared_edges_without_snapshot(
+    monkeypatch,
+):
+    engine, _ = _explanation_fixture()
+
+    def forbidden_snapshot(scoring_day):
+        raise AssertionError("relationship categories must not build a snapshot")
+
+    monkeypatch.setattr(engine, "snapshot", forbidden_snapshot)
+
+    assert engine.relationship_categories(
+        "target", SCORING_DAY + pd.Timedelta(hours=12)
+    ) == ("COTRAVEL",)
+    assert engine.relationship_categories("future", SCORING_DAY) == (
+        "SHARED_PLATE_HOT",
+    )
+    assert engine.relationship_categories(
+        "target", SCORING_DAY - pd.Timedelta(days=1)
+    ) == ()
+    with pytest.raises(KeyError, match="unknown person_id: missing"):
+        engine.relationship_categories("missing", SCORING_DAY)
+
+
 def test_snapshot_inputs_do_not_alias_mutable_caller_values():
     from gnn.learned_cell import build_day_snapshot_inputs
 

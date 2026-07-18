@@ -587,10 +587,14 @@ class Seed0ExplanationEngine:
     def relationship_categories(self, person_id, scoring_day):
         if person_id not in self.person_index:
             raise KeyError(f"unknown person_id: {person_id}")
-        snapshot = self.snapshot(scoring_day)
-        incident = snapshot.active_edges.loc[
-            (snapshot.active_edges["u"] == person_id)
-            | (snapshot.active_edges["v"] == person_id)
+        day = _scoring_day(scoring_day)
+        edges = self.__prepared_source._edges_typed
+        incident = edges.loc[
+            (
+                (edges["u"] == person_id)
+                | (edges["v"] == person_id)
+            )
+            & (edges["avail_time"] < day)
         ]
         return tuple(sorted(set(incident["edge_type"].astype(str))))
 
