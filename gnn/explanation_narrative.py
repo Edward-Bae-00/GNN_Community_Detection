@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 import subprocess
@@ -11,7 +12,8 @@ from gnn.sage_explainer import validate_explanation_payload
 
 
 MODEL_TAG = "gemma4:12b"
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v4"
+_PREFLIGHT_CACHE = set()
 
 APPROVED_CAVEATS = (
     "This is seed-0 observability, not the three-seed headline result.",
@@ -19,7 +21,10 @@ APPROVED_CAVEATS = (
     "The evidence is associative and does not establish causation.",
 )
 FACT_PACKET_FIELDS = frozenset(
-    {"scope", "snapshot", "ranks", "factors_by_id", "visible_paths", "caveats"}
+    {
+        "scope", "snapshot", "ranks", "attributions", "component_pooling",
+        "rank_fusion", "factors_by_id", "visible_paths", "community_summary", "caveats",
+    }
 )
 FACTOR_FIELDS = frozenset(
     {"label", "kind", "counterfactual", "restart", "stability"}
@@ -43,7 +48,7 @@ REQUIRED_COUNTERFACTUAL_FIELDS = frozenset(
 )
 RESTART_FIELDS = frozenset({"selection_frequency", "iqr"})
 VISIBLE_PATH_FIELDS = frozenset(
-    {"edge_id", "relation", "u", "v", "explainer_median"}
+    {"edge_id", "relation", "u", "v", "explainer_median", "source_row_ids"}
 )
 FACTOR_KINDS = frozenset(
     {
@@ -115,6 +120,126 @@ def _validate_fact_packet_shape(packet):
         for value in packet["ranks"].values()
     ):
         raise ValueError("fact packet ranks must be positive integers")
+
+    attributions = packet["attributions"]
+    _require_fields(
+        attributions,
+        allowed=frozenset(
+            {"top_local_nodes", "top_edges", "top_features", "unsigned_masks"}
+        ),
+        path="attributions",
+    )
+    if attributions["unsigned_masks"] is not True:
+        raise ValueError("fact packet attribution masks must be unsigned")
+    attribution_specs = (
+        ("top_local_nodes", ("node_id",)),
+        ("top_edges", ("edge_id",)),
+        ("top_features", ("feature_name", "node_id")),
+    )
+    for collection_name, id_fields in attribution_specs:
+        records = attributions[collection_name]
+        if not isinstance(records, list):
+            raise ValueError("fact packet attribution records must be lists")
+        for record in records:
+            allowed = frozenset((*id_fields, "explainer_median"))
+            _require_fields(
+                record,
+                allowed=allowed,
+                path=f"attributions.{collection_name}",
+            )
+            if any(
+                not isinstance(record[field], str) or not record[field].strip()
+                for field in id_fields
+            ):
+                raise ValueError("fact packet attribution IDs must be strings")
+            if (
+                not _is_finite_number(record["explainer_median"])
+                or not 0.0 <= float(record["explainer_median"]) <= 1.0
+            ):
+                raise ValueError("fact packet attribution weights must be in [0, 1]")
+
+    _require_fields(
+        packet["component_pooling"],
+        allowed=frozenset({"top_members_by_absolute_contribution"}),
+        path="component_pooling",
+    )
+    members = packet["component_pooling"]["top_members_by_absolute_contribution"]
+    if not isinstance(members, list):
+        raise ValueError("fact packet component members must be a list")
+    for member in members:
+        _require_fields(
+            member,
+            allowed=frozenset({"person_id", "pooled_logit_contribution"}),
+            path="component_pooling.top_members_by_absolute_contribution",
+        )
+        if not isinstance(member["person_id"], str) or not member["person_id"].strip():
+            raise ValueError("fact packet component member IDs must be strings")
+        if not _is_finite_number(member["pooled_logit_contribution"]):
+            raise ValueError("fact packet component contributions must be finite")
+
+    fusion_fields = frozenset(
+        {
+            "daily_budget", "blend_weight", "baseline_percentile",
+            "seed0_gnn_percentile", "baseline_weighted_term",
+            "seed0_gnn_weighted_term", "hybrid_score",
+        }
+    )
+    _require_fields(packet["rank_fusion"], allowed=fusion_fields, path="rank_fusion")
+    fusion = packet["rank_fusion"]
+    if fusion["daily_budget"] != 5:
+        raise ValueError("fact packet rank fusion must use the 5/day policy")
+    if any(not _is_finite_number(fusion[field]) for field in fusion_fields - {"daily_budget"}):
+        raise ValueError("fact packet rank-fusion values must be finite")
+    if not 0.0 <= fusion["blend_weight"] <= 1.0:
+        raise ValueError("fact packet rank-fusion blend weight must be in [0, 1]")
+    if not 0.0 <= fusion["baseline_percentile"] <= 1.0 or not 0.0 <= fusion["seed0_gnn_percentile"] <= 1.0:
+        raise ValueError("fact packet rank-fusion percentiles must be in [0, 1]")
+    if not math.isclose(
+        (1.0 - fusion["blend_weight"]) * fusion["baseline_percentile"],
+        fusion["baseline_weighted_term"],
+        rel_tol=1e-9,
+        abs_tol=1e-12,
+    ) or not math.isclose(
+        fusion["blend_weight"] * fusion["seed0_gnn_percentile"],
+        fusion["seed0_gnn_weighted_term"],
+        rel_tol=1e-9,
+        abs_tol=1e-12,
+    ):
+        raise ValueError("fact packet rank-fusion weighted terms are inconsistent")
+    if not math.isclose(
+        fusion["baseline_weighted_term"] + fusion["seed0_gnn_weighted_term"],
+        fusion["hybrid_score"],
+        rel_tol=1e-9,
+        abs_tol=1e-12,
+    ):
+        raise ValueError("fact packet rank-fusion ledger is inconsistent")
+    community_summary_fields = frozenset(
+        {
+            "complete", "community_key", "component_id", "scoring_day",
+            "node_count", "edge_count", "target_person_id",
+        }
+    )
+    _require_fields(
+        packet["community_summary"],
+        allowed=community_summary_fields,
+        path="community_summary",
+    )
+    community_summary = packet["community_summary"]
+    if community_summary["complete"] is not True:
+        raise ValueError("fact packet requires a complete community summary")
+    if any(
+        not isinstance(community_summary[field], str)
+        or not community_summary[field].strip()
+        for field in (
+            "community_key", "component_id", "scoring_day", "target_person_id"
+        )
+    ):
+        raise ValueError("fact packet community identity fields must be strings")
+    if any(
+        not _is_integer(community_summary[field]) or community_summary[field] < 0
+        for field in ("node_count", "edge_count")
+    ):
+        raise ValueError("fact packet community counts must be nonnegative integers")
 
     factors = packet["factors_by_id"]
     if not isinstance(factors, dict):
@@ -262,6 +387,16 @@ def _validate_fact_packet_shape(packet):
             raise ValueError(
                 "fact packet explainer_median must be finite in [0, 1]"
             )
+        source_row_ids = path["source_row_ids"]
+        if (
+            not isinstance(source_row_ids, list)
+            or not source_row_ids
+            or any(
+                not isinstance(source_id, str) or not source_id.strip()
+                for source_id in source_row_ids
+            )
+        ):
+            raise ValueError("fact packet visible path source IDs must be strings")
     if packet["caveats"] != list(APPROVED_CAVEATS):
         raise ValueError("fact packet caveats must match the approved evidence boundary")
 
@@ -295,8 +430,12 @@ def _rank_only_packet(packet):
         "scope": scope,
         "snapshot": snapshot,
         "ranks": ranks,
+        "attributions": packet["attributions"],
+        "component_pooling": packet["component_pooling"],
+        "rank_fusion": packet["rank_fusion"],
         "factors_by_id": {},
         "visible_paths": [],
+        "community_summary": packet["community_summary"],
         "caveats": list(APPROVED_CAVEATS),
     }
     return _validated_fact_packet(safe_packet)
@@ -307,7 +446,11 @@ def _installed_model_names(stdout):
     return {columns[0] for columns in lines[1:] if columns}
 
 
-def _run_local_gemma(prompt, *, runner, timeout_seconds):
+def preflight_local_model(*, runner=subprocess.run, timeout_seconds=180):
+    """Verify the required local model once per injected runner/model pair."""
+    cache_key = (MODEL_TAG, runner)
+    if cache_key in _PREFLIGHT_CACHE:
+        return MODEL_TAG
     listed = runner(
         ["ollama", "list"],
         capture_output=True,
@@ -317,6 +460,13 @@ def _run_local_gemma(prompt, *, runner, timeout_seconds):
     )
     if listed.returncode != 0 or MODEL_TAG not in _installed_model_names(listed.stdout):
         raise RuntimeError(f"local {MODEL_TAG} is unavailable")
+    _PREFLIGHT_CACHE.add(cache_key)
+    return MODEL_TAG
+
+
+def _run_local_gemma(prompt, *, runner, timeout_seconds, preflight=True):
+    if preflight:
+        preflight_local_model(runner=runner, timeout_seconds=timeout_seconds)
 
     completed = runner(
         [
@@ -352,17 +502,77 @@ def build_fact_packet(explanation):
             "seed0_gnn": int(trace["seed0_gnn_rank"]),
             "seed0_hybrid": int(trace["seed0_hybrid_rank"]),
         },
+        "attributions": {
+            "top_local_nodes": [
+                {
+                    "node_id": record["node_id"],
+                    "explainer_median": record["explainer_median"],
+                }
+                for record in explanation["attributions"]["top_local_nodes"]
+            ],
+            "top_edges": [
+                {
+                    "edge_id": record["edge_id"],
+                    "explainer_median": record["explainer_median"],
+                }
+                for record in explanation["attributions"]["top_edges"]
+            ],
+            "top_features": [
+                {
+                    "feature_name": record["feature_name"],
+                    "node_id": record["node_id"],
+                    "explainer_median": record["explainer_median"],
+                }
+                for record in explanation["attributions"]["top_features"]
+            ],
+            "unsigned_masks": True,
+        },
+        "component_pooling": {
+            "top_members_by_absolute_contribution": [
+                {
+                    "person_id": record["person_id"],
+                    "pooled_logit_contribution": record[
+                        "pooled_logit_contribution"
+                    ],
+                }
+                for record in explanation["decision_ledger"][
+                    "component_pooling"
+                ]["top_members_by_absolute_contribution"]
+            ]
+        },
+        "rank_fusion": {
+            key: explanation["decision_ledger"]["rank_fusion"][key]
+            for key in (
+                "daily_budget",
+                "blend_weight",
+                "baseline_percentile",
+                "seed0_gnn_percentile",
+                "baseline_weighted_term",
+                "seed0_gnn_weighted_term",
+                "hybrid_score",
+            )
+        },
         "factors_by_id": {},
         "visible_paths": [
             {
-                "edge_id": edge["edge_id"],
-                "relation": edge["edge_type"],
-                "u": edge["u"],
-                "v": edge["v"],
-                "explainer_median": edge.get("explainer_median", 0.0),
+                "edge_id": record["edge_id"],
+                "relation": record["edge_type"],
+                "u": record["u"],
+                "v": record["v"],
+                "explainer_median": record["explainer_median"],
+                "source_row_ids": list(record["source_row_ids"]),
             }
-            for edge in explanation["community"]["edges"]
+            for record in explanation["attributions"]["top_edges"][:10]
         ],
+        "community_summary": {
+            "complete": explanation["community"]["complete"],
+            "community_key": explanation["community"]["community_key"],
+            "component_id": explanation["community"]["component_id"],
+            "scoring_day": explanation["community"]["scoring_day"],
+            "node_count": len(explanation["community"]["nodes"]),
+            "edge_count": len(explanation["community"]["edges"]),
+            "target_person_id": explanation["person_id"],
+        },
         "caveats": list(APPROVED_CAVEATS),
     }
     for factor in explanation["factors"]:
@@ -388,22 +598,24 @@ def build_fact_packet(explanation):
 
 def build_prompt(packet):
     packet = _validated_fact_packet(packet)
-    schema = {
-        "summary": {"text": "string", "source_refs": ["dot.path"]},
-        "claims": [{"text": "string", "source_refs": ["dot.path"]}],
+    catalog = build_selector_catalog(packet)
+    selector = {
+        "selected_summary_id": catalog["default_summary_id"],
+        "selected_claim_ids": catalog["required_claim_ids"],
+    }
+    context = {
+        "prompt_version": PROMPT_VERSION,
+        "snapshot": packet["snapshot"],
+        "ranks": packet["ranks"],
+        "community_key": packet["community_summary"]["community_key"],
+        "unsigned_masks": packet["attributions"]["unsigned_masks"],
     }
     return (
-        "Return JSON only. Explain this seed-0 observability result using only the "
-        "fact packet. Every sentence needs source_refs. Copy one allowed summary "
-        "and zero or more allowed claims exactly, including their source_refs. Do "
-        "not mention ensemble, multi-seed, or headline results. Required schema: "
-        + json.dumps(schema, sort_keys=True)
-        + "\nALLOWED_SUMMARIES\n"
-        + json.dumps(_supported_records_json(_supported_summaries(packet)), sort_keys=True)
-        + "\nALLOWED_CLAIMS\n"
-        + json.dumps(_supported_records_json(_supported_claims(packet)), sort_keys=True)
-        + "\nFACT_PACKET\n"
-        + json.dumps(packet, sort_keys=True)
+        "Return JSON only. Return exactly this compact selector object with no "
+        "additional keys, prose, source references, or rewritten claims: "
+        + json.dumps(selector, sort_keys=True, separators=(",", ":"))
+        + "\nCONTEXT\n"
+        + json.dumps(context, sort_keys=True, separators=(",", ":"))
     )
 
 
@@ -452,6 +664,67 @@ def _supported_summaries(packet):
 
 def _supported_claims(packet):
     records = {}
+    if packet["attributions"]["top_local_nodes"]:
+        node = packet["attributions"]["top_local_nodes"][0]
+        _add_supported(
+            records,
+            f"The top unsigned local-node attribution was {node['node_id']} with median weight {node['explainer_median']}.",
+            (
+                "attributions.top_local_nodes.0.node_id",
+                "attributions.top_local_nodes.0.explainer_median",
+            ),
+        )
+    if packet["attributions"]["top_edges"]:
+        edge = packet["attributions"]["top_edges"][0]
+        _add_supported(
+            records,
+            f"The top unsigned edge attribution was {edge['edge_id']} with median weight {edge['explainer_median']}.",
+            (
+                "attributions.top_edges.0.edge_id",
+                "attributions.top_edges.0.explainer_median",
+            ),
+        )
+    if packet["attributions"]["top_features"]:
+        feature = packet["attributions"]["top_features"][0]
+        _add_supported(
+            records,
+            f"For {feature['node_id']}, the top unsigned feature attribution was {feature['feature_name']} with median weight {feature['explainer_median']}.",
+            (
+                "attributions.top_features.0.node_id",
+                "attributions.top_features.0.feature_name",
+                "attributions.top_features.0.explainer_median",
+            ),
+        )
+    members = packet["component_pooling"][
+        "top_members_by_absolute_contribution"
+    ]
+    if members:
+        member = members[0]
+        _add_supported(
+            records,
+            f"The exact pooled-logit term for {member['person_id']} was {member['pooled_logit_contribution']}.",
+            (
+                "component_pooling.top_members_by_absolute_contribution.0.person_id",
+                "component_pooling.top_members_by_absolute_contribution.0.pooled_logit_contribution",
+            ),
+        )
+    fusion = packet["rank_fusion"]
+    _add_supported(
+        records,
+        (
+            f"With GNN blend weight {fusion['blend_weight']}, baseline term "
+            f"{fusion['baseline_weighted_term']} plus GNN term "
+            f"{fusion['seed0_gnn_weighted_term']} equaled Hybrid score "
+            f"{fusion['hybrid_score']} under daily budget {fusion['daily_budget']}."
+        ),
+        (
+            "rank_fusion.blend_weight",
+            "rank_fusion.baseline_weighted_term",
+            "rank_fusion.seed0_gnn_weighted_term",
+            "rank_fusion.hybrid_score",
+            "rank_fusion.daily_budget",
+        ),
+    )
     for factor_id, factor in packet["factors_by_id"].items():
         counterfactual = factor["counterfactual"]
         _add_supported(
@@ -501,6 +774,88 @@ def _supported_records_json(records):
         for text in sorted(records)
         for refs in sorted(records[text], key=lambda values: tuple(sorted(values)))
     ]
+
+
+def _stable_record_catalog(records, *, prefix):
+    catalog = {}
+    for text in sorted(records):
+        for refs in sorted(
+            records[text], key=lambda values: tuple(sorted(values))
+        ):
+            record = {"text": text, "source_refs": sorted(refs)}
+            encoded = json.dumps(
+                record, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            record_id = f"{prefix}:sha256:{hashlib.sha256(encoded).hexdigest()[:16]}"
+            existing = catalog.get(record_id)
+            if existing is not None and existing != record:
+                raise RuntimeError("narrative selector ID collision")
+            catalog[record_id] = record
+    return catalog
+
+
+def build_selector_catalog(packet):
+    """Build stable server-side records and the exact required selector IDs."""
+    packet = _validated_fact_packet(packet)
+    summaries = _stable_record_catalog(
+        _supported_summaries(packet), prefix="summary"
+    )
+    claims = _stable_record_catalog(_supported_claims(packet), prefix="claim")
+    default_summary_id = next(
+        record_id
+        for record_id, record in summaries.items()
+        if "the recorded Hybrid rank" in record["text"]
+    )
+
+    required_claim_ids = []
+    category_prefixes = (
+        "attributions.top_local_nodes.",
+        "attributions.top_edges.",
+        "attributions.top_features.",
+        "component_pooling.top_members_by_absolute_contribution.",
+        "rank_fusion.",
+    )
+    for category_prefix in category_prefixes:
+        matches = [
+            record_id
+            for record_id, record in claims.items()
+            if any(
+                source_ref.startswith(category_prefix)
+                for source_ref in record["source_refs"]
+            )
+        ]
+        if matches:
+            required_claim_ids.append(sorted(matches)[0])
+    if packet["factors_by_id"]:
+        top_factor_id = max(
+            packet["factors_by_id"],
+            key=lambda factor_id: (
+                abs(
+                    packet["factors_by_id"][factor_id]["counterfactual"][
+                        "hybrid_rank_delta"
+                    ]
+                ),
+                factor_id,
+            ),
+        )
+        factor_prefix = f"factors_by_id.{top_factor_id}.counterfactual."
+        factor_matches = [
+            record_id
+            for record_id, record in claims.items()
+            if any(
+                source_ref == factor_prefix + "ablated_hybrid_rank"
+                for source_ref in record["source_refs"]
+            )
+        ]
+        if not factor_matches:
+            raise RuntimeError("required factor selector record is unavailable")
+        required_claim_ids.append(sorted(factor_matches)[0])
+    return {
+        "default_summary_id": default_summary_id,
+        "required_claim_ids": required_claim_ids,
+        "summaries_by_id": summaries,
+        "claims_by_id": claims,
+    }
 
 
 def _validate_text(packet, record, *, supported):
@@ -567,6 +922,72 @@ def validate_candidate(packet, candidate):
     return {"summary": summary, "claims": claims}
 
 
+def _require_production_coverage(packet, validated):
+    required_prefixes = []
+    for field in ("top_local_nodes", "top_edges", "top_features"):
+        if packet["attributions"][field]:
+            required_prefixes.append(f"attributions.{field}.")
+    if packet["component_pooling"]["top_members_by_absolute_contribution"]:
+        required_prefixes.append(
+            "component_pooling.top_members_by_absolute_contribution."
+        )
+    required_prefixes.append("rank_fusion.")
+    if packet["factors_by_id"]:
+        required_prefixes.append("factors_by_id.")
+    all_refs = [
+        source_ref
+        for claim in validated["claims"]
+        for source_ref in claim["source_refs"]
+    ]
+    missing = [
+        prefix
+        for prefix in required_prefixes
+        if not any(source_ref.startswith(prefix) for source_ref in all_refs)
+    ]
+    if missing:
+        raise ValueError(
+            "unsupported narrative claim: required v4 evidence is missing"
+        )
+
+
+def resolve_narrative_selector(packet, selector):
+    """Resolve compact model-selected IDs to exact prevalidated records."""
+    packet = _validated_fact_packet(packet)
+    if not isinstance(selector, Mapping) or set(selector) != {
+        "selected_summary_id",
+        "selected_claim_ids",
+    }:
+        raise ValueError("narrative selector has invalid fields")
+    summary_id = selector["selected_summary_id"]
+    claim_ids = selector["selected_claim_ids"]
+    if not isinstance(summary_id, str) or not isinstance(claim_ids, list):
+        raise ValueError("narrative selector IDs have invalid types")
+    if any(not isinstance(claim_id, str) for claim_id in claim_ids):
+        raise ValueError("narrative selector claim IDs must be strings")
+    if len(set(claim_ids)) != len(claim_ids):
+        raise ValueError("narrative selector claim IDs must not be duplicates")
+
+    catalog = build_selector_catalog(packet)
+    if summary_id not in catalog["summaries_by_id"]:
+        raise ValueError("narrative selector contains an unknown summary ID")
+    unknown = set(claim_ids).difference(catalog["claims_by_id"])
+    if unknown:
+        raise ValueError("narrative selector contains an unknown claim ID")
+    if set(claim_ids) != set(catalog["required_claim_ids"]):
+        raise ValueError("narrative selector is missing required claim IDs")
+
+    candidate = {
+        "summary": catalog["summaries_by_id"][summary_id],
+        "claims": [
+            catalog["claims_by_id"][claim_id]
+            for claim_id in catalog["required_claim_ids"]
+        ],
+    }
+    validated = validate_candidate(packet, candidate)
+    _require_production_coverage(packet, validated)
+    return validated
+
+
 def render_template(packet):
     packet = _validated_fact_packet(packet)
     factors = list(packet["factors_by_id"].items())
@@ -614,6 +1035,23 @@ def render_template(packet):
                 ],
             }
         )
+    supported = _supported_claims(packet)
+    required_prefixes = (
+        "attributions.top_local_nodes.",
+        "attributions.top_edges.",
+        "attributions.top_features.",
+        "component_pooling.top_members_by_absolute_contribution.",
+        "rank_fusion.",
+    )
+    for text in sorted(supported):
+        for refs in sorted(supported[text], key=lambda item: tuple(sorted(item))):
+            if any(
+                any(source_ref.startswith(prefix) for source_ref in refs)
+                for prefix in required_prefixes
+            ):
+                candidate["claims"].append(
+                    {"text": text, "source_refs": sorted(refs)}
+                )
     validated = validate_candidate(packet, candidate)
     return {
         "source": "deterministic_template",
@@ -626,31 +1064,50 @@ def render_template(packet):
     }
 
 
-def generate_narrative(packet, *, runner=subprocess.run, timeout_seconds=180):
-    try:
-        packet = _validated_fact_packet(packet)
-    except ValueError:
-        return render_template(_rank_only_packet(packet))
-    try:
-        candidate = _run_local_gemma(
-            build_prompt(packet), runner=runner, timeout_seconds=timeout_seconds
-        )
-        validated = validate_candidate(packet, candidate)
-        return {
-            "source": "llm",
-            "model": MODEL_TAG,
-            "prompt_version": PROMPT_VERSION,
-            "summary": validated["summary"]["text"],
-            "summary_source_refs": validated["summary"]["source_refs"],
-            "claims": validated["claims"],
-            "validated": True,
-        }
-    except (
-        OSError,
-        RuntimeError,
-        TimeoutError,
-        subprocess.TimeoutExpired,
-        ValueError,
-        json.JSONDecodeError,
-    ):
-        return render_template(packet)
+def generate_narrative(
+    packet,
+    *,
+    runner=subprocess.run,
+    timeout_seconds=180,
+    mode="production",
+    max_retries=3,
+):
+    if mode == "template":
+        try:
+            return render_template(_validated_fact_packet(packet))
+        except ValueError:
+            return render_template(_rank_only_packet(packet))
+    if mode != "production":
+        raise ValueError("mode must be 'production' or 'template'")
+    packet = _validated_fact_packet(packet)
+    preflight_local_model(runner=runner, timeout_seconds=timeout_seconds)
+    prompt = build_prompt(packet)
+    last_error = None
+    for _attempt in range(int(max_retries) + 1):
+        try:
+            selector = _run_local_gemma(
+                prompt,
+                runner=runner,
+                timeout_seconds=timeout_seconds,
+                preflight=False,
+            )
+            validated = resolve_narrative_selector(packet, selector)
+            return {
+                "source": "llm",
+                "model": MODEL_TAG,
+                "prompt_version": PROMPT_VERSION,
+                "summary": validated["summary"]["text"],
+                "summary_source_refs": validated["summary"]["source_refs"],
+                "claims": validated["claims"],
+                "validated": True,
+            }
+        except (
+            OSError,
+            RuntimeError,
+            TimeoutError,
+            subprocess.TimeoutExpired,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            last_error = exc
+    raise RuntimeError("local narrative failed after four attempts") from last_error

@@ -9,8 +9,10 @@ from gnn.explanation_narrative import (
     PROMPT_VERSION,
     build_fact_packet,
     build_prompt,
+    build_selector_catalog,
     generate_narrative,
     render_template,
+    resolve_narrative_selector,
     validate_candidate,
 )
 
@@ -72,6 +74,26 @@ def _fact_packet(*, factors=None):
         "scope": {"observability_seed": 0, "gnn_arm": "sage"},
         "snapshot": "2025-01-02T00:00:00Z",
         "ranks": {"baseline": 18, "seed0_gnn": 4, "seed0_hybrid": 7},
+        "attributions": {
+            "top_local_nodes": [{"node_id": "P-100", "explainer_median": 0.9}],
+            "top_edges": [{"edge_id": "edge-1", "explainer_median": 0.8}],
+            "top_features": [{"feature_name": "caught_before_snapshot", "node_id": "P-100", "explainer_median": 0.7}],
+            "unsigned_masks": True,
+        },
+        "component_pooling": {
+            "top_members_by_absolute_contribution": [
+                {"person_id": "P-100", "pooled_logit_contribution": 0.4}
+            ]
+        },
+        "rank_fusion": {
+            "daily_budget": 5,
+            "blend_weight": 0.75,
+            "baseline_percentile": 0.8,
+            "seed0_gnn_percentile": 2 / 3,
+            "baseline_weighted_term": 0.2,
+            "seed0_gnn_weighted_term": 0.5,
+            "hybrid_score": 0.7,
+        },
         "factors_by_id": factors,
         "visible_paths": [
             {
@@ -80,8 +102,18 @@ def _fact_packet(*, factors=None):
                 "u": "P-100",
                 "v": "P-200",
                 "explainer_median": 0.8,
+                "source_row_ids": ["source-1"],
             }
         ],
+        "community_summary": {
+            "complete": True,
+            "community_key": "community:sha256:key",
+            "component_id": "component:sha256:component",
+            "scoring_day": "2025-01-02T00:00:00Z",
+            "node_count": 3,
+            "edge_count": 1,
+            "target_person_id": "P-100",
+        },
         "caveats": [
             "This is seed-0 observability, not the three-seed headline result.",
             "GNNExplainer masks are unsigned; direction comes from counterfactual rank effects.",
@@ -98,6 +130,45 @@ def _valid_candidate():
         },
         "claims": [
             {
+                "text": "The top unsigned local-node attribution was P-100 with median weight 0.9.",
+                "source_refs": [
+                    "attributions.top_local_nodes.0.node_id",
+                    "attributions.top_local_nodes.0.explainer_median",
+                ],
+            },
+            {
+                "text": "The top unsigned edge attribution was edge-1 with median weight 0.8.",
+                "source_refs": [
+                    "attributions.top_edges.0.edge_id",
+                    "attributions.top_edges.0.explainer_median",
+                ],
+            },
+            {
+                "text": "For P-100, the top unsigned feature attribution was caught_before_snapshot with median weight 0.7.",
+                "source_refs": [
+                    "attributions.top_features.0.node_id",
+                    "attributions.top_features.0.feature_name",
+                    "attributions.top_features.0.explainer_median",
+                ],
+            },
+            {
+                "text": "The exact pooled-logit term for P-100 was 0.4.",
+                "source_refs": [
+                    "component_pooling.top_members_by_absolute_contribution.0.person_id",
+                    "component_pooling.top_members_by_absolute_contribution.0.pooled_logit_contribution",
+                ],
+            },
+            {
+                "text": "With GNN blend weight 0.75, baseline term 0.2 plus GNN term 0.5 equaled Hybrid score 0.7 under daily budget 5.",
+                "source_refs": [
+                    "rank_fusion.blend_weight",
+                    "rank_fusion.baseline_weighted_term",
+                    "rank_fusion.seed0_gnn_weighted_term",
+                    "rank_fusion.hybrid_score",
+                    "rank_fusion.daily_budget",
+                ],
+            },
+            {
                 "text": "Removing COTRAVEL with P-100 moved Hybrid rank from 7 to 43.",
                 "source_refs": [
                     "factors_by_id.factor-1.label",
@@ -109,13 +180,47 @@ def _valid_candidate():
     }
 
 
+def _valid_selector(packet=None):
+    catalog = build_selector_catalog(_fact_packet() if packet is None else packet)
+    return {
+        "selected_summary_id": catalog["default_summary_id"],
+        "selected_claim_ids": catalog["required_claim_ids"],
+    }
+
+
 def _explanation():
     return {
+        "person_id": "P-100",
         "scoring_day": "2025-01-02T00:00:00Z",
         "decision_trace": {
             "baseline_rank": 18,
             "seed0_gnn_rank": 4,
             "seed0_hybrid_rank": 7,
+        },
+        "attributions": {
+            "top_local_nodes": [{"node_id": "P-100", "explainer_median": 0.9}],
+            "top_edges": [{
+                "edge_id": "edge-1", "edge_type": "COTRAVEL",
+                "u": "P-100", "v": "P-200", "source_row_ids": ["source-1"],
+                "explainer_median": 0.8,
+            }],
+            "top_features": [{"feature_name": "caught_before_snapshot", "node_id": "P-100", "explainer_median": 0.7}],
+        },
+        "decision_ledger": {
+            "component_pooling": {
+                "top_members_by_absolute_contribution": [
+                    {"person_id": "P-100", "pooled_logit_contribution": 0.4}
+                ]
+            },
+            "rank_fusion": {
+                "daily_budget": 5,
+                "blend_weight": 0.75,
+                "baseline_percentile": 0.8,
+                "seed0_gnn_percentile": 2 / 3,
+                "baseline_weighted_term": 0.2,
+                "seed0_gnn_weighted_term": 0.5,
+                "hybrid_score": 0.7,
+            },
         },
         "factors": [
             {
@@ -133,6 +238,11 @@ def _explanation():
             }
         ],
         "community": {
+            "complete": True,
+            "community_key": "community:sha256:key",
+            "component_id": "component:sha256:component",
+            "scoring_day": "2025-01-02T00:00:00Z",
+            "nodes": [{"node_id": "P-100"}, {"node_id": "P-200"}],
             "edges": [
                 {
                     "edge_id": "edge-1",
@@ -141,6 +251,17 @@ def _explanation():
                     "v": "P-200",
                     "explainer_median": 0.8,
                     "availability_time": "2024-12-01T00:00:00Z",
+                    "source_row_ids": ["source-1"],
+                    "observations": [{"source_row_id": "source-1", "secret_bulk": "drop"}],
+                },
+                {
+                    "edge_id": "edge-bulk",
+                    "edge_type": "RESIDENCE",
+                    "u": "P-100",
+                    "v": "P-200",
+                    "source_row_ids": ["source-bulk"],
+                    "explainer_median": 0.1,
+                    "observations": [{"source_row_id": "source-bulk"}],
                 }
             ]
         },
@@ -155,8 +276,12 @@ def test_build_fact_packet_is_allowlisted_and_json_safe():
         "scope",
         "snapshot",
         "ranks",
+        "attributions",
+        "component_pooling",
+        "rank_fusion",
         "factors_by_id",
         "visible_paths",
+        "community_summary",
         "caveats",
     }
     assert packet["scope"] == {"observability_seed": 0, "gnn_arm": "sage"}
@@ -174,7 +299,19 @@ def test_build_fact_packet_is_allowlisted_and_json_safe():
         "u",
         "v",
         "explainer_median",
+        "source_row_ids",
     }
+    assert packet["visible_paths"][0]["source_row_ids"] == ["source-1"]
+    assert packet["community_summary"] == {
+        "complete": True,
+        "community_key": "community:sha256:key",
+        "component_id": "component:sha256:component",
+        "scoring_day": "2025-01-02T00:00:00Z",
+        "node_count": 2,
+        "edge_count": 2,
+        "target_person_id": "P-100",
+    }
+    assert "secret_bulk" not in json.dumps(packet)
     assert "hidden" not in json.dumps(packet).casefold()
 
 
@@ -295,11 +432,11 @@ def test_invalid_counterfactual_types_use_rank_only_template_without_ollama():
         def __call__(self, command, **kwargs):
             raise AssertionError("invalid evidence must fail before Ollama")
 
-    result = generate_narrative(packet, runner=MustNotRun())
+    result = generate_narrative(packet, runner=MustNotRun(), mode="template")
 
     assert result["source"] == "deterministic_template"
     assert result["validated"] is True
-    assert result["claims"] == []
+    assert len(result["claims"]) == 5
     assert result["summary"] == (
         "In seed 0, Baseline rank was 18, GNN rank was 4, and Hybrid rank was 7."
     )
@@ -313,10 +450,10 @@ def test_nested_enum_types_use_rank_only_template_without_ollama():
         def __call__(self, command, **kwargs):
             raise AssertionError("invalid evidence must fail before Ollama")
 
-    result = generate_narrative(packet, runner=MustNotRun())
+    result = generate_narrative(packet, runner=MustNotRun(), mode="template")
 
     assert result["source"] == "deterministic_template"
-    assert result["claims"] == []
+    assert len(result["claims"]) == 5
 
 
 @pytest.mark.parametrize(
@@ -343,30 +480,100 @@ def test_fact_packet_rejects_internally_inconsistent_counterfactuals(mutate):
         build_prompt(packet)
 
 
-def test_prompt_requires_json_only_and_source_refs():
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("blend_weight", 1.1),
+        ("baseline_weighted_term", 0.21),
+        ("seed0_gnn_weighted_term", 0.49),
+        ("hybrid_score", 0.71),
+        ("daily_budget", 25),
+    ],
+)
+def test_fact_packet_rejects_invalid_or_inconsistent_rank_fusion(field, value):
+    packet = _fact_packet()
+    packet["rank_fusion"][field] = value
+
+    with pytest.raises(ValueError, match="rank.fusion|5/day"):
+        build_prompt(packet)
+
+
+def test_prompt_requests_only_compact_stable_selector_ids():
     prompt = build_prompt(_fact_packet())
 
     assert prompt.startswith("Return JSON only.")
-    assert '"source_refs"' in prompt
-    assert "Every sentence needs source_refs" in prompt
-    assert "FACT_PACKET\n" in prompt
+    assert '"selected_summary_id"' in prompt
+    assert '"selected_claim_ids"' in prompt
+    assert '"source_refs"' not in prompt
+    assert "FACT_PACKET" not in prompt
+    assert _valid_candidate()["claims"][0]["text"] not in prompt
+    assert PROMPT_VERSION == "v4"
+    assert len(prompt) < 2000
+
+
+def test_selector_catalog_ids_are_stable_and_resolve_server_side():
+    packet = _fact_packet()
+    first = build_selector_catalog(packet)
+    second = build_selector_catalog(packet)
+
+    assert first == second
+    assert first["default_summary_id"].startswith("summary:sha256:")
+    assert all(claim_id.startswith("claim:sha256:") for claim_id in first["required_claim_ids"])
+    resolved = resolve_narrative_selector(packet, _valid_selector(packet))
+    assert resolved["summary"]["text"] == _valid_candidate()["summary"]["text"]
+    assert [claim["text"] for claim in resolved["claims"]] == [
+        claim["text"] for claim in _valid_candidate()["claims"]
+    ]
+
+
+@pytest.mark.parametrize("kind", ["unknown-summary", "unknown-claim", "duplicate", "missing"])
+def test_selector_rejects_unknown_duplicate_or_missing_ids(kind):
+    packet = _fact_packet()
+    selector = _valid_selector(packet)
+    if kind == "unknown-summary":
+        selector["selected_summary_id"] = "summary:sha256:unknown"
+    elif kind == "unknown-claim":
+        selector["selected_claim_ids"][0] = "claim:sha256:unknown"
+    elif kind == "duplicate":
+        selector["selected_claim_ids"][1] = selector["selected_claim_ids"][0]
+    else:
+        selector["selected_claim_ids"].pop()
+
+    with pytest.raises(ValueError, match="selector"):
+        resolve_narrative_selector(packet, selector)
+
+
+def test_selector_rejects_missing_required_rank_fusion_claim():
+    packet = _fact_packet()
+    catalog = build_selector_catalog(packet)
+    selector = _valid_selector(packet)
+    fusion_claim_id = next(
+        claim_id
+        for claim_id, record in catalog["claims_by_id"].items()
+        if any(ref.startswith("rank_fusion.") for ref in record["source_refs"])
+    )
+    selector["selected_claim_ids"].remove(fusion_claim_id)
+
+    with pytest.raises(ValueError, match="missing required claim IDs"):
+        resolve_narrative_selector(packet, selector)
 
 
 def test_generate_narrative_uses_installed_gemma_without_pull_or_shell():
     runner = FakeRunner(
         list_stdout="NAME ID SIZE MODIFIED\ngemma4:12b abc 7.4 GB now\n",
-        run_stdout=json.dumps(_valid_candidate()),
+        run_stdout=json.dumps(_valid_selector()),
     )
 
     result = generate_narrative(_fact_packet(), runner=runner)
+    resolved = resolve_narrative_selector(_fact_packet(), _valid_selector())
 
     assert result == {
         "source": "llm",
         "model": "gemma4:12b",
         "prompt_version": PROMPT_VERSION,
         "summary": "In seed 0, the recorded Hybrid rank was 7.",
-        "summary_source_refs": ["scope.observability_seed", "ranks.seed0_hybrid"],
-        "claims": _valid_candidate()["claims"],
+        "summary_source_refs": resolved["summary"]["source_refs"],
+        "claims": resolved["claims"],
         "validated": True,
     }
     assert runner.commands[0] == ["ollama", "list"]
@@ -391,6 +598,19 @@ def test_generate_narrative_uses_installed_gemma_without_pull_or_shell():
     }
     assert runner.calls[1][1]["input"].startswith("Return JSON only.")
     assert runner.calls[1][1]["check"] is False
+
+
+def test_successful_model_preflight_is_cached_for_repeated_cohort_generation():
+    runner = FakeRunner(
+        list_stdout="NAME ID SIZE MODIFIED\ngemma4:12b abc 7.4 GB now\n",
+        run_stdout=json.dumps(_valid_selector()),
+    )
+
+    generate_narrative(_fact_packet(), runner=runner)
+    generate_narrative(_fact_packet(), runner=runner)
+
+    assert runner.commands.count(["ollama", "list"]) == 1
+    assert sum(command[:2] == ["ollama", "run"] for command in runner.commands) == 2
 
 
 @pytest.mark.parametrize(
@@ -427,13 +647,24 @@ def test_generate_narrative_uses_installed_gemma_without_pull_or_shell():
         "timeout",
     ],
 )
-def test_expected_ollama_failures_use_validated_deterministic_template(runner):
-    result = generate_narrative(_fact_packet(), runner=runner)
+def test_expected_ollama_failures_fail_closed_without_template_fallback(runner):
+    with pytest.raises((RuntimeError, OSError, subprocess.TimeoutExpired, ValueError)):
+        generate_narrative(_fact_packet(), runner=runner)
 
-    assert result["source"] == "deterministic_template"
-    assert result["model"] is None
-    assert result["prompt_version"] == PROMPT_VERSION
-    assert result["validated"] is True
+    assert all(command[:2] != ["ollama", "pull"] for command in getattr(runner, "commands", []))
+
+
+def test_production_retries_invalid_generation_three_times_after_initial_attempt():
+    runner = FakeRunner(
+        list_stdout="NAME ID SIZE MODIFIED\ngemma4:12b abc 7.4 GB now\n",
+        run_stdout="not-json",
+    )
+
+    with pytest.raises(RuntimeError, match="four attempts"):
+        generate_narrative(_fact_packet(), runner=runner)
+
+    assert runner.commands.count(["ollama", "list"]) == 1
+    assert sum(command[:2] == ["ollama", "run"] for command in runner.commands) == 4
 
 
 @pytest.mark.parametrize(
@@ -618,7 +849,7 @@ def test_template_with_no_factors_still_states_seed_zero_scope():
     assert "GNN rank was 4" in result["summary"]
     assert "Hybrid rank was 7" in result["summary"]
     assert "contributed" not in result["summary"].casefold()
-    assert result["claims"] == []
+    assert len(result["claims"]) == 5
 
 
 def test_unexpected_programmer_error_is_not_swallowed():
