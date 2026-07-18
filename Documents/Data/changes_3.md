@@ -112,6 +112,33 @@ pool and the observable (findable) slice; paired-event bootstrap for significanc
 
 ## Results
 
+### Corrected V9 observability regeneration (2026-07-17)
+
+The full V9 comparison and seed-0 observability cohort were regenerated after
+correcting `SHARED_PLATE_HOT` activation to use the earliest official
+`label_available_time_utc` for each vehicle. The V9dev boundary/invariant smoke
+and the focused source suite passed before the full run.
+
+- The surrounding headline comparison remains a three-seed GraphSAGE ensemble
+  (`[0, 1, 2]`) with deployable Hybrid fusion weight `0.75`.
+- At the operational 25-inspections/day depth, Baseline recovered `560` hidden
+  carriers and Hybrid recovered `981`.
+- The separate seed-0 observability simulation recovered `502` people with
+  Baseline and `884` with Hybrid: `291` were recovered by both, `211` were
+  Baseline-only, and `593` were Hybrid-only, for a net gain of `382`.
+- The lightweight artifact includes all `593` Hybrid-only cases. Detailed
+  post-hoc explanation was deliberately bounded because transitive COTRAVEL
+  pooling creates components as large as 6,952 people. The checked artifact
+  attempted 10 representatives, recorded nine oversized-component failures,
+  and retained one fully validated deterministic-template explanation. The
+  explainer now fails closed before community/counterfactual expansion or
+  GNNExplainer work when a pooled component exceeds the measured full-V9
+  component-size p99 of six. Lightweight relationship-category enumeration also
+  avoids model snapshots entirely.
+
+This observability block is explicitly single-seed diagnostics. It does not
+replace or alter any three-seed V9 headline metric.
+
 Full-scale V9 (120K persons / 200K events), oracle-identity substrate (shared by both
 arms, so ER is not the variable), 3 seeds, paired-event bootstrap (1,500 resamples),
 `train_bucket='Q'`, 18 epochs. Source: `gnn/diagnostics/demo_comparison_v9.json`.
