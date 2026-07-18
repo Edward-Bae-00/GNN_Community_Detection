@@ -8,9 +8,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gnn.explanation_narrative import render_template
+from gnn.explanation_narrative import MODEL_TAG, PROMPT_VERSION, render_template
 from gnn.observability_artifact import (
     build_observability_artifact,
+    build_observability_bundle,
     explain_representatives,
 )
 from gnn.recovery_observability import (
@@ -23,36 +24,168 @@ from gnn.recovery_observability import (
     representative_attempt_order,
     simulate_recovery_run,
 )
+from gnn.recovery_bundle import RecoveryBundleWriter
 from gnn.run_demo import _rank_fuse
 
 
 class FakeExplanationEngine:
     def __init__(self, *, explanation_overrides=None):
         self.bind_calls = []
+        self.blend_weight = 0.75
         self.explained_cases = []
         self.explanation_overrides = explanation_overrides or {}
+        self.release_calls = []
 
     def bind_rank_reference(self, reference, row_bindings):
         self.bind_calls.append((reference, tuple(row_bindings)))
+        self.blend_weight = float(reference.blend_weight)
+
+    def observability_fingerprint_material(self):
+        return {
+            "graph_sha256": "fixture-graph",
+            "model_state_sha256": "fixture-model",
+            "rank_reference_fingerprint": "fixture-rank",
+        }
+
+    def release_snapshot(self, scoring_day):
+        self.release_calls.append(pd.Timestamp(scoring_day))
+        return True
 
     def relationship_categories(self, person_id, scoring_day):
         return ("COTRAVEL",)
 
+    def community(self, person_id, scoring_day):
+        day = pd.Timestamp(scoring_day).isoformat()
+        edge_id = f"edge:{person_id}"
+        return {
+            "complete": True,
+            "scoring_day": day,
+            "component_id": f"component:{person_id}",
+            "community_key": f"community:{day}:{person_id}",
+            "nodes": [
+                {
+                    "node_id": person_id,
+                    "target": True,
+                    "caught_before_snapshot": False,
+                    "caught_label_available_time": None,
+                },
+                {
+                    "node_id": f"support:{person_id}",
+                    "target": False,
+                    "caught_before_snapshot": False,
+                    "caught_label_available_time": None,
+                },
+            ],
+            "nodes_by_id": {
+                person_id: {
+                    "node_id": person_id,
+                    "target": True,
+                    "caught_before_snapshot": False,
+                    "caught_label_available_time": None,
+                },
+                f"support:{person_id}": {
+                    "node_id": f"support:{person_id}",
+                    "target": False,
+                    "caught_before_snapshot": False,
+                    "caught_label_available_time": None,
+                },
+            },
+            "edges": [
+                {
+                    "edge_id": edge_id,
+                    "u": person_id,
+                    "v": f"support:{person_id}",
+                    "edge_type": "COTRAVEL",
+                    "source_row_ids": [f"row:{person_id}"],
+                    "observations": [
+                        {
+                            "source_row_id": f"row:{person_id}",
+                            "available_time": (
+                                pd.Timestamp(scoring_day)
+                                - pd.Timedelta(seconds=1)
+                            ).isoformat(),
+                        }
+                    ],
+                }
+            ],
+            "base_source_row_ids": [f"row:{person_id}"],
+            "provenance_expansions": [],
+        }
+
     def explain_case(self, case):
         self.explained_cases.append(case)
+        community = self.community(case.person_id, case.anchor.scoring_day)
+        edge = community["edges"][0]
+        trace = case.decision_trace
+        baseline_percentile = float(
+            trace.get("baseline_percentile", case.baseline_percentile)
+        )
+        seed0_gnn_percentile = float(
+            trace.get("seed0_gnn_percentile", case.gnn_percentile)
+        )
+        baseline_term = float(
+            trace.get(
+                "baseline_weighted_term",
+                (1.0 - self.blend_weight) * baseline_percentile,
+            )
+        )
+        gnn_term = float(
+            trace.get(
+                "seed0_gnn_weighted_term",
+                self.blend_weight * seed0_gnn_percentile,
+            )
+        )
         explanation = {
             "case_id": f"case:{case.person_id}",
             "person_id": case.person_id,
             "event_id": case.anchor.event_id,
             "scoring_day": case.anchor.scoring_day.isoformat(),
             "decision_trace": case.decision_trace_jsonable(),
-            "factors": [],
-            "community": {
-                "complete": True,
-                "nodes": [],
-                "edges": [],
-                "provenance_expansions": [],
+            "attributions": {
+                "top_local_nodes": [
+                    {
+                        "node_id": case.person_id,
+                        "explainer_median": 0.75,
+                    }
+                ],
+                "top_edges": [
+                    {
+                        "edge_id": edge["edge_id"],
+                        "u": edge["u"],
+                        "v": edge["v"],
+                        "edge_type": edge["edge_type"],
+                        "source_row_ids": list(edge["source_row_ids"]),
+                        "explainer_median": 0.5,
+                        "explainer_q1": 0.4,
+                        "explainer_q3": 0.6,
+                        "selection_frequency": 1.0,
+                    }
+                ],
+                "top_features": [],
             },
+            "decision_ledger": {
+                "component_pooling": {
+                    "top_members_by_absolute_contribution": [
+                        {
+                            "person_id": case.person_id,
+                            "pooled_logit_contribution": 0.25,
+                        }
+                    ],
+                },
+                "rank_fusion": {
+                    "daily_budget": int(trace.get("daily_budget", 5)),
+                    "blend_weight": self.blend_weight,
+                    "baseline_percentile": baseline_percentile,
+                    "seed0_gnn_percentile": seed0_gnn_percentile,
+                    "baseline_weighted_term": baseline_term,
+                    "seed0_gnn_weighted_term": gnn_term,
+                    "hybrid_score": float(
+                        trace.get("seed0_hybrid_score", baseline_term + gnn_term)
+                    ),
+                },
+            },
+            "factors": [],
+            "community": community,
             "flow_stages": [
                 {"stage_id": "first_hop", "emphasized_edge_ids": []},
                 {"stage_id": "second_hop", "emphasized_edge_ids": []},
@@ -79,38 +212,85 @@ class FakeExplanationEngine:
 
 
 def _fake_narrative(packet):
-    return render_template(packet)
+    narrative = render_template(packet)
+    narrative["source"] = "llm"
+    narrative["model"] = MODEL_TAG
+    return narrative
 
 
 def _artifact_fixture(**overrides):
     values = {
         "pool": pd.DataFrame(
             {
-                "event_id": ["e1", "e2", "e3", "e4"],
-                "primary_person_id": ["p1", "p1", "p2", "p3"],
+                "event_id": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8"],
+                "primary_person_id": ["p1", "p1", "p2", "p3", "p4", "p5", "p6", "p7"],
                 "t": pd.to_datetime(
                     [
                         "2025-01-01T01:00:00Z",
                         "2025-01-01T02:00:00Z",
                         "2025-01-01T03:00:00Z",
+                        "2025-01-01T04:00:00Z",
+                        "2025-01-01T05:00:00Z",
+                        "2025-01-01T06:00:00Z",
+                        "2025-01-01T07:00:00Z",
                         "2025-01-02T01:00:00Z",
                     ]
                 ),
-                "hidden": [True, True, True, True],
+                "hidden": [True] * 8,
             },
-            index=[10, 20, 30, 40],
+            index=[10, 20, 30, 40, 50, 60, 70, 80],
         ),
-        "baseline_raw": np.array([0.9, 0.8, 0.7, 0.6]),
-        "seed0_gnn_raw": np.array([0.1, 0.2, 0.9, 0.95]),
+        "baseline_raw": np.array([0.99, 0.01, 0.9, 0.8, 0.7, 0.6, 0.1, 0.5]),
+        "seed0_gnn_raw": np.array([0.0, 0.01, 0.5, 0.6, 0.7, 0.8, 1.0, 0.5]),
         "blend_weight": 0.75,
         "caught_times": {},
         "gnn_arm": "sage",
         "surrounding_seeds": (0, 1, 2),
         "explanation_engine": FakeExplanationEngine(),
-        "explanation_limit": 40,
-        "inspections_per_day": 1,
+        "explanation_limit": None,
+        "inspections_per_day": 5,
+        "seed_level_unique_person_recovery": {
+            "inspections_per_day": 5,
+            "common_validation_tuned_fusion_weight": 0.75,
+            "seeds": {
+                str(seed): {
+                    "baseline_unique_people_recovered": 6,
+                    "hybrid_unique_people_recovered": 6,
+                    "net_unique_people_gain": 0,
+                }
+                for seed in (0, 1, 2)
+            },
+            "mean": {
+                "baseline_unique_people_recovered": 6.0,
+                "hybrid_unique_people_recovered": 6.0,
+                "net_unique_people_gain": 0.0,
+            },
+            "population_sd": {
+                "baseline_unique_people_recovered": 0.0,
+                "hybrid_unique_people_recovered": 0.0,
+                "net_unique_people_gain": 0.0,
+            },
+            "score_averaged_ensemble": {
+                "baseline_unique_people_recovered": 6,
+                "hybrid_unique_people_recovered": 6,
+                "net_unique_people_gain": 0,
+            },
+        },
         "narrative_builder": _fake_narrative,
     }
+    values.update(overrides)
+    return values
+
+
+def _bundle_fixture(tmp_path, **overrides):
+    values = _artifact_fixture()
+    values.update(
+        {
+            "staging_root": tmp_path / ".recovery-stage",
+            "final_root": tmp_path / "recovery",
+            "corpus_identity": "fixture-v9",
+        }
+    )
     values.update(overrides)
     return values
 
@@ -1012,19 +1192,19 @@ def test_direct_overlap_construction_rejects_contradictory_sets(
         RecoveryOverlap(**values)
 
 
-def test_observability_artifact_has_exact_seed_zero_summary_and_coverage() -> None:
+def test_observability_artifact_v2_has_both_exclusive_cohorts_and_complete_coverage() -> None:
     engine = FakeExplanationEngine()
 
     artifact = build_observability_artifact(
         **_artifact_fixture(explanation_engine=engine)
     )
 
-    assert artifact["schema_version"] == "1.0"
+    assert artifact["schema_version"] == "2.0"
     assert artifact["policy"] == {
         "observability_seed": 0,
         "gnn_arm": "sage",
         "surrounding_results_seeds": [0, 1, 2],
-        "inspections_per_day": 1,
+        "inspections_per_day": 5,
         "hybrid_blend_weight": 0.75,
         "percentile_reference_id": artifact["policy"][
             "percentile_reference_id"
@@ -1032,24 +1212,49 @@ def test_observability_artifact_has_exact_seed_zero_summary_and_coverage() -> No
     }
     assert artifact["summary"] == {
         "overlap_ids_available": True,
-        "baseline_recovered": 2,
-        "recovered_by_both": 1,
+        "baseline_recovered": 6,
+        "recovered_by_both": 5,
         "hybrid_only_recovered": 1,
         "baseline_only_recovered": 1,
-        "hybrid_total": 2,
+        "hybrid_total": 6,
         "net_gain": 0,
+        "seed_level_unique_person_recovery": _artifact_fixture()[
+            "seed_level_unique_person_recovery"
+        ],
     }
     assert artifact["coverage"] == {
         "hybrid_only_count": 1,
-        "explanation_limit": 40,
+        "baseline_only_count": 1,
         "attempted_count": 1,
         "explained_count": 1,
+        "llm_validated_count": 1,
         "failed_count": 0,
+        "complete": True,
     }
-    assert [case["person_id"] for case in artifact["hybrid_only_cases"]] == [
-        "p2"
+    assert [case["person_id"] for case in artifact["cohorts"]["hybrid_only"]] == [
+        "p6"
     ]
-    assert [case["person_id"] for case in artifact["explanations"]] == ["p2"]
+    assert [case["person_id"] for case in artifact["cohorts"]["baseline_only"]] == [
+        "p1"
+    ]
+    baseline_case = artifact["cohorts"]["baseline_only"][0]
+    assert baseline_case["cohort"] == "baseline_only"
+    assert baseline_case["event_id"] == "e1"
+    assert baseline_case["baseline_rank"] == 1
+    assert baseline_case["seed0_hybrid_rank"] > 5
+    assert "explanation" not in baseline_case
+    assert [case["person_id"] for case in artifact["explanations"]] == ["p6"]
+    assert all("community" not in item for item in artifact["explanations"])
+    assert set(artifact["communities"]) == {
+        artifact["cohorts"]["hybrid_only"][0]["community_key"],
+        artifact["cohorts"]["baseline_only"][0]["community_key"],
+    }
+    for cohort in ("hybrid_only", "baseline_only"):
+        case = artifact["cohorts"][cohort][0]
+        assert artifact["communities"][case["community_key"]]["complete"] is True
+    assert artifact["explanations"][0]["community_key"] == artifact["cohorts"][
+        "hybrid_only"
+    ][0]["community_key"]
     assert artifact["generation_diagnostics"] == {"failed_attempts": []}
     json.dumps(artifact, sort_keys=True, allow_nan=False)
 
@@ -1064,17 +1269,260 @@ def test_observability_binds_complete_positional_identity_day_reference_once() -
     assert artifact["coverage"]["explained_count"] == 1
     assert len(engine.bind_calls) == 1
     reference, row_bindings = engine.bind_calls[0]
-    assert reference.event_ids == ("e1", "e2", "e3", "e4")
+    assert reference.event_ids == ("e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8")
     assert row_bindings == (
         (0, "p1", pd.Timestamp("2025-01-01T00:00:00Z")),
         (1, "p1", pd.Timestamp("2025-01-01T00:00:00Z")),
         (2, "p2", pd.Timestamp("2025-01-01T00:00:00Z")),
-        (3, "p3", pd.Timestamp("2025-01-02T00:00:00Z")),
+        (3, "p3", pd.Timestamp("2025-01-01T00:00:00Z")),
+        (4, "p4", pd.Timestamp("2025-01-01T00:00:00Z")),
+        (5, "p5", pd.Timestamp("2025-01-01T00:00:00Z")),
+        (6, "p6", pd.Timestamp("2025-01-01T00:00:00Z")),
+        (7, "p7", pd.Timestamp("2025-01-02T00:00:00Z")),
     )
     case = engine.explained_cases[0]
-    assert case.same_day_person_row_indices == (2,)
-    assert set(case.baseline_candidate_row_indices) == {0, 1, 2}
-    assert set(case.hybrid_candidate_row_indices) == {0, 1, 2}
+    assert case.same_day_person_row_indices == (6,)
+    assert set(case.baseline_candidate_row_indices) == set(range(7))
+    assert set(case.hybrid_candidate_row_indices) == set(range(7))
+
+
+def test_observability_rejects_any_budget_other_than_fixed_demo_k5() -> None:
+    with pytest.raises(ValueError, match="exactly 5"):
+        build_observability_artifact(
+            **_artifact_fixture(inspections_per_day=25)
+        )
+
+
+def test_observability_fails_before_explaining_without_community_capability() -> None:
+    engine = FakeExplanationEngine()
+    engine.community = None
+
+    with pytest.raises(ValueError, match="community"):
+        build_observability_artifact(
+            **_artifact_fixture(explanation_engine=engine)
+        )
+
+    assert engine.explained_cases == []
+
+
+def test_schema2_cases_resolve_to_deduplicated_top_level_communities() -> None:
+    artifact = build_observability_artifact(**_artifact_fixture())
+
+    all_cases = [
+        *artifact["cohorts"]["hybrid_only"],
+        *artifact["cohorts"]["baseline_only"],
+    ]
+    assert all(case["community_key"] in artifact["communities"] for case in all_cases)
+    assert all(
+        explanation["community_key"] in artifact["communities"]
+        and "community" not in explanation
+        for explanation in artifact["explanations"]
+    )
+
+
+def test_streaming_bundle_returns_only_compact_prepackaged_manifest(tmp_path) -> None:
+    artifact = build_observability_bundle(**_bundle_fixture(tmp_path))
+
+    assert artifact["schema_version"] == "2.0"
+    assert artifact["bundle_id"]
+    assert artifact["sidecar_base"].startswith("recovery/bundles/")
+    assert set(artifact["case_index"]) == {"case:p1", "case:p6"}
+    assert set(artifact["community_index"])
+    assert "communities" not in artifact
+    assert "explanations" not in artifact
+    checkpoint = json.loads(
+        next((tmp_path / ".recovery-stage").glob("*/checkpoint.json")).read_text()
+    )
+    fingerprint = checkpoint["run_fingerprint"]
+    assert fingerprint["corpus_identity"] == "fixture-v9"
+    assert set(fingerprint["engine"]) == {
+        "graph_sha256",
+        "model_state_sha256",
+        "rank_reference_fingerprint",
+    }
+    assert fingerprint["policy"] == {
+        "observability_seed": 0,
+        "gnn_arm": "sage",
+        "surrounding_seeds": [0, 1, 2],
+        "inspections_per_day": 5,
+        "gnnexplainer_restart_seeds": [0, 1, 2],
+        "gnnexplainer_epochs": 150,
+        "narrative_model": MODEL_TAG,
+        "narrative_prompt_version": PROMPT_VERSION,
+    }
+    json.dumps(artifact, sort_keys=True, allow_nan=False)
+
+
+def test_streaming_resume_skips_completed_explain_and_narrate_work(tmp_path) -> None:
+    class InterruptOnceEngine(FakeExplanationEngine):
+        def __init__(self):
+            super().__init__()
+            self.fail_baseline_once = True
+
+        def community(self, person_id, scoring_day):
+            if person_id == "p1" and self.fail_baseline_once:
+                self.fail_baseline_once = False
+                raise RuntimeError("planned interruption")
+            return super().community(person_id, scoring_day)
+
+    engine = InterruptOnceEngine()
+    narrative_calls = []
+
+    def recording_narrative(packet):
+        narrative_calls.append(packet["snapshot"])
+        return _fake_narrative(packet)
+
+    kwargs = _bundle_fixture(
+        tmp_path,
+        explanation_engine=engine,
+        narrative_builder=recording_narrative,
+    )
+    with pytest.raises(RuntimeError, match="planned interruption"):
+        build_observability_bundle(**kwargs)
+
+    assert [case.person_id for case in engine.explained_cases] == ["p6"]
+    assert len(narrative_calls) == 1
+
+    artifact = build_observability_bundle(**kwargs)
+
+    assert artifact["coverage"]["complete"] is True
+    assert [case.person_id for case in engine.explained_cases] == ["p6"]
+    assert len(narrative_calls) == 1
+    assert engine.release_calls
+
+
+def test_streaming_two_targets_reuse_one_immutable_base_community(tmp_path) -> None:
+    pool = _artifact_fixture()["pool"].copy()
+    pool["t"] = pd.Timestamp("2025-01-01T01:00:00Z")
+
+    class SharedCommunityEngine(FakeExplanationEngine):
+        def community(self, person_id, scoring_day):
+            day = pd.Timestamp(scoring_day).isoformat()
+            return {
+                "complete": True,
+                "scoring_day": day,
+                "component_id": "component:shared",
+                "community_key": "community:shared",
+                "nodes": [
+                    {
+                        "node_id": "shared",
+                        "caught_before_snapshot": False,
+                        "caught_label_available_time": None,
+                    },
+                    {
+                        "node_id": "support:shared",
+                        "caught_before_snapshot": False,
+                        "caught_label_available_time": None,
+                    }
+                ],
+                "nodes_by_id": {},
+                "edges": [
+                    {
+                        "edge_id": "edge:shared",
+                        "u": "shared",
+                        "v": "support:shared",
+                        "edge_type": "COTRAVEL",
+                        "source_row_ids": ["row:shared"],
+                        "observations": [
+                            {
+                                "source_row_id": "row:shared",
+                                "available_time": (
+                                    pd.Timestamp(scoring_day)
+                                    - pd.Timedelta(seconds=1)
+                                ).isoformat(),
+                            }
+                        ],
+                    }
+                ],
+                "base_source_row_ids": ["row:shared"],
+                "provenance_expansions": [],
+            }
+
+    class CountingWriter(RecoveryBundleWriter):
+        community_writes = 0
+
+        def write_community(self, community):
+            type(self).community_writes += 1
+            return super().write_community(community)
+
+    recovery = _artifact_fixture()["seed_level_unique_person_recovery"]
+    for record in recovery["seeds"].values():
+        record["baseline_unique_people_recovered"] = 5
+        record["hybrid_unique_people_recovered"] = 5
+    recovery["mean"]["baseline_unique_people_recovered"] = 5.0
+    recovery["mean"]["hybrid_unique_people_recovered"] = 5.0
+    recovery["score_averaged_ensemble"][
+        "baseline_unique_people_recovered"
+    ] = 5
+    recovery["score_averaged_ensemble"][
+        "hybrid_unique_people_recovered"
+    ] = 5
+
+    artifact = build_observability_bundle(
+        **_bundle_fixture(
+            tmp_path,
+            pool=pool,
+            baseline_raw=np.array([1.0, 0.01, 0.9, 0.8, 0.7, 0.6, 0.1, 0.05]),
+            seed0_gnn_raw=np.array([0.0, 0.01, 0.1, 0.6, 0.7, 0.8, 1.0, 0.9]),
+            explanation_engine=SharedCommunityEngine(),
+            writer_factory=CountingWriter,
+            seed_level_unique_person_recovery=recovery,
+        )
+    )
+
+    assert artifact["coverage"]["hybrid_only_count"] == 2
+    assert CountingWriter.community_writes == 1
+    assert set(artifact["community_index"]) == {"community:shared"}
+
+
+def test_failed_new_streaming_run_preserves_prior_published_bundle(tmp_path) -> None:
+    first = build_observability_bundle(**_bundle_fixture(tmp_path))
+    current = tmp_path / "recovery" / "current.json"
+    prior_pointer = current.read_bytes()
+    prior_manifest = (
+        tmp_path / "recovery" / first["bundle_path"] / "manifest.json"
+    ).read_bytes()
+
+    def fail_narrative(packet):
+        raise RuntimeError("planned narrative failure")
+
+    with pytest.raises(RuntimeError, match="planned narrative failure"):
+        build_observability_bundle(
+            **_bundle_fixture(
+                tmp_path,
+                corpus_identity="fixture-v9-new-run",
+                narrative_builder=fail_narrative,
+            )
+        )
+
+    assert current.read_bytes() == prior_pointer
+    assert (
+        tmp_path / "recovery" / first["bundle_path"] / "manifest.json"
+    ).read_bytes() == prior_manifest
+
+
+def test_conflicting_complete_payloads_for_one_engine_community_key_fail() -> None:
+    class ConflictingCommunityEngine(FakeExplanationEngine):
+        def community(self, person_id, scoring_day):
+            community = super().community(person_id, scoring_day)
+            community["community_key"] = "community:conflict"
+            return community
+
+    with pytest.raises(ValueError, match="conflicting payloads"):
+        build_observability_artifact(
+            **_artifact_fixture(explanation_engine=ConflictingCommunityEngine())
+        )
+
+
+def test_seed_level_unique_person_summary_must_match_fixed_policy_and_exact_math() -> None:
+    bad = _artifact_fixture()["seed_level_unique_person_recovery"] | {
+        "common_validation_tuned_fusion_weight": 0.5
+    }
+
+    with pytest.raises(ValueError, match="fusion weight"):
+        build_observability_artifact(
+            **_artifact_fixture(seed_level_unique_person_recovery=bad)
+        )
 
 
 @pytest.mark.parametrize(
@@ -1127,32 +1575,17 @@ def test_observability_fails_closed_without_exact_seed_zero_sage_scope(
         {"false_negative_flag": True},
     ],
 )
-def test_invalid_detailed_explanations_fail_but_keep_lightweight_cohort(
+def test_invalid_detailed_explanations_prevent_artifact_publication(
     explanation_overrides: dict[str, object],
 ) -> None:
     engine = FakeExplanationEngine(
         explanation_overrides=explanation_overrides
     )
 
-    artifact = build_observability_artifact(
-        **_artifact_fixture(explanation_engine=engine)
-    )
-
-    assert [case["person_id"] for case in artifact["hybrid_only_cases"]] == [
-        "p2"
-    ]
-    assert artifact["explanations"] == []
-    assert artifact["coverage"] == {
-        "hybrid_only_count": 1,
-        "explanation_limit": 40,
-        "attempted_count": 1,
-        "explained_count": 0,
-        "failed_count": 1,
-    }
-    failure = artifact["generation_diagnostics"]["failed_attempts"][0]
-    assert failure["person_id"] == "p2"
-    assert failure["event_id"] == "e3"
-    assert failure["reason_code"] == "ValueError"
+    with pytest.raises(ValueError, match="complete Hybrid-only explanation coverage"):
+        build_observability_artifact(
+            **_artifact_fixture(explanation_engine=engine)
+        )
 
 
 @pytest.mark.parametrize(
@@ -1228,15 +1661,10 @@ def test_exact_at_snapshot_evidence_is_rejected_as_not_strictly_asof(
         explanation_overrides=overrides
     )
 
-    artifact = build_observability_artifact(
-        **_artifact_fixture(explanation_engine=engine)
-    )
-
-    assert artifact["explanations"] == []
-    assert artifact["coverage"]["failed_count"] == 1
-    assert "strictly as-of" in artifact["generation_diagnostics"][
-        "failed_attempts"
-    ][0]["message"]
+    with pytest.raises(ValueError, match="complete Hybrid-only explanation coverage"):
+        build_observability_artifact(
+            **_artifact_fixture(explanation_engine=engine)
+        )
 
 
 def test_ungrounded_narrative_is_rejected_despite_validated_flag() -> None:
@@ -1251,15 +1679,10 @@ def test_ungrounded_narrative_is_rejected_despite_validated_flag() -> None:
             "validated": True,
         }
 
-    artifact = build_observability_artifact(
-        **_artifact_fixture(narrative_builder=invented_narrative)
-    )
-
-    assert artifact["explanations"] == []
-    assert artifact["coverage"]["failed_count"] == 1
-    assert "narrative" in artifact["generation_diagnostics"][
-        "failed_attempts"
-    ][0]["message"]
+    with pytest.raises(ValueError, match="complete Hybrid-only explanation coverage"):
+        build_observability_artifact(
+            **_artifact_fixture(narrative_builder=invented_narrative)
+        )
 
 
 def test_narrative_builder_cannot_mutate_its_grounding_reference() -> None:
@@ -1267,15 +1690,10 @@ def test_narrative_builder_cannot_mutate_its_grounding_reference() -> None:
         packet["ranks"]["seed0_hybrid"] = 999
         return render_template(packet)
 
-    artifact = build_observability_artifact(
-        **_artifact_fixture(narrative_builder=mutating_narrative)
-    )
-
-    assert artifact["explanations"] == []
-    assert artifact["coverage"]["failed_count"] == 1
-    assert "narrative" in artifact["generation_diagnostics"][
-        "failed_attempts"
-    ][0]["message"]
+    with pytest.raises(ValueError, match="complete Hybrid-only explanation coverage"):
+        build_observability_artifact(
+            **_artifact_fixture(narrative_builder=mutating_narrative)
+        )
 
 
 def test_explanation_limit_counts_successes_not_failed_attempts() -> None:

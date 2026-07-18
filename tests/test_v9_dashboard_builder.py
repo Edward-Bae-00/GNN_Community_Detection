@@ -1,4 +1,6 @@
 import csv
+import copy
+import errno
 import importlib.util
 import json
 import re
@@ -137,7 +139,7 @@ def test_v9_ui_includes_model_daily_catch_chart():
     assert "Number(point.dataset.index)===i" in ui
     assert "v9-combined-chart" in ui
     assert "crossing events / day" in ui
-    assert "hidden carriers found / day" in ui
+    assert "hidden-positive event hits / day" in ui
     assert 'data-layer="hidden-carriers"' in ui
     assert 'data-layer="crossings"' in ui
     assert "v9-hidden-carriers-layer" in ui
@@ -148,13 +150,13 @@ def test_v9_ui_keeps_three_metric_lenses_without_redundant_global_table():
     ui = ui_path.read_text()
 
     assert "Read the V9 result through three lenses" in ui
-    assert "1. Global ranking" in ui
-    assert "2. Findable depth" in ui
-    assert "3. Daily operations" in ui
+    assert "1. Global event ranking" in ui
+    assert "2. Findable event depth" in ui
+    assert "3. Daily event operations" in ui
     assert 'id="v9-pop"' in ui
     assert "Observable slice" in ui
     assert "Whole pool" in ui
-    assert "Depth Recall" in ui
+    assert "Depth event recall" in ui
     assert 'id="v9-bars"' in ui
     assert (
         "Leak-safe baselines use row-level history and context. GNN arms add as-of "
@@ -163,27 +165,27 @@ def test_v9_ui_keeps_three_metric_lenses_without_redundant_global_table():
     assert (
         "Baselines use the target row; GNN arms add graph evidence available before scoring."
     ) in ui
-    assert "Each panel uses a different population or inspection budget." in ui
+    assert "The main rankings count event hits; the recovery explorer separately counts unique people." in ui
     assert "The graph advantage appears at operational depth." in ui
     assert (
-        "One whole-pool top-K list, with all hidden carriers in the recall denominator."
+        "One whole-pool top-K list, with all hidden-positive events in the recall denominator."
     ) in ui
     assert (
-        "Defaults to the '+fmt(demo.stratum_hidden.observable)+'-carrier observable "
+        "Defaults to the '+fmt(demo.stratum_hidden.observable)+'-event observable "
         "slice. Toggle for the whole pool."
     ) in ui
     assert (
         "Each of '+fmt(dailyDays)+' test days gets its own quota; 25/day equals "
         "'+fmt(dailyBudget25)+' inspections."
     ) in ui
-    assert "Share of hidden carriers found in the selected population." in ui
+    assert "Share of hidden-positive events hit in the selected population." in ui
     assert (
         "Found, precision, recall, and F1 under fixed per-day inspection budgets."
     ) in ui
     assert (
-        "Daily test-window crossing volume and hidden carriers found by each model."
+        "Daily test-window crossing volume and hidden-positive event hits by each model."
     ) in ui
-    assert "Daily top-k finds only. Toggle a model to show or hide its line." in ui
+    assert "Daily top-k event hits only. Toggle a model to show or hide its line." in ui
     assert (
         "Paired event-bootstrap results for Hybrid minus baseline, using global and daily "
         "budgets."
@@ -193,6 +195,24 @@ def test_v9_ui_keeps_three_metric_lenses_without_redundant_global_table():
     assert "Global Found@K by selected population" not in ui
     assert 'id="v9-table"' not in ui
     assert "function drawTable()" not in ui
+
+
+def test_v9_ui_labels_overall_found_counts_as_event_hits_not_people():
+    ui = UI_MODULE_PATH.read_text()
+
+    for label in (
+        "Hybrid event hits",
+        "Baseline event hits",
+        "GNN event-hit ceiling",
+        "Depth event recall",
+        "hidden-positive event hits / day",
+    ):
+        assert label in ui
+    assert "Whole-pool hidden carriers found" not in ui
+    assert "observable hidden-positive events" in ui
+    assert "Hidden-positive event hits" in ui
+    assert "observable carriers" not in ui
+    assert ">Hidden carriers<" not in ui
 
 
 def test_v9_ui_removes_whole_pool_model_comparison_and_dead_helpers():
@@ -214,7 +234,7 @@ def test_v9_ui_adds_independent_simulated_catch_contract():
     ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
-    assert "Simulated catches - first-time recoveries" in ui
+    assert "Simulated catches - first-time unique-person recoveries" in ui
     assert 'id="v9-simulated-catches"' in ui
     assert 'id="v9-simulated-k"' in ui
     assert 'id="v9-simulated-summary"' in ui
@@ -575,7 +595,6 @@ def test_load_recovery_artifact_warns_and_returns_none_when_missing(
     [
         ("{not-json", "invalid recovery artifact"),
         (json.dumps([]), "unsupported recovery artifact schema"),
-        (json.dumps({"schema_version": "2.0"}), "unsupported recovery artifact schema"),
     ],
 )
 def test_load_recovery_artifact_warns_and_returns_none_when_invalid(
@@ -586,6 +605,14 @@ def test_load_recovery_artifact_warns_and_returns_none_when_invalid(
 
     assert BUILDER._load_recovery_artifact(path) is None
     assert warning in capsys.readouterr().out
+
+
+def test_load_recovery_artifact_fails_closed_for_present_invalid_schema_v2(tmp_path):
+    path = tmp_path / "hybrid_recovery_explanations_v9.json"
+    path.write_text(json.dumps({"schema_version": "2.0"}))
+
+    with pytest.raises(ValueError, match="schema-2 recovery artifact"):
+        BUILDER._load_recovery_artifact(path)
 
 
 def test_load_v9_data_uses_only_separate_recovery_artifact(
@@ -671,3 +698,625 @@ def test_recovery_assets_reject_existing_assets_in_wrong_boundaries(template):
             ".v9-recovery{}",
             "function buildRecoveryEvidenceViewModel(){}",
         )
+
+
+def _schema_v2_recovery_artifact():
+    shared_community = {
+        "community_key": "2025-01-02:component-7",
+        "scoring_day": "2025-01-02T00:00:00Z",
+        "component_id": "component-7",
+        "complete": True,
+        "nodes": [
+            {"node_id": "p1", "target": True, "pooled_member": True},
+            {"node_id": "p2", "target": False, "pooled_member": True},
+        ],
+        "edges": [
+            {
+                "edge_id": "e2",
+                "u": "p2",
+                "v": "p1",
+                "edge_type": "RESIDENCE",
+                "source_row_ids": ["row-2"],
+                "source_row_count": 1,
+                "observations": [{"source_row_id": "row-2", "available_time": "2025-01-01T11:00:00Z"}],
+            },
+            {
+                "edge_id": "e1",
+                "u": "p1",
+                "v": "p2",
+                "edge_type": "COTRAVEL",
+                "source_row_ids": ["row-1a", "row-1b"],
+                "source_row_count": 2,
+                "observations": [
+                    {"source_row_id": "row-1a", "available_time": "2025-01-01T09:00:00Z"},
+                    {"source_row_id": "row-1b", "available_time": "2025-01-01T10:00:00Z"},
+                ],
+            },
+        ],
+        "provenance_expansions": [
+            {
+                "expansion_id": "expansion-1",
+                "label": "outside message community",
+                "nodes": [{"node_id": "p3"}],
+                "edges": [{
+                    "edge_id": "e3", "u": "p2", "v": "p3",
+                    "edge_type": "SHARED_PLATE",
+                    "source_row_ids": ["row-3"], "source_row_count": 1,
+                    "observations": [{"source_row_id": "row-3", "available_time": "2025-01-01T12:00:00Z"}],
+                }],
+            }
+        ],
+    }
+    return {
+        "schema_version": "2.0",
+        "policy": {
+            "observability_seed": 0,
+            "inspections_per_day": 5,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+        },
+        "summary": {
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 1,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 1,
+            "net_gain": 0,
+        },
+        "coverage": {
+            "hybrid_only_count": 1,
+            "baseline_only_count": 1,
+            "explained_count": 1,
+            "llm_validated_count": 1,
+            "failed_count": 0,
+            "complete": True,
+        },
+        "cohorts": {
+            "hybrid_only": [
+                {
+                    "case_id": "hybrid:p1",
+                    "person_id": "p1",
+                    "event_id": "crossing-1",
+                    "scoring_day": "2025-01-02T00:00:00Z",
+                    "community_key": "2025-01-02:component-7",
+                    "baseline_rank": 20,
+                    "seed0_gnn_rank": 2,
+                    "seed0_hybrid_rank": 4,
+                }
+            ],
+            "baseline_only": [
+                {
+                    "case_id": "baseline:p2",
+                    "person_id": "p2",
+                    "event_id": "crossing-2",
+                    "scoring_day": "2025-01-02T00:00:00Z",
+                    "community_key": "2025-01-02:component-7",
+                    "baseline_rank": 3,
+                    "seed0_gnn_rank": 30,
+                    "seed0_hybrid_rank": 18,
+                }
+            ],
+        },
+        "explanations": [
+            {
+                "case_id": "hybrid:p1",
+                "community_key": "2025-01-02:component-7",
+                "llm_narrative": {
+                    "source": "llm",
+                    "model": "gemma4:12b",
+                    "validated": True,
+                    "summary": "Local narrative.",
+                },
+                "attributions": {
+                    "top_edges": [{"edge_id": "e1", "explainer_median": 0.8}],
+                    "top_local_nodes": [{"node_id": "p2", "explainer_median": 0.7}],
+                    "top_features": [{"feature_name": "caught_before_snapshot", "node_id": "p2", "explainer_median": 0.6}],
+                },
+                "decision_ledger": {
+                    "component_pooling": {"top_members_by_absolute_contribution": [{"person_id": "p2", "pooled_logit_contribution": 0.4}]},
+                    "rank_fusion": {"daily_budget": 5, "baseline_weighted_term": 0.2, "seed0_gnn_weighted_term": 0.5, "hybrid_score": 0.7},
+                },
+            }
+        ],
+        "communities": [shared_community],
+    }
+
+
+def _load_recovery_sidecars_module():
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "Documents/Data/scripts/v9_recovery_sidecars.py"
+    )
+    assert module_path.exists(), "recovery sidecar packager is missing"
+    spec = importlib.util.spec_from_file_location("v9_recovery_sidecars", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _writer_shaped_recovery_bundle(tmp_path):
+    module_path = Path(__file__).resolve().parents[1] / "gnn/recovery_bundle.py"
+    spec = importlib.util.spec_from_file_location("recovery_bundle", module_path)
+    recovery_bundle = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recovery_bundle)
+    RecoveryBundleWriter = recovery_bundle.RecoveryBundleWriter
+
+    source_root = tmp_path / "producer"
+    writer = RecoveryBundleWriter(
+        tmp_path / "producer-stage",
+        source_root / "recovery",
+        run_fingerprint={"seed": 0, "k": 5},
+        chunk_size=1,
+        sidecar_prefix="recovery",
+    )
+    community = {
+        "community_key": "community:a",
+        "complete": True,
+        "scoring_day": "2025-01-02T00:00:00+00:00",
+        "component_id": "component-7",
+        "nodes": [
+            {"node_id": "person:p1", "kind": "person"},
+            {"node_id": "plate:x", "kind": "plate"},
+        ],
+        "edges": [{
+            "edge_id": "edge:1",
+            "u": "person:p1",
+            "v": "plate:x",
+            "edge_type": "used_plate",
+            "source_row_ids": ["row:1"],
+            "source_row_count": 1,
+            "observations": [{
+                "source_row_id": "row:1",
+                "available_time": "2025-01-01",
+            }],
+        }],
+        "provenance_expansions": [{
+            "expansion_id": "expansion:1",
+            "label": "shared plate history",
+            "nodes": [{"node_id": "person:p2", "kind": "person"}],
+            "edges": [{
+                "edge_id": "edge:2",
+                "u": "person:p2",
+                "v": "plate:x",
+                "edge_type": "used_plate",
+                "source_row_ids": ["row:2"],
+                "source_row_count": 1,
+                "observations": [{
+                    "source_row_id": "row:2",
+                    "available_time": "2024-12-31",
+                }],
+            }],
+        }],
+    }
+    writer.write_community(community)
+    hybrid_case = {
+        "case_id": "case:h1",
+        "person_id": "p1",
+        "event_id": "event:h1",
+        "community_key": "community:a",
+        "scoring_day": community["scoring_day"],
+    }
+    explanation = {
+        **hybrid_case,
+        "attributions": {"top_edges": []},
+        "llm_narrative": {
+            "source": "llm",
+            "model": "gemma4:12b",
+            "validated": True,
+            "prompt_version": "v1",
+            "summary": "Grounded summary.",
+            "summary_source_refs": ["edge:1"],
+            "claims": [{"text": "Grounded claim.", "source_refs": ["edge:1"]}],
+        },
+    }
+    overlay = {
+        "nodes": [{"node_id": "person:overlay", "kind": "person"}],
+        "edges": [{
+            "edge_id": "overlay-edge:1",
+            "u": "person:overlay",
+            "v": "plate:x",
+            "edge_type": "attributed_used_plate",
+            "source_row_ids": ["overlay-row:1"],
+            "source_row_count": 1,
+            "observations": [{
+                "source_row_id": "overlay-row:1",
+                "available_time": "2025-01-01",
+            }],
+        }],
+        "provenance_expansions": [{
+            "expansion_id": "overlay-expansion:1",
+            "label": "overlay neighbor",
+            "nodes": [{"node_id": "person:overlay-neighbor", "kind": "person"}],
+            "edges": [{
+                "edge_id": "overlay-edge:2",
+                "u": "person:overlay-neighbor",
+                "v": "plate:x",
+                "edge_type": "attributed_used_plate",
+                "source_row_ids": ["overlay-row:2"],
+                "source_row_count": 1,
+                "observations": [{
+                    "source_row_id": "overlay-row:2",
+                    "available_time": "2024-12-31",
+                }],
+            }],
+        }],
+    }
+    writer.write_case(
+        "hybrid_only",
+        hybrid_case,
+        explanation=explanation,
+        overlay_evidence=overlay,
+    )
+    baseline_case = {
+        "case_id": "case:b1",
+        "person_id": "p3",
+        "event_id": "event:b1",
+        "community_key": "community:a",
+        "scoring_day": community["scoring_day"],
+    }
+    writer.write_case("baseline_only", baseline_case)
+    seed_summary = {
+        "inspections_per_day": 5,
+        "common_validation_tuned_fusion_weight": 0.75,
+        "seeds": {
+            "0": {"hybrid_unique_people_recovered": 1},
+            "1": {"hybrid_unique_people_recovered": 1},
+            "2": {"hybrid_unique_people_recovered": 1},
+        },
+        "mean": {"hybrid_unique_people_recovered": 1.0},
+        "population_sd": {"hybrid_unique_people_recovered": 0.0},
+        "score_averaged_ensemble": {"hybrid_unique_people_recovered": 1},
+    }
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=["case:h1"],
+        expected_baseline_case_ids=["case:b1"],
+        policy={
+            "observability_seed": 0,
+            "inspections_per_day": 5,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+        },
+        summary={
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 1,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 1,
+            "net_gain": 0,
+            "seed_level_unique_person_recovery": seed_summary,
+        },
+    )
+    artifact_path = source_root / "manifest.json"
+    artifact_path.write_text(json.dumps(manifest))
+    return manifest, artifact_path
+
+
+def test_schema_v2_sidecar_packager_is_deterministic_deduplicated_and_manifest_only(
+    tmp_path,
+):
+    sidecars = _load_recovery_sidecars_module()
+    artifact = _schema_v2_recovery_artifact()
+
+    first = sidecars.package_recovery_sidecars(
+        artifact, tmp_path / "recovery", chunk_size=1
+    )
+    second = sidecars.package_recovery_sidecars(
+        artifact, tmp_path / "recovery", chunk_size=1
+    )
+
+    assert first == second
+    assert first["schema_version"] == "2.0"
+    assert first["policy"]["inspections_per_day"] == 5
+    assert "explanations" not in first
+    assert "communities" not in first
+    assert set(first["case_index"]) == {"hybrid:p1", "baseline:p2"}
+    assert len(first["community_index"]) == 1
+    assert first["case_index"]["hybrid:p1"]["cohort"] == "hybrid_only"
+    assert first["case_index"]["baseline:p2"]["cohort"] == "baseline_only"
+
+    bundle_dir = tmp_path / "recovery" / first["bundle_path"]
+    community_ref = next(iter(first["community_index"].values()))
+    community = json.loads((bundle_dir / community_ref["path"]).read_text())
+    assert community["complete"] is True
+    assert community["node_count"] == 3
+    assert community["edge_count"] == 3
+    assert community["provenance_observation_count"] == 4
+    assert len(community["edge_chunks"]) == 3
+    assert len(community["provenance_chunks"]) == 4
+    assert community["provenance_expansions"] == [{
+        "expansion_id": "expansion-1",
+        "label": "outside message community",
+        "node_ids": ["p3"],
+        "edge_ids": ["e3"],
+    }]
+    assert all("sha256" in chunk and "path" in chunk for chunk in community["edge_chunks"])
+    edge_payload = json.loads((bundle_dir / community["edge_chunks"][0]["path"]).read_text())
+    assert "observations" not in edge_payload["edges"][0]
+    assert edge_payload["edges"][0]["source_row_count"] == len(
+        edge_payload["edges"][0]["source_row_ids"]
+    )
+    provenance = []
+    for chunk in community["provenance_chunks"]:
+        provenance.extend(json.loads((bundle_dir / chunk["path"]).read_text())["observations"])
+    assert {row["edge_id"] for row in provenance} == {"e1", "e2", "e3"}
+    assert json.loads((tmp_path / "recovery/current.json").read_text())["bundle_id"] == first["bundle_id"]
+
+
+def test_schema_v2_packaging_failure_keeps_prior_bundle_pointer(tmp_path):
+    sidecars = _load_recovery_sidecars_module()
+    output = tmp_path / "recovery"
+    sidecars.package_recovery_sidecars(_schema_v2_recovery_artifact(), output)
+    prior_pointer = (output / "current.json").read_bytes()
+    invalid = _schema_v2_recovery_artifact()
+    invalid["communities"][0]["complete"] = False
+
+    with pytest.raises(ValueError):
+        sidecars.package_recovery_sidecars(invalid, output)
+
+    assert (output / "current.json").read_bytes() == prior_pointer
+
+
+def test_schema_v2_sidecar_packager_rejects_incomplete_coverage(tmp_path):
+    sidecars = _load_recovery_sidecars_module()
+    artifact = _schema_v2_recovery_artifact()
+    artifact["coverage"]["llm_validated_count"] = 0
+
+    with pytest.raises(ValueError, match="coverage"):
+        sidecars.package_recovery_sidecars(artifact, tmp_path / "recovery")
+
+
+def test_schema_v2_sidecar_packager_rejects_unvalidated_hybrid_narrative(tmp_path):
+    sidecars = _load_recovery_sidecars_module()
+    artifact = _schema_v2_recovery_artifact()
+    artifact["explanations"][0]["llm_narrative"]["validated"] = False
+
+    with pytest.raises(ValueError, match="validated local Gemma"):
+        sidecars.package_recovery_sidecars(artifact, tmp_path / "recovery")
+
+
+def test_builder_rejects_raw_schema_v2_recovery_without_producer_bundle(
+    tmp_path, monkeypatch
+):
+    artifact = _schema_v2_recovery_artifact()
+    artifact_path = tmp_path / "recovery.json"
+    artifact_path.write_text(json.dumps(artifact))
+    monkeypatch.setattr(BUILDER, "OUT_DIR", str(tmp_path / "dashboard"))
+
+    with pytest.raises(ValueError, match="prepackaged producer bundle"):
+        BUILDER._load_recovery_artifact(artifact_path)
+
+
+def test_builder_atomically_publishes_prepackaged_schema_v2_manifest(
+    tmp_path, monkeypatch
+):
+    manifest, artifact_path = _writer_shaped_recovery_bundle(tmp_path)
+    dashboard = tmp_path / "dashboard"
+    monkeypatch.setattr(BUILDER, "OUT_DIR", str(dashboard))
+
+    published = BUILDER._load_recovery_artifact(artifact_path)
+
+    assert published == manifest
+    copied_bundle = dashboard / "recovery" / published["bundle_path"]
+    assert (copied_bundle / "manifest.json").exists()
+    assert json.loads((dashboard / "recovery/current.json").read_text())[
+        "bundle_id"
+    ] == published["bundle_id"]
+    source_bundle = artifact_path.parent / manifest["sidecar_base"]
+    community_ref = next(iter(manifest["community_index"].values()))
+    community = json.loads((source_bundle / community_ref["path"]).read_text())
+    for field in (
+        "node_chunks",
+        "edge_chunks",
+        "provenance_chunks",
+        "provenance_expansion_membership_chunks",
+    ):
+        assert all((copied_bundle / ref["path"]).is_file() for ref in community[field])
+
+    hybrid_ref = manifest["case_index"]["case:h1"]
+    hybrid_payload = json.loads((source_bundle / hybrid_ref["path"]).read_text())
+    overlay = hybrid_payload["overlay_evidence"]
+    for field in (
+        "node_chunks",
+        "edge_chunks",
+        "provenance_chunks",
+        "provenance_expansion_membership_chunks",
+    ):
+        assert all((copied_bundle / ref["path"]).is_file() for ref in overlay[field])
+
+
+def test_prepackaged_overlay_corruption_preserves_prior_pointer(tmp_path, monkeypatch):
+    manifest, artifact_path = _writer_shaped_recovery_bundle(tmp_path)
+    dashboard = tmp_path / "dashboard"
+    monkeypatch.setattr(BUILDER, "OUT_DIR", str(dashboard))
+    BUILDER._load_recovery_artifact(artifact_path)
+    pointer_path = dashboard / "recovery/current.json"
+    prior_pointer = pointer_path.read_bytes()
+
+    source_bundle = artifact_path.parent / manifest["sidecar_base"]
+    hybrid_ref = manifest["case_index"]["case:h1"]
+    hybrid_payload = json.loads((source_bundle / hybrid_ref["path"]).read_text())
+    corrupt_ref = hybrid_payload["overlay_evidence"]["node_chunks"][0]
+    (source_bundle / corrupt_ref["path"]).write_text("{}")
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        BUILDER._load_recovery_artifact(artifact_path)
+
+    assert pointer_path.read_bytes() == prior_pointer
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda manifest: manifest.update(bundle_id="not-a-producer-id"),
+        lambda manifest: manifest.update(bundle_path="bundles/other"),
+        lambda manifest: manifest.update(sidecar_base="recovery/bundles/../"),
+        lambda manifest: manifest.update(
+            sidecar_base="recovery/bundles/abcdefabcdefabcdefabcdef/"
+        ),
+    ],
+    ids=["invalid-id", "path-mismatch", "dot-segment", "base-mismatch"],
+)
+def test_prepackaged_manifest_requires_canonical_bundle_identity(
+    tmp_path, mutate
+):
+    sidecars = _load_recovery_sidecars_module()
+    manifest, artifact_path = _writer_shaped_recovery_bundle(tmp_path)
+    mutate(manifest)
+
+    with pytest.raises(ValueError, match="canonical bundle identity"):
+        sidecars.publish_prepackaged_manifest(
+            manifest, artifact_path, tmp_path / "dashboard/recovery"
+        )
+
+
+def test_prepackaged_publication_isolates_verified_files_and_mutable_current(
+    tmp_path, monkeypatch
+):
+    manifest, artifact_path = _writer_shaped_recovery_bundle(tmp_path)
+    source_bundle = artifact_path.parent / manifest["sidecar_base"]
+    mutable_source = source_bundle / "current.json"
+    mutable_source.write_text('{"mutable":true}')
+    dashboard = tmp_path / "dashboard"
+    monkeypatch.setattr(BUILDER, "OUT_DIR", str(dashboard))
+
+    published = BUILDER._load_recovery_artifact(artifact_path)
+
+    copied_bundle = dashboard / "recovery" / published["bundle_path"]
+    community_ref = next(iter(manifest["community_index"].values()))
+    source_object = source_bundle / community_ref["path"]
+    copied_object = copied_bundle / community_ref["path"]
+    source_bytes = source_object.read_bytes()
+    assert source_object.stat().st_ino != copied_object.stat().st_ino
+    assert mutable_source.stat().st_ino != (copied_bundle / "current.json").stat().st_ino
+    copied_object.write_text("{}")
+    assert source_object.read_bytes() == source_bytes
+
+
+def test_prepackaged_publication_copies_when_cow_clone_is_unsupported(
+    tmp_path, monkeypatch
+):
+    sidecars = _load_recovery_sidecars_module()
+    manifest, artifact_path = _writer_shaped_recovery_bundle(tmp_path)
+    source_bundle = artifact_path.parent / manifest["sidecar_base"]
+    calls = []
+
+    def unsupported_clone(source, destination):
+        calls.append((source, destination))
+        raise OSError(errno.ENOTSUP, "clone unsupported")
+
+    monkeypatch.setattr(sidecars.os, "clonefile", unsupported_clone, raising=False)
+    monkeypatch.setattr(
+        sidecars.os,
+        "link",
+        lambda *_: (_ for _ in ()).throw(AssertionError("hard links are unsafe")),
+    )
+    output = tmp_path / "dashboard/recovery"
+
+    published = sidecars.publish_prepackaged_manifest(
+        manifest, artifact_path, output
+    )
+
+    copied_bundle = output / published["bundle_path"]
+    community_ref = next(iter(manifest["community_index"].values()))
+    assert calls
+    assert (source_bundle / community_ref["path"]).stat().st_ino != (
+        copied_bundle / community_ref["path"]
+    ).stat().st_ino
+    assert json.loads((output / "current.json").read_text())["bundle_id"] == (
+        manifest["bundle_id"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda artifact: artifact["policy"].update(gnn_arm="rgcn"),
+        lambda artifact: artifact["policy"].update(surrounding_results_seeds=[0, 2]),
+        lambda artifact: artifact["summary"].update(net_gain=99),
+        lambda artifact: artifact["cohorts"]["baseline_only"].__setitem__(
+            0, artifact["cohorts"]["hybrid_only"][0]
+        ),
+        lambda artifact: artifact["case_index"].pop("case:b1"),
+        lambda artifact: artifact["case_index"]["case:h1"].update(
+            cohort="baseline_only"
+        ),
+        lambda artifact: artifact["case_index"]["case:h1"].update(
+            community_key="community:other"
+        ),
+    ],
+    ids=[
+        "wrong-gnn-arm",
+        "wrong-surrounding-seeds",
+        "broken-overlap-algebra",
+        "overlapping-case-ids",
+        "incomplete-case-index",
+        "case-index-cohort-mismatch",
+        "case-index-community-mismatch",
+    ],
+)
+def test_compact_manifest_validation_fails_closed(tmp_path, mutate):
+    sidecars = _load_recovery_sidecars_module()
+    manifest, _ = _writer_shaped_recovery_bundle(tmp_path)
+    invalid = copy.deepcopy(manifest)
+    mutate(invalid)
+
+    with pytest.raises(ValueError):
+        sidecars._validate_artifact(invalid)
+
+
+def test_dashboard_directory_swap_rolls_back_all_public_files_on_failure(
+    tmp_path, monkeypatch
+):
+    destination = tmp_path / "dashboard"
+    staged = tmp_path / "staged"
+    for root, marker in ((destination, "old"), (staged, "new")):
+        (root / "recovery").mkdir(parents=True)
+        (root / "data_v9.json").write_text(marker + "-data")
+        (root / "index.html").write_text(marker + "-html")
+        (root / "recovery/current.json").write_text(marker + "-pointer")
+    real_replace = BUILDER.os.replace
+
+    def fail_staged_publish(source, target):
+        if Path(source) == staged and Path(target) == destination:
+            raise OSError("injected dashboard publish failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(BUILDER.os, "replace", fail_staged_publish)
+
+    with pytest.raises(OSError, match="injected dashboard publish failure"):
+        BUILDER._publish_staged_dashboard(staged, destination)
+
+    assert (destination / "data_v9.json").read_text() == "old-data"
+    assert (destination / "index.html").read_text() == "old-html"
+    assert (destination / "recovery/current.json").read_text() == "old-pointer"
+
+
+def test_dashboard_generation_failure_removes_unpublished_staging_directory(
+    tmp_path, monkeypatch
+):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "dashboard_standalone.html").write_text("unused")
+    output = tmp_path / "v9_dashboard"
+    output.mkdir()
+    (output / "index.html").write_text("old")
+    monkeypatch.setattr(BUILDER, "V9_CORPUS", str(corpus))
+    monkeypatch.setattr(BUILDER, "OUT_DIR", str(output))
+    monkeypatch.setattr(
+        BUILDER,
+        "_load_v9_data",
+        lambda **_: (_ for _ in ()).throw(ValueError("injected generation failure")),
+    )
+
+    with pytest.raises(ValueError, match="injected generation failure"):
+        BUILDER.main()
+
+    assert (output / "index.html").read_text() == "old"
+    assert list(tmp_path.glob(".v9_dashboard.stage-*")) == []
+
+
+def test_dashboard_final_log_requires_http_for_schema_v2():
+    source = MODULE_PATH.read_text()
+
+    assert "python -m http.server 8000 --directory Documents/Data/v9_dashboard" in source
+    assert "open v9_dashboard/index.html directly" not in source

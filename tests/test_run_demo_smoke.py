@@ -480,6 +480,79 @@ def test_simulated_catch_state_is_isolated_per_arm_and_budget():
     assert hybrid["later_candidate_events_removed@1"] == 1
 
 
+def test_seed_level_unique_person_recovery_uses_common_weight_and_population_sd():
+    pool = pd.DataFrame(
+        {
+            "t": pd.to_datetime(
+                [
+                    "2025-01-01T01:00:00Z",
+                    "2025-01-01T02:00:00Z",
+                    "2025-01-01T03:00:00Z",
+                    "2025-01-02T01:00:00Z",
+                    "2025-01-02T02:00:00Z",
+                    "2025-01-02T03:00:00Z",
+                ]
+            ),
+            "primary_person_id": ["p1", "px", "p2", "p1", "p3", "py"],
+            "hidden": [True, False, True, True, True, False],
+        }
+    )
+    baseline = np.array([0.9, 0.2, 0.1, 0.95, 0.8, 0.1])
+    gnn_scores = {
+        0: np.array([0.1, 0.9, 0.2, 0.9, 0.1, 0.2]),
+        1: np.array([0.1, 0.2, 0.9, 0.1, 0.9, 0.2]),
+        2: np.array([0.9, 0.2, 0.1, 0.95, 0.8, 0.1]),
+    }
+
+    result = rd._seed_level_unique_person_recovery(
+        pool,
+        baseline,
+        gnn_scores,
+        blend_weight=1.0,
+        official_caught_times={},
+        inspections_per_day=1,
+    )
+
+    assert result["inspections_per_day"] == 1
+    assert result["common_validation_tuned_fusion_weight"] == 1.0
+    assert result["seeds"] == {
+        "0": {
+            "baseline_unique_people_recovered": 2,
+            "hybrid_unique_people_recovered": 1,
+            "net_unique_people_gain": -1,
+        },
+        "1": {
+            "baseline_unique_people_recovered": 2,
+            "hybrid_unique_people_recovered": 2,
+            "net_unique_people_gain": 0,
+        },
+        "2": {
+            "baseline_unique_people_recovered": 2,
+            "hybrid_unique_people_recovered": 2,
+            "net_unique_people_gain": 0,
+        },
+    }
+    assert result["mean"] == pytest.approx(
+        {
+            "baseline_unique_people_recovered": 2.0,
+            "hybrid_unique_people_recovered": 5 / 3,
+            "net_unique_people_gain": -1 / 3,
+        }
+    )
+    assert result["population_sd"] == pytest.approx(
+        {
+            "baseline_unique_people_recovered": 0.0,
+            "hybrid_unique_people_recovered": np.sqrt(2 / 9),
+            "net_unique_people_gain": np.sqrt(2 / 9),
+        }
+    )
+    assert result["score_averaged_ensemble"] == {
+        "baseline_unique_people_recovered": 2,
+        "hybrid_unique_people_recovered": 1,
+        "net_unique_people_gain": -1,
+    }
+
+
 def test_run_demo_smoke():
     out = rd.main(
         corpus_dir=CD,
@@ -500,6 +573,9 @@ def test_run_demo_smoke():
     assert out["model_arms"]["gnn"]["kind"] == "gnn"
     assert out["hidden_total"] >= 0
     assert "observability" not in out
+    assert out["seed_level_unique_person_recovery"][
+        "common_validation_tuned_fusion_weight"
+    ] == out["hybrid_fusion_w_gnn"]
     # Hybrid bootstrap comparisons exist
     assert len(out.get("win_hybrid_whole_pool", {})) > 0
     assert len(out.get("win_hybrid_daily", {})) > 0
@@ -546,14 +622,14 @@ def test_atomic_json_write_replaces_target_without_leaving_temporary_file(
     assert not target.with_suffix(".json.tmp").exists()
 
 
-def test_observability_output_failure_removes_stale_and_temporary_files(
+def test_observability_output_failure_preserves_prior_valid_artifact(
     tmp_path,
 ):
     comparison = tmp_path / "comparison.json"
     comparison.write_text('{"comparison": "valid"}')
     target = tmp_path / "observability.json"
     temporary = target.with_suffix(".json.tmp")
-    target.write_text('{"stale": true}')
+    target.write_text('{"prior": "valid"}')
     temporary.write_text("partial")
 
     def fail_generation():
@@ -564,7 +640,7 @@ def test_observability_output_failure_removes_stale_and_temporary_files(
         rd._write_observability_output(target, fail_generation)
 
     assert comparison.read_text() == '{"comparison": "valid"}'
-    assert not target.exists()
+    assert target.read_text() == '{"prior": "valid"}'
     assert not temporary.exists()
 
 
@@ -593,7 +669,7 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
     monkeypatch.setattr(rd.FC, "RESULTS", tmp_path)
     captured = {}
     score_bundles = []
-    artifact = {"schema_version": "1.0", "kind": "observability-only"}
+    artifact = {"schema_version": "2.0", "kind": "observability-only"}
     original_gnn_scores = rd._gnn_scores
 
     def recording_gnn_scores(*args, **kwargs):
@@ -601,13 +677,13 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
         score_bundles.append(bundle)
         return bundle
 
-    def fake_build_observability_artifact(**kwargs):
+    def fake_build_observability_bundle(**kwargs):
         captured.update(kwargs)
         return artifact
 
     monkeypatch.setattr(rd, "_gnn_scores", recording_gnn_scores)
     monkeypatch.setattr(
-        rd, "build_observability_artifact", fake_build_observability_artifact
+        rd, "build_observability_bundle", fake_build_observability_bundle
     )
     arguments = {
         "corpus_dir": CD,
@@ -640,7 +716,13 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
     assert "observability" not in with_observability
     assert captured["gnn_arm"] == "sage"
     assert captured["surrounding_seeds"] == (0, 1, 2)
-    assert captured["inspections_per_day"] == 25
+    assert captured["inspections_per_day"] == 5
+    assert captured["staging_root"] == tmp_path / ".observability.recovery-stage"
+    assert captured["final_root"] == tmp_path / "recovery"
+    assert captured["corpus_identity"] == str(CD.resolve())
+    assert captured["seed_level_unique_person_recovery"] == with_observability[
+        "seed_level_unique_person_recovery"
+    ]
     assert len(captured["seed0_gnn_raw"]) == with_observability["pool_size"]
     np.testing.assert_array_equal(
         captured["seed0_gnn_raw"], score_bundles[-1].scores_by_seed[0][1]

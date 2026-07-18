@@ -9,10 +9,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import csv
+import tempfile
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -107,7 +110,7 @@ def _is_compatible_v9_demo(demo):
     )
 
 
-def _load_recovery_artifact(path):
+def _load_recovery_artifact(path, output_dir=None):
     if not os.path.exists(path):
         p(f"[v9-dashboard] WARNING: {path} not found; case evidence unavailable.")
         return None
@@ -117,13 +120,40 @@ def _load_recovery_artifact(path):
     except (OSError, json.JSONDecodeError) as error:
         p(f"[v9-dashboard] WARNING: invalid recovery artifact: {error}")
         return None
-    if not isinstance(artifact, dict) or artifact.get("schema_version") != "1.0":
+    if not isinstance(artifact, dict):
+        p("[v9-dashboard] WARNING: unsupported recovery artifact schema.")
+        return None
+    if artifact.get("schema_version") == "2.0":
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        from v9_recovery_sidecars import publish_prepackaged_manifest
+
+        try:
+            dashboard_output = OUT_DIR if output_dir is None else output_dir
+            if (
+                isinstance(artifact.get("case_index"), dict)
+                and isinstance(artifact.get("community_index"), dict)
+                and isinstance(artifact.get("bundle_id"), str)
+            ):
+                return publish_prepackaged_manifest(
+                    artifact,
+                    path,
+                    os.path.join(dashboard_output, "recovery"),
+                )
+            raise ValueError(
+                "schema-2 recovery requires a prepackaged producer bundle"
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"invalid schema-2 recovery artifact: {error}"
+            ) from error
+    if artifact.get("schema_version") != "1.0":
         p("[v9-dashboard] WARNING: unsupported recovery artifact schema.")
         return None
     return artifact
 
 
-def _load_v9_data() -> dict:
+def _load_v9_data(output_dir=None) -> dict:
     if not os.path.exists(V9_DATA):
         p(f"[v9-dashboard] ERROR: {V9_DATA} not found.")
         p("[v9-dashboard] Run: .venv/bin/python Documents/Data/scripts/build_dashboard.py "
@@ -146,7 +176,9 @@ def _load_v9_data() -> dict:
             p("[v9-dashboard] WARNING: discarded incompatible V9 demo payload.")
 
     data.pop("v9RecoveryExplainer", None)
-    recovery_artifact = _load_recovery_artifact(V9_RECOVERY_EXPLANATIONS)
+    recovery_artifact = _load_recovery_artifact(
+        V9_RECOVERY_EXPLANATIONS, output_dir=output_dir
+    )
     if recovery_artifact is not None:
         data["v9RecoveryExplainer"] = recovery_artifact
 
@@ -256,25 +288,41 @@ def _validate_recovery_explorer_mount(html):
     return html
 
 
-def main():
-    tmpl_path = os.path.join(V9_CORPUS, "dashboard_standalone.html")
-    if not os.path.exists(tmpl_path):
-        p(f"[v9-dashboard] ERROR: {tmpl_path} not found.")
-        sys.exit(1)
+def _publish_staged_dashboard(staged_dir, destination_dir):
+    """Swap a complete staged dashboard into place, restoring the prior tree on failure."""
+    staged = Path(staged_dir)
+    destination = Path(destination_dir)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    backup = Path(tempfile.mkdtemp(
+        prefix=f".{destination.name}.backup-", dir=destination.parent
+    ))
+    backup.rmdir()
+    prior_moved = False
+    try:
+        if destination.exists():
+            os.replace(destination, backup)
+            prior_moved = True
+        os.replace(staged, destination)
+    except Exception:
+        if prior_moved and not destination.exists() and backup.exists():
+            os.replace(backup, destination)
+        raise
+    if prior_moved:
+        shutil.rmtree(backup)
 
-    data = _load_v9_data()
-    os.makedirs(OUT_DIR, exist_ok=True)
-    out_data = os.path.join(OUT_DIR, "data_v9.json")
+
+def _build_staged_dashboard(staged_output, destination, tmpl_path):
+    data = _load_v9_data(output_dir=staged_output)
+    out_data = staged_output / "data_v9.json"
     with open(out_data, "w") as f:
         json.dump(data, f, separators=(",", ":"))
-    p(f"[v9-dashboard] wrote {out_data} ({os.path.getsize(out_data)/1e6:.2f} MB)")
 
     with open(tmpl_path) as f:
         html = f.read()
     html = _normalize_v9_template(html)
 
-    # 1. Keep the generated dashboard self-contained so it also works when
-    # opened directly as a file, while retaining data_v9.json for inspection.
+    # 1. Embed the data while retaining data_v9.json for inspection. Schema-2
+    # sidecars still require HTTP because browsers block file:// fetches.
     html = _embed_dashboard_data(html, data)
 
     # 2. Replace the fetch block in IIFE
@@ -333,11 +381,35 @@ def main():
     html = re.sub(r"<h1>[^<]*</h1>", "<h1>CBP Graph Corpus Explorer &middot; V9</h1>", html, count=1)
 
     # 5. DATA is already embedded above; no local fetch is needed.
-    out_html = os.path.join(OUT_DIR, "index.html")
+    out_html = staged_output / "index.html"
     with open(out_html, "w") as f:
         f.write(html)
-    p(f"[v9-dashboard] wrote {out_html} ({os.path.getsize(out_html)/1e6:.2f} MB)")
-    p("[v9-dashboard] open v9_dashboard/index.html directly or through a local HTTP server.")
+    _publish_staged_dashboard(staged_output, destination)
+    final_data = destination / "data_v9.json"
+    final_html = destination / "index.html"
+    p(f"[v9-dashboard] wrote {final_data} ({os.path.getsize(final_data)/1e6:.2f} MB)")
+    p(f"[v9-dashboard] wrote {final_html} ({os.path.getsize(final_html)/1e6:.2f} MB)")
+    p("[v9-dashboard] run: python -m http.server 8000 --directory Documents/Data/v9_dashboard")
+    p("[v9-dashboard] then open http://localhost:8000/index.html")
+
+
+def main():
+    tmpl_path = os.path.join(V9_CORPUS, "dashboard_standalone.html")
+    if not os.path.exists(tmpl_path):
+        p(f"[v9-dashboard] ERROR: {tmpl_path} not found.")
+        sys.exit(1)
+
+    destination = Path(OUT_DIR)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staged_output = Path(tempfile.mkdtemp(
+        prefix=f".{destination.name}.stage-", dir=destination.parent
+    ))
+    try:
+        _build_staged_dashboard(staged_output, destination, tmpl_path)
+    except Exception:
+        if staged_output.exists():
+            shutil.rmtree(staged_output)
+        raise
 
 
 if __name__ == "__main__":

@@ -37,8 +37,6 @@ _ABLATION_KINDS = frozenset(
     }
 )
 
-_OBSERVABILITY_DAILY_BUDGET = 25
-
 FORBIDDEN_EXPLANATION_FIELDS = frozenset(
     {
         "hidden",
@@ -500,6 +498,7 @@ class Seed0ExplanationEngine:
         self.person_index = self.__prepared_source.index
         self.__rank_state = None
         self.__snapshot_cache: dict[pd.Timestamp, DaySnapshot] = {}
+        self.__community_cache: dict[tuple[pd.Timestamp, object], dict] = {}
         self.__counterfactual_cache: dict[str, dict[str, object]] = {}
         self.__faithfulness_cache: dict[str, float] = {}
         self.__factor_specs_cache: dict[
@@ -584,6 +583,75 @@ class Seed0ExplanationEngine:
         self.__snapshot_cache[day] = result
         return _materialize_snapshot(result)
 
+    @property
+    def cached_snapshot_days(self):
+        return tuple(sorted(self.__snapshot_cache))
+
+    def release_snapshot(self, scoring_day):
+        """Release day-bound tensors and derived diagnostic caches."""
+        day = _scoring_day(scoring_day)
+        removed = self.__snapshot_cache.pop(day, None) is not None
+        community_keys = [
+            key for key in self.__community_cache if key[0] == day
+        ]
+        for key in community_keys:
+            self.__community_cache.pop(key, None)
+        removed = removed or bool(community_keys)
+        if removed:
+            self.__counterfactual_cache.clear()
+            self.__faithfulness_cache.clear()
+            self.__factor_specs_cache = {
+                key: value
+                for key, value in self.__factor_specs_cache.items()
+                if key[1] != day
+            }
+        return removed
+
+    def observability_fingerprint_material(self):
+        """Return compact content fingerprints for resumable diagnostics."""
+        if self.__rank_state is None:
+            raise ValueError("observability fingerprint requires a rank reference")
+
+        graph_digest = hashlib.sha256()
+        for person_id in self.node_ids:
+            payload = person_id.encode("utf-8")
+            graph_digest.update(len(payload).to_bytes(8, "big"))
+            graph_digest.update(payload)
+            feature = np.asarray(
+                self.__prepared_source.node_feat[person_id], dtype=np.float64
+            )
+            graph_digest.update(feature.shape.__repr__().encode("ascii"))
+            graph_digest.update(feature.tobytes(order="C"))
+            caught = self.__prepared_source.caught_time.get(person_id)
+            graph_digest.update(
+                ("" if caught is None else pd.Timestamp(caught).isoformat()).encode(
+                    "utf-8"
+                )
+            )
+        edges = self.__prepared_source._edges_typed
+        graph_digest.update(
+            json.dumps(list(edges.columns), separators=(",", ":")).encode("utf-8")
+        )
+        graph_digest.update(
+            pd.util.hash_pandas_object(edges, index=False).to_numpy().tobytes()
+        )
+        graph_digest.update(str(self.num_rel).encode("ascii"))
+
+        model_digest = hashlib.sha256()
+        for name, tensor in sorted(self.__model.state_dict().items()):
+            encoded_name = name.encode("utf-8")
+            model_digest.update(len(encoded_name).to_bytes(8, "big"))
+            model_digest.update(encoded_name)
+            values = tensor.detach().cpu().contiguous().numpy()
+            model_digest.update(str(values.dtype).encode("ascii"))
+            model_digest.update(repr(values.shape).encode("ascii"))
+            model_digest.update(values.tobytes(order="C"))
+        return {
+            "graph_sha256": graph_digest.hexdigest(),
+            "model_state_sha256": model_digest.hexdigest(),
+            "rank_reference_fingerprint": self.__rank_state.fingerprint,
+        }
+
     def relationship_categories(self, person_id, scoring_day):
         if person_id not in self.person_index:
             raise KeyError(f"unknown person_id: {person_id}")
@@ -599,7 +667,22 @@ class Seed0ExplanationEngine:
         return tuple(sorted(set(incident["edge_type"].astype(str))))
 
     def community(self, person_id, scoring_day):
-        return build_complete_community(self, person_id, scoring_day)
+        if person_id not in self.person_index:
+            raise KeyError(f"unknown person_id: {person_id}")
+        day = _scoring_day(scoring_day)
+        snapshot = self.snapshot(day)
+        component_root = snapshot.component_roots[self.person_index[person_id]]
+        normalized_root = (
+            component_root.item()
+            if isinstance(component_root, np.generic)
+            else component_root
+        )
+        cache_key = (day, normalized_root)
+        cached = self.__community_cache.get(cache_key)
+        if cached is None:
+            cached = build_complete_community(self, person_id, day)
+            self.__community_cache[cache_key] = cached
+        return cached
 
     def score_counterfactual(self, context, factor):
         return score_grouped_counterfactual(self, context, factor)
@@ -1057,6 +1140,19 @@ def _readonly_float_mask(value, *, expected_length, field_name):
     return result
 
 
+def _readonly_node_feature_mask(
+    value, *, expected_shape, field_name="node_feature_mask"
+):
+    mask = np.asarray(value, dtype=float)
+    if mask.ndim != 2 or tuple(mask.shape) != tuple(expected_shape):
+        raise ValueError(f"{field_name} is not aligned with explanation inputs")
+    if not np.isfinite(mask).all() or (mask < 0.0).any():
+        raise ValueError(f"{field_name} must be finite and nonnegative")
+    result = np.array(mask, dtype=float, copy=True)
+    result.setflags(write=False)
+    return result
+
+
 def run_member_explanation(
     engine,
     person_id,
@@ -1081,20 +1177,8 @@ def run_member_explanation(
     )
 
     edge_count = local_edge_index.shape[1]
-    if edge_count == 0:
-        return {
-            "edge_masks": tuple(
-                np.zeros(0, dtype=float) for _ in seeds
-            ),
-            "feature_masks": (),
-            "restart_seeds": seeds,
-            "local_prepool_logit": float(local_logit),
-            "full_prepool_logit": float(full_logit),
-            "status": "no-message-edges",
-        }
-
     edge_masks = []
-    feature_masks = []
+    node_feature_masks = []
     for restart_seed in seeds:
         with torch.random.fork_rng():
             torch.manual_seed(restart_seed)
@@ -1103,31 +1187,34 @@ def run_member_explanation(
                 edge_index=local_edge_index,
                 index=local.target_index,
             )
+        if explanation.edge_mask is None:
+            if edge_count:
+                raise ValueError("edge_mask is required when message edges exist")
+            edge_mask = np.zeros(0, dtype=float)
+        else:
+            edge_mask = explanation.edge_mask.detach().cpu().numpy()
         edge_masks.append(
             _readonly_float_mask(
-                explanation.edge_mask.detach().cpu().numpy(),
+                edge_mask,
                 expected_length=edge_count,
                 field_name="edge_mask",
             )
         )
-        node_mask = explanation.node_mask.detach().cpu().numpy()
-        feature_mask = (
-            node_mask.mean(axis=0) if node_mask.ndim == 2 else node_mask
-        )
-        feature_masks.append(
-            _readonly_float_mask(
-                feature_mask,
-                expected_length=local_x.shape[1],
-                field_name="feature_mask",
+        if explanation.node_mask is None:
+            raise ValueError("node_mask is required for member explanations")
+        node_feature_masks.append(
+            _readonly_node_feature_mask(
+                explanation.node_mask.detach().cpu().numpy(),
+                expected_shape=tuple(local_x.shape),
             )
         )
     return {
         "edge_masks": tuple(edge_masks),
-        "feature_masks": tuple(feature_masks),
+        "node_feature_masks": tuple(node_feature_masks),
         "restart_seeds": seeds,
         "local_prepool_logit": float(local_logit),
         "full_prepool_logit": float(full_logit),
-        "status": "ok",
+        "status": "no-message-edges" if edge_count == 0 else "ok",
     }
 
 
@@ -1875,6 +1962,12 @@ def build_complete_community(engine, target_person_id, scoring_day):
     pooled_indices = set(
         np.flatnonzero(snapshot.component_roots == target_root).tolist()
     )
+    pooled_member_ids = tuple(
+        sorted(engine.node_ids[index] for index in pooled_indices)
+    )
+    scoring_day_iso = snapshot.scoring_day.isoformat()
+    component_id = f"component:{_length_framed_hash(pooled_member_ids)}"
+    community_key = f"community:{_length_framed_hash((scoring_day_iso, component_id))}"
 
     adjacency = {index: set() for index in range(len(engine.node_ids))}
     for source, target in snapshot.edge_index.t().cpu().numpy():
@@ -1916,7 +2009,6 @@ def build_complete_community(engine, target_person_id, scoring_day):
             "node_id": person_id,
             "x": float(positions[person_id][0]),
             "y": float(positions[person_id][1]),
-            "target": person_id == target_person_id,
             "pooled_member": index in pooled_indices,
             "caught_before_snapshot": (
                 person_id in snapshot.caught_before_snapshot
@@ -1984,6 +2076,9 @@ def build_complete_community(engine, target_person_id, scoring_day):
     edges.sort(key=lambda edge: edge["edge_id"])
     return {
         "complete": True,
+        "scoring_day": scoring_day_iso,
+        "component_id": component_id,
+        "community_key": community_key,
         "nodes": nodes,
         "nodes_by_id": nodes_by_id,
         "edges": edges,
@@ -1993,24 +2088,33 @@ def build_complete_community(engine, target_person_id, scoring_day):
 
 
 def _normalized_layout(graph):
-    if len(graph) == 1:
-        person_id = next(iter(graph.nodes))
-        return {person_id: np.array([0.5, 0.5], dtype=float)}
-    raw_positions = nx.spring_layout(graph, seed=0)
-    values = np.array([raw_positions[node] for node in sorted(graph.nodes)], dtype=float)
-    minimum = values.min(axis=0)
-    maximum = values.max(axis=0)
-    span = maximum - minimum
+    """Place deterministic connected clusters in bounded grid cells, O(N+E)."""
+    if not graph:
+        return {}
+    components = sorted(
+        (tuple(sorted(component)) for component in nx.connected_components(graph)),
+        key=lambda component: component[0],
+    )
+    cluster_columns = max(1, int(np.ceil(np.sqrt(len(components)))))
+    cluster_rows = int(np.ceil(len(components) / cluster_columns))
     positions = {}
-    for person_id, point in raw_positions.items():
-        normalized = np.empty(2, dtype=float)
-        for axis in (0, 1):
-            normalized[axis] = (
-                (point[axis] - minimum[axis]) / span[axis]
-                if span[axis] > 0
-                else 0.5
+    for cluster_index, component in enumerate(components):
+        cluster_column = cluster_index % cluster_columns
+        cluster_row = cluster_index // cluster_columns
+        local_columns = max(1, int(np.ceil(np.sqrt(len(component)))))
+        local_rows = int(np.ceil(len(component) / local_columns))
+        for local_index, person_id in enumerate(component):
+            local_column = local_index % local_columns
+            local_row = local_index // local_columns
+            local_x = (local_column + 0.5) / local_columns
+            local_y = (local_row + 0.5) / local_rows
+            positions[person_id] = np.array(
+                [
+                    (cluster_column + 0.1 + 0.8 * local_x) / cluster_columns,
+                    (cluster_row + 0.1 + 0.8 * local_y) / cluster_rows,
+                ],
+                dtype=float,
             )
-        positions[person_id] = normalized
     return positions
 
 
@@ -2262,28 +2366,27 @@ def compose_case_explanation(
     member_explainer=None,
     restart_seeds=(0, 1, 2),
     explainer_epochs=150,
-    max_explainable_component_size=6,
+    max_explainable_component_size=None,
 ):
     """Compose one deterministic, leak-safe seed-0 explanation payload.
 
-    Pooled components larger than ``max_explainable_component_size`` fail
-    closed before any diagnostic, community, factor, or per-member explainer
-    work. The default of 6 matches the measured full-V9 component-size p99 at
-    every sampled scoring day.
+    GNNExplainer runs only for the target person's exact two-hop pre-pool
+    computation. Component pooling remains an exact deterministic ledger.
     """
     if not isinstance(engine, Seed0ExplanationEngine):
         raise ValueError("engine must be a Seed0ExplanationEngine")
     if not isinstance(case, HybridOnlyCase):
         raise ValueError("case must be a HybridOnlyCase")
-    if (
-        not isinstance(max_explainable_component_size, (int, np.integer))
-        or isinstance(max_explainable_component_size, (bool, np.bool_))
-        or max_explainable_component_size <= 0
-    ):
-        raise ValueError(
-            "max_explainable_component_size must be a positive integer"
-        )
-    max_explainable_component_size = int(max_explainable_component_size)
+    if max_explainable_component_size is not None:
+        if (
+            not isinstance(max_explainable_component_size, (int, np.integer))
+            or isinstance(max_explainable_component_size, (bool, np.bool_))
+            or max_explainable_component_size <= 0
+        ):
+            raise ValueError(
+                "max_explainable_component_size must be a positive integer"
+            )
+        max_explainable_component_size = int(max_explainable_component_size)
     seeds = _validated_restart_seeds(restart_seeds)
     reference = engine.rank_reference
     if reference is None:
@@ -2307,10 +2410,14 @@ def compose_case_explanation(
     )
     if not snapshot_probability_parity or not anchor_event_parity:
         raise ValueError("case explanation failed production parity")
-    if decision_trace.get("daily_budget") != _OBSERVABILITY_DAILY_BUDGET:
-        raise ValueError(
-            "case decision trace does not match the frozen 25/day policy"
-        )
+    daily_budget = decision_trace.get("daily_budget")
+    if (
+        not isinstance(daily_budget, (int, np.integer))
+        or isinstance(daily_budget, (bool, np.bool_))
+        or daily_budget <= 0
+    ):
+        raise ValueError("case decision trace daily_budget must be positive")
+    daily_budget = int(daily_budget)
     engine._Seed0ExplanationEngine__validate_candidate_rows_for_day(
         case.anchor.scoring_day,
         case.baseline_candidate_row_indices,
@@ -2329,7 +2436,7 @@ def compose_case_explanation(
                 case.baseline_candidate_row_indices
             ),
             hybrid_candidate_row_indices=case.hybrid_candidate_row_indices,
-            daily_budget=_OBSERVABILITY_DAILY_BUDGET,
+            daily_budget=daily_budget,
         )
     except ValueError as exc:
         raise ValueError(
@@ -2365,7 +2472,10 @@ def compose_case_explanation(
         snapshot.component_roots == component_root
     ).tolist()
     member_ids = sorted(engine.node_ids[index] for index in member_indices)
-    if len(member_ids) > max_explainable_component_size:
+    if (
+        max_explainable_component_size is not None
+        and len(member_ids) > max_explainable_component_size
+    ):
         raise ValueError(
             f"pooled component size {len(member_ids)} exceeds maximum "
             "explainable component size "
@@ -2400,7 +2510,16 @@ def compose_case_explanation(
     diagnostic_edge_source_set_probability(engine, context, ())
     community = engine.community(case.person_id, case.anchor.scoring_day)
 
-    edges = community["edges"]
+    # Attribution values are a target-specific overlay. Never annotate the
+    # canonical day/component community shared by multiple cases.
+    edges = [
+        {
+            key: copy.deepcopy(value)
+            for key, value in canonical_edge.items()
+            if key != "observations"
+        }
+        for canonical_edge in community["edges"]
+    ]
     edge_ids = [edge["edge_id"] for edge in edges]
     source_to_edge = {}
     for edge in edges:
@@ -2414,87 +2533,92 @@ def compose_case_explanation(
 
     restart_edge_values = [defaultdict(float) for _ in seeds]
     feature_count = snapshot.x.shape[1]
-    restart_feature_values = [
-        np.zeros(feature_count, dtype=float) for _ in seeds
-    ]
-    has_feature_masks = False
     explainer = run_member_explanation if member_explainer is None else member_explainer
-    for member_id in member_ids:
-        result = explainer(
-            engine,
-            member_id,
-            case.anchor.scoring_day,
-            restart_seeds=seeds,
-            epochs=explainer_epochs,
+    result = explainer(
+        engine,
+        case.person_id,
+        case.anchor.scoring_day,
+        restart_seeds=seeds,
+        epochs=explainer_epochs,
+    )
+    if tuple(result.get("restart_seeds", ())) != seeds:
+        raise ValueError("target explanation restart seeds are misaligned")
+    expected_logit = float(snapshot.prepool_logits[target_index])
+    if not (
+        np.isclose(
+            result.get("local_prepool_logit", np.nan),
+            expected_logit,
+            rtol=1e-6,
+            atol=1e-6,
         )
-        if tuple(result.get("restart_seeds", ())) != seeds:
-            raise ValueError("member explanation restart seeds are misaligned")
-        expected_logit = float(
-            snapshot.prepool_logits[engine.person_index[member_id]]
+        and np.isclose(
+            result.get("full_prepool_logit", np.nan),
+            expected_logit,
+            rtol=1e-6,
+            atol=1e-6,
         )
-        if not (
-            np.isclose(
-                result.get("local_prepool_logit", np.nan),
-                expected_logit,
-                rtol=1e-6,
-                atol=1e-6,
-            )
-            and np.isclose(
-                result.get("full_prepool_logit", np.nan),
-                expected_logit,
-                rtol=1e-6,
-                atol=1e-6,
-            )
-        ):
-            raise ValueError(
-                f"member explanation failed local/full parity: {member_id}"
-            )
-        local = member_subgraph(engine, member_id, case.anchor.scoring_day)
-        provenance = local.tensor_edge_source_row_ids
-        edge_masks = tuple(result.get("edge_masks", ()))
-        if len(edge_masks) != len(seeds):
-            raise ValueError("member edge-mask restarts are misaligned")
-        for restart_index, mask in enumerate(edge_masks):
-            normalized = _normalize_member_mask(
-                mask,
-                expected_length=len(provenance),
-                field_name="member edge_mask",
-            )
-            for source_row_id, value in zip(provenance, normalized):
-                display_edge_id = source_to_edge.get(str(source_row_id))
-                if display_edge_id is None:
-                    raise ValueError(
-                        "local tensor-edge provenance is absent from the "
-                        f"complete display community: {source_row_id}"
-                    )
-                restart_edge_values[restart_index][display_edge_id] += (
-                    float(value) / len(member_ids)
+    ):
+        raise ValueError("target explanation failed local/full parity")
+    local = member_subgraph(engine, case.person_id, case.anchor.scoring_day)
+    provenance = local.tensor_edge_source_row_ids
+    local_edge_index = local.edge_index.detach().cpu().numpy()
+    local_node_ids = [
+        engine.node_ids[int(index)] for index in local.original_node_indices
+    ]
+    edge_masks = tuple(result.get("edge_masks", ()))
+    if len(edge_masks) != len(seeds):
+        raise ValueError("target edge-mask restarts are misaligned")
+    for restart_index, mask in enumerate(edge_masks):
+        normalized = _normalize_member_mask(
+            mask,
+            expected_length=len(provenance),
+            field_name="target edge_mask",
+        )
+        for source_row_id, value in zip(provenance, normalized):
+            display_edge_id = source_to_edge.get(str(source_row_id))
+            if display_edge_id is None:
+                raise ValueError(
+                    "local tensor-edge provenance is absent from the "
+                    f"complete display community: {source_row_id}"
                 )
+            restart_edge_values[restart_index][display_edge_id] += float(value)
 
-        feature_masks = tuple(result.get("feature_masks", ()))
-        if feature_masks:
-            if len(feature_masks) != len(seeds):
-                raise ValueError("member feature-mask restarts are misaligned")
-            has_feature_masks = True
-            for restart_index, mask in enumerate(feature_masks):
-                restart_feature_values[restart_index] += (
-                    _normalize_member_mask(
-                        mask,
-                        expected_length=feature_count,
-                        field_name="member feature_mask",
-                    )
-                    / len(member_ids)
-                )
+    node_feature_masks = tuple(result.get("node_feature_masks", ()))
+    if len(node_feature_masks) != len(seeds):
+        raise ValueError("target node-feature-mask restarts are misaligned")
+    normalized_node_feature_masks = []
+    for mask in node_feature_masks:
+        checked = _readonly_node_feature_mask(
+            mask,
+            expected_shape=(len(local_node_ids), feature_count),
+            field_name="target node_feature_mask",
+        )
+        maximum = float(checked.max()) if checked.size else 0.0
+        normalized_node_feature_masks.append(
+            np.asarray(checked, dtype=float) / maximum
+            if maximum > 0.0
+            else np.zeros(checked.shape, dtype=float)
+        )
 
     aligned_edge_masks = [
         np.array([values[edge_id] for edge_id in edge_ids], dtype=float)
         for values in restart_edge_values
     ]
     edge_aggregate = aggregate_restart_masks(aligned_edge_masks)
-    feature_aggregate = (
-        aggregate_restart_masks(restart_feature_values)
-        if has_feature_masks
-        else _empty_feature_aggregate(feature_count)
+    node_feature_aggregate = aggregate_restart_masks(
+        [mask.reshape(-1) for mask in normalized_node_feature_masks]
+    )
+    node_feature_stats = {
+        key: np.asarray(value).reshape(len(local_node_ids), feature_count)
+        for key, value in node_feature_aggregate.items()
+        if key in {"median", "q1", "q3", "selection_frequency"}
+    }
+    node_aggregate = aggregate_restart_masks(
+        [mask.max(axis=1) for mask in normalized_node_feature_masks]
+    )
+    target_local_index = local_node_ids.index(case.person_id)
+    feature_aggregate = aggregate_restart_masks(
+        [mask[target_local_index] for mask in normalized_node_feature_masks]
     )
     for index, edge in enumerate(edges):
         edge["explainer_median"] = float(edge_aggregate["median"][index])
@@ -2520,7 +2644,110 @@ def compose_case_explanation(
         for index, name in enumerate(feature_names)
     ]
 
+    incident_source_rows = {node_id: set() for node_id in local_node_ids}
+    for tensor_edge_index, source_row_id in enumerate(provenance):
+        source = local_node_ids[int(local_edge_index[0, tensor_edge_index])]
+        target = local_node_ids[int(local_edge_index[1, tensor_edge_index])]
+        incident_source_rows[source].add(str(source_row_id))
+        incident_source_rows[target].add(str(source_row_id))
+
+    ranked_node_indices = sorted(
+        range(len(local_node_ids)),
+        key=lambda index: (
+            -float(node_aggregate["median"][index]),
+            local_node_ids[index],
+        ),
+    )[:10]
+    top_local_nodes = [
+        {
+            "rank": rank,
+            "node_id": local_node_ids[index],
+            "source_id": local_node_ids[index],
+            "source_row_ids": sorted(incident_source_rows[local_node_ids[index]]),
+            "explainer_median": float(node_aggregate["median"][index]),
+            "explainer_q1": float(node_aggregate["q1"][index]),
+            "explainer_q3": float(node_aggregate["q3"][index]),
+            "selection_frequency": float(
+                node_aggregate["selection_frequency"][index]
+            ),
+        }
+        for rank, index in enumerate(ranked_node_indices, start=1)
+    ]
+    ranked_edge_indices = sorted(
+        range(len(edges)),
+        key=lambda index: (
+            -float(edge_aggregate["median"][index]),
+            edges[index]["edge_id"],
+        ),
+    )[:10]
+    top_edges = [
+        {
+            "rank": rank,
+            "edge_id": edges[index]["edge_id"],
+            "u": edges[index]["u"],
+            "v": edges[index]["v"],
+            "edge_type": edges[index]["edge_type"],
+            "source_row_ids": list(edges[index]["source_row_ids"]),
+            "explainer_median": float(edge_aggregate["median"][index]),
+            "explainer_q1": float(edge_aggregate["q1"][index]),
+            "explainer_q3": float(edge_aggregate["q3"][index]),
+            "selection_frequency": float(
+                edge_aggregate["selection_frequency"][index]
+            ),
+        }
+        for rank, index in enumerate(ranked_edge_indices, start=1)
+    ]
+    ranked_feature_indices = sorted(
+        range(feature_count),
+        key=lambda index: (
+            -float(feature_aggregate["median"][index]),
+            feature_names[index],
+        ),
+    )[:5]
+    top_features = [
+        {
+            "rank": rank,
+            "feature_index": index,
+            "feature_name": feature_names[index],
+            "node_id": case.person_id,
+            "source_id": f"{case.person_id}:feature:{index}",
+            "feature_value": float(snapshot.x[target_index, index]),
+            "explainer_median": float(feature_aggregate["median"][index]),
+            "explainer_q1": float(feature_aggregate["q1"][index]),
+            "explainer_q3": float(feature_aggregate["q3"][index]),
+            "selection_frequency": float(
+                feature_aggregate["selection_frequency"][index]
+            ),
+        }
+        for rank, index in enumerate(ranked_feature_indices, start=1)
+    ]
+    node_feature_mask_stats = [
+        {
+            "node_id": node_id,
+            "feature_index": feature_index,
+            "feature_name": feature_names[feature_index],
+            "source_id": f"{node_id}:feature:{feature_index}",
+            "explainer_median": float(
+                node_feature_stats["median"][node_index, feature_index]
+            ),
+            "explainer_q1": float(
+                node_feature_stats["q1"][node_index, feature_index]
+            ),
+            "explainer_q3": float(
+                node_feature_stats["q3"][node_index, feature_index]
+            ),
+            "selection_frequency": float(
+                node_feature_stats["selection_frequency"][
+                    node_index, feature_index
+                ]
+            ),
+        }
+        for node_index, node_id in enumerate(local_node_ids)
+        for feature_index in range(feature_count)
+    ]
+
     factors = []
+    provenance_expansions = []
     for spec in build_ablation_specs(snapshot, case.person_id, community):
         counterfactual = engine.score_counterfactual(context, spec)
         frequency, iqr, restart_source = _factor_restart_metrics(
@@ -2530,7 +2757,7 @@ def compose_case_explanation(
             engine, snapshot, spec, community
         )
         if expansion is not None:
-            community["provenance_expansions"].append(expansion)
+            provenance_expansions.append(expansion)
         factors.append(
             {
                 "factor_id": spec.factor_id,
@@ -2607,6 +2834,88 @@ def compose_case_explanation(
     stable_count = sum(
         factor["stability"] == "stable" for factor in factors
     )
+    component_members = []
+    for member_id in member_ids:
+        prepool_logit = float(
+            snapshot.prepool_logits[engine.person_index[member_id]]
+        )
+        component_members.append(
+            {
+                "person_id": member_id,
+                "source_id": member_id,
+                "prepool_logit": prepool_logit,
+                "pooled_logit_contribution": prepool_logit / len(member_ids),
+            }
+        )
+    ranked_component_members = sorted(
+        component_members,
+        key=lambda member: (
+            -abs(member["pooled_logit_contribution"]),
+            member["person_id"],
+        ),
+    )
+    top_component_members = [
+        {"rank": rank, **member}
+        for rank, member in enumerate(ranked_component_members[:10], start=1)
+    ]
+    component_contribution_sum = sum(
+        member["pooled_logit_contribution"] for member in component_members
+    )
+    if not np.isclose(
+        component_contribution_sum,
+        float(pooled_logit),
+        rtol=1e-6,
+        atol=1e-6,
+    ):
+        raise ValueError("component contribution ledger failed pooled-logit parity")
+
+    baseline_term = float(decision_trace["baseline_weighted_term"])
+    gnn_term = float(decision_trace["seed0_gnn_weighted_term"])
+    hybrid_score = float(decision_trace["seed0_hybrid_score"])
+    if not np.isclose(
+        baseline_term + gnn_term,
+        hybrid_score,
+        rtol=1e-7,
+        atol=1e-8,
+    ):
+        raise ValueError("rank-fusion ledger failed hybrid-score parity")
+    decision_ledger = {
+        "component_pooling": {
+            "pooling": "exact_mean_of_member_prepool_logits",
+            "component_size": len(component_members),
+            "pooled_logit": float(pooled_logit),
+            "contribution_sum": component_contribution_sum,
+            "top_members_by_absolute_contribution": top_component_members,
+        },
+        "rank_fusion": {
+            "percentile_reference_id": decision_trace[
+                "percentile_reference_id"
+            ],
+            "baseline_daily_reference_id": decision_trace[
+                "baseline_daily_reference_id"
+            ],
+            "hybrid_daily_reference_id": decision_trace[
+                "hybrid_daily_reference_id"
+            ],
+            "daily_budget": daily_budget,
+            "blend_weight": float(reference.blend_weight),
+            "baseline_percentile": float(
+                decision_trace["baseline_percentile"]
+            ),
+            "seed0_gnn_probability": float(
+                decision_trace["seed0_gnn_probability"]
+            ),
+            "seed0_gnn_percentile": float(
+                decision_trace["seed0_gnn_percentile"]
+            ),
+            "baseline_weighted_term": baseline_term,
+            "seed0_gnn_weighted_term": gnn_term,
+            "hybrid_score": hybrid_score,
+            "baseline_rank": int(decision_trace["baseline_rank"]),
+            "seed0_gnn_rank": int(decision_trace["seed0_gnn_rank"]),
+            "seed0_hybrid_rank": int(decision_trace["seed0_hybrid_rank"]),
+        },
+    }
     payload = {
         "case_id": f"case:{case.person_id}",
         "person_id": case.person_id,
@@ -2614,19 +2923,29 @@ def compose_case_explanation(
         "scoring_day": snapshot.scoring_day,
         "snapshot": {
             "scoring_day": snapshot.scoring_day,
-            "component_member_ids": member_ids,
-            "member_prepool_logits": {
-                member_id: float(
-                    snapshot.prepool_logits[engine.person_index[member_id]]
-                )
-                for member_id in member_ids
-            },
-            "member_prepool_logit_mean": float(member_logits.mean()),
-            "target_pooled_logit": float(pooled_logit),
         },
         "decision_trace": decision_trace,
+        "decision_ledger": decision_ledger,
+        "attributions": {
+            "scope": {
+                "target_person_id": case.person_id,
+                "hops": 2,
+                "restart_seeds": list(seeds),
+                "epochs": int(explainer_epochs),
+                "unsigned_masks": True,
+            },
+            "unsigned_mask_caveat": (
+                "GNNExplainer masks are unsigned; direction is established only "
+                "by validated counterfactual rank effects."
+            ),
+            "top_local_nodes": top_local_nodes,
+            "top_edges": top_edges,
+            "top_features": top_features,
+            "node_feature_mask_stats": node_feature_mask_stats,
+        },
         "factors": factors,
         "community": community,
+        "provenance_expansions": provenance_expansions,
         "display_feature_mask_stats": display_feature_mask_stats,
         "flow_stages": build_flow_stages(community),
         "stable_factor_status": "stable" if stable_count else "unstable",

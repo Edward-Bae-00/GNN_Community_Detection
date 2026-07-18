@@ -68,12 +68,23 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
 #tab-v9Results .v9-recovery-canvas:active { cursor: grabbing; }
 #tab-v9Results .v9-recovery-case:focus-visible, #tab-v9Results .v9-recovery-factor:focus-visible, #tab-v9Results .v9-recovery-button:focus-visible, #tab-v9Results .v9-recovery-select:focus-visible, #tab-v9Results .v9-recovery-search:focus-visible, #tab-v9Results .v9-recovery-canvas:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
 #tab-v9Results .v9-recovery-empty { padding: 28px; border: 1px dashed var(--border-strong); border-radius: 9px; color: var(--text2); font-size: 12px; line-height: 1.55; text-align: center; }
+#tab-v9Results .v9-recovery-cohorts { display: inline-flex; gap: 4px; padding: 4px; margin: 12px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--elevated); }
+#tab-v9Results .v9-recovery-cohorts button { border: 0; border-radius: 5px; padding: 8px 12px; background: transparent; color: var(--text2); cursor: pointer; }
+#tab-v9Results .v9-recovery-cohorts button[aria-pressed="true"] { background: var(--surface); color: var(--text1); box-shadow: 0 1px 2px rgba(15,23,42,.12); }
+#tab-v9Results .v9-recovery-v2-grid { display: grid; grid-template-columns: minmax(220px,.4fr) minmax(0,1fr); gap: 16px; }
+#tab-v9Results .v9-recovery-v2-list, #tab-v9Results .v9-recovery-v2-detail { display: grid; gap: 8px; align-content: start; min-width: 0; }
+#tab-v9Results .v9-recovery-v2-panels { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+#tab-v9Results .v9-recovery-v2-panel { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+#tab-v9Results .v9-recovery-v2-panel h5 { margin: 0 0 7px; color: var(--text1); }
+#tab-v9Results .v9-recovery-v2-panel pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text2); font: 9px/1.5 var(--font-mono); }
+#tab-v9Results .v9-recovery-progress { color: var(--text2); font: 9px/1.5 var(--font-mono); }
 @media(max-width:900px){
   #tab-v9Results .v9-recovery-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #tab-v9Results .v9-recovery-workspace { grid-template-columns: 1fr; }
   #tab-v9Results .v9-recovery-rail { border-right: 0; border-bottom: 1px solid var(--border); }
   #tab-v9Results .v9-recovery-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #tab-v9Results .v9-recovery-case-list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 260px; }
+  #tab-v9Results .v9-recovery-v2-grid, #tab-v9Results .v9-recovery-v2-panels { grid-template-columns: 1fr; }
 }
 @media(max-width:700px){
   #tab-v9Results .v9-recovery { margin: 24px 0; padding: 20px 0; }
@@ -785,12 +796,564 @@ function recoverySigned(value){
   return (value>0?'+':'')+String(value);
 }
 
+function buildRecoveryManifestViewModel(artifact){
+  if(!recoveryIsRecord(artifact)||artifact.schema_version!=='2.0'){
+    return recoveryUnavailable('unsupported-or-missing-manifest');
+  }
+  const policy=artifact.policy;
+  const coverage=artifact.coverage;
+  const cohorts=artifact.cohorts;
+  const bundleId=artifact.bundle_id;
+  const sidecarBase=artifact.sidecar_base;
+  if(!recoveryIsRecord(policy)||policy.observability_seed!==0
+      ||policy.inspections_per_day!==5||policy.gnn_arm!=='sage'
+      ||JSON.stringify(policy.surrounding_results_seeds)!=='[0,1,2]'
+      ||!recoveryIsRecord(coverage)
+      ||coverage.complete!==true||!recoveryIsRecord(cohorts)
+      ||!Array.isArray(cohorts.hybrid_only)||!Array.isArray(cohorts.baseline_only)
+      ||!recoveryIsRecord(artifact.case_index)
+      ||!recoveryIsRecord(artifact.community_index)
+      ||typeof bundleId!=='string'||!/^[0-9a-f]{24}$/.test(bundleId)
+      ||sidecarBase!=='recovery/bundles/'+bundleId+'/'){
+    return recoveryUnavailable('invalid-manifest-contract');
+  }
+  const counts=['hybrid_only_count','baseline_only_count','explained_count',
+    'llm_validated_count','failed_count'];
+  if(!counts.every(key=>recoverySafeInteger(coverage[key],false))
+      ||coverage.hybrid_only_count!==cohorts.hybrid_only.length
+      ||coverage.baseline_only_count!==cohorts.baseline_only.length
+      ||coverage.explained_count!==coverage.hybrid_only_count
+      ||coverage.llm_validated_count!==coverage.hybrid_only_count
+      ||coverage.failed_count!==0){
+    return recoveryUnavailable('incomplete-coverage');
+  }
+  const cases=[...cohorts.hybrid_only,...cohorts.baseline_only];
+  const hybridIds=cohorts.hybrid_only.map(item=>item&&item.case_id);
+  const baselineIds=cohorts.baseline_only.map(item=>item&&item.case_id);
+  const allIds=[...hybridIds,...baselineIds];
+  if(!cases.every(item=>recoveryIsRecord(item)
+      &&recoveryNonBlankString(item.case_id)
+      &&recoveryNonBlankString(item.person_id)
+      &&recoveryNonBlankString(item.community_key)
+      &&recoveryIsRecord(artifact.case_index[item.case_id]))
+      ||new Set(allIds).size!==allIds.length
+      ||Object.keys(artifact.case_index).length!==allIds.length
+      ||!Object.keys(artifact.case_index).every(caseId=>allIds.includes(caseId))){
+    return recoveryUnavailable('invalid-case-index');
+  }
+  for(const [cohortName,items] of Object.entries({
+    hybrid_only:cohorts.hybrid_only,baseline_only:cohorts.baseline_only})){
+    for(const item of items){
+      const record=artifact.case_index[item.case_id];
+      if(record.cohort!==cohortName||record.community_key!==item.community_key
+          ||!recoveryIsRecord(artifact.community_index[item.community_key])){
+        return recoveryUnavailable('case-index-identity-mismatch');
+      }
+    }
+  }
+  const defaultCohort=cohorts.hybrid_only.length?'hybrid_only':'baseline_only';
+  const summary=recoveryIsRecord(artifact.summary)?{...artifact.summary}:{};
+  const overlapFields=['baseline_recovered','recovered_by_both',
+    'hybrid_only_recovered','baseline_only_recovered','hybrid_total','net_gain'];
+  if(!overlapFields.every(key=>recoverySafeInteger(summary[key],true))
+      ||overlapFields.slice(0,-1).some(key=>summary[key]<0)
+      ||summary.hybrid_only_recovered!==cohorts.hybrid_only.length
+      ||summary.baseline_only_recovered!==cohorts.baseline_only.length
+      ||summary.baseline_recovered!==summary.recovered_by_both+summary.baseline_only_recovered
+      ||summary.hybrid_total!==summary.recovered_by_both+summary.hybrid_only_recovered
+      ||summary.net_gain!==summary.hybrid_total-summary.baseline_recovered){
+    return recoveryUnavailable('invalid-overlap-algebra');
+  }
+  const seedLevelRecovery=recoveryIsRecord(
+    summary.seed_level_unique_person_recovery
+  )?summary.seed_level_unique_person_recovery:null;
+  return {
+    available:true,
+    policy:{...policy},
+    summary,
+    seedLevelRecovery,
+    coverage:{...coverage},
+    coverageComplete:true,
+    cohorts:{
+      hybrid_only:cohorts.hybrid_only.slice(),
+      baseline_only:cohorts.baseline_only.slice()
+    },
+    caseIndex:artifact.case_index,
+    communityIndex:artifact.community_index,
+    sidecarBase,
+    defaultCohort,
+    defaultCaseId:(cohorts[defaultCohort][0]||{}).case_id||null
+  };
+}
+
+function recoverySidecarUrl(view,path){
+  const base=view.sidecarBase.endsWith('/')?view.sidecarBase:view.sidecarBase+'/';
+  return base+String(path).replace(/^\/+/, '');
+}
+
+async function recoveryFetchJson(url,expectedHash){
+  if(typeof expectedHash!=='string'||!/^[0-9a-f]{64}$/.test(expectedHash)){
+    throw new Error('Sidecar reference requires a 64-character lowercase SHA-256 hash');
+  }
+  if(!globalThis.crypto||!globalThis.crypto.subtle){
+    throw new Error('WebCrypto SHA-256 is required to verify recovery sidecars');
+  }
+  const response=await fetch(url,{cache:'no-store'});
+  if(!response.ok) throw new Error('HTTP '+response.status+' for '+url);
+  const bytes=await response.arrayBuffer();
+  const digest=await globalThis.crypto.subtle.digest('SHA-256',bytes);
+  const actual=Array.from(new Uint8Array(digest))
+    .map(value=>value.toString(16).padStart(2,'0')).join('');
+  if(actual!==expectedHash) throw new Error('SHA-256 mismatch for '+url);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function recoveryServerHelp(error){
+  return 'Sidecars require local HTTP. From the repository root run: '
+    +'python -m http.server 8000 --directory Documents/Data/v9_dashboard, '
+    +'then open http://localhost:8000/index.html. Fetch error: '
+    +String(error&&error.message||error);
+}
+
+function recoveryPage(rows,page,size){
+  const values=Array.isArray(rows)?rows:[];
+  const pageSize=Math.max(1,Number(size)||25);
+  const totalPages=Math.max(1,Math.ceil(values.length/pageSize));
+  const selected=Math.max(0,Math.min(totalPages-1,Number(page)||0));
+  return {rows:values.slice(selected*pageSize,(selected+1)*pageSize),page:selected,totalPages};
+}
+
+function recoveryClusterNodes(nodes,query){
+  const needle=String(query||'').trim().toLowerCase();
+  const groups=new Map();
+  for(const node of Array.isArray(nodes)?nodes:[]){
+    const nodeId=String(node&&node.node_id||'');
+    if(needle&&!nodeId.toLowerCase().includes(needle)) continue;
+    const cluster=String(node.cluster_id||node.kind||'community');
+    if(!groups.has(cluster)) groups.set(cluster,[]);
+    groups.get(cluster).push(nodeId);
+  }
+  return Array.from(groups.entries()).sort((a,b)=>recoveryCompareId(a[0],b[0]))
+    .map(([cluster,nodeIds])=>({cluster,node_ids:nodeIds.sort(recoveryCompareId)}));
+}
+
+function recoveryValidateChunkOwner(owner){
+  if(!recoveryIsRecord(owner)||owner.complete!==true)return false;
+  const specs=[
+    ['node_chunks','node_count'],['edge_chunks','edge_count'],
+    ['provenance_chunks','provenance_observation_count'],
+    ['provenance_expansion_membership_chunks',null]
+  ];
+  for(const [field,countField] of specs){
+    const refs=owner[field];
+    if(!Array.isArray(refs))return false;
+    let expectedOffset=0;
+    for(const ref of refs){
+      if(!recoveryIsRecord(ref)||!recoveryNonBlankString(ref.path)
+          ||!recoveryNonBlankString(ref.sha256)
+          ||ref.offset!==expectedOffset||!recoverySafeInteger(ref.count,false))return false;
+      expectedOffset+=ref.count;
+    }
+    if(countField&&owner[countField]!==expectedOffset)return false;
+  }
+  return true;
+}
+
+function recoveryValidatedChunkRows(payload,ref,rowField){
+  if(!recoveryIsRecord(payload)||!recoveryIsRecord(ref)
+      ||!Array.isArray(payload[rowField])
+      ||payload.offset!==ref.offset||payload.count!==ref.count
+      ||payload.count!==payload[rowField].length)return null;
+  return payload[rowField];
+}
+
+function recoveryV2Panel(doc,title,value){
+  const panel=recoveryElement(doc,'section','v9-recovery-v2-panel');
+  panel.appendChild(recoveryElement(doc,'h5','',title));
+  panel.appendChild(recoveryElement(doc,'pre','',JSON.stringify(value||null,null,2)));
+  return panel;
+}
+
+function mountRecoveryExplorerV2(root,artifact,tools){
+  const doc=root.ownerDocument;
+  const view=buildRecoveryManifestViewModel(artifact);
+  const fmt=recoveryIsRecord(tools)&&typeof tools.fmt==='function'
+    ?tools.fmt:value=>Number(value||0).toLocaleString();
+  const state={cohort:view.available?view.defaultCohort:'hybrid_only',
+    caseId:view.available?view.defaultCaseId:null,caseData:null,community:null,
+    nodePages:{},edgePages:{},provenancePages:{},membershipPages:{},
+    overlayNodePages:{},overlayEdgePages:{},overlayProvenancePages:{},
+    overlayMembershipPages:{},
+    loadedNodeCount:0,loadedEdgeCount:0,loadedProvenanceCount:0,
+    loadedMembershipCount:0,loadedOverlayNodeCount:0,loadedOverlayEdgeCount:0,
+    loadedOverlayProvenanceCount:0,loadedOverlayMembershipCount:0,
+    loading:false,error:null,nodeQuery:'',relation:'all',nodePage:0,edgePage:0,
+    provenancePage:0,membershipPage:0,overlayNodePage:0,overlayEdgePage:0,
+    overlayProvenancePage:0,overlayMembershipPage:0};
+  let recoveryRequestToken=0;
+  let disposed=false;
+  const rows=()=>view.available?view.cohorts[state.cohort]:[];
+
+  function renderV2Detail(detail){
+    if(state.error){
+      detail.appendChild(recoveryElement(doc,'div','v9-recovery-empty',recoveryServerHelp(state.error)));
+      return;
+    }
+    if(state.loading&&!state.caseData){
+      detail.appendChild(recoveryElement(doc,'div','v9-recovery-status','Loading selected case...'));
+      return;
+    }
+    if(!state.caseData) return;
+    const data=state.caseData;
+    detail.appendChild(recoveryV2Panel(doc,'Selected anchor-event ranks',{
+      baseline_rank:data.case.baseline_rank,seed0_gnn_rank:data.case.seed0_gnn_rank,
+      seed0_hybrid_rank:data.case.seed0_hybrid_rank}));
+    detail.appendChild(recoveryElement(doc,'p','v9-recovery-intro',
+      'B / G / H values are anchor-event ranks among daily candidate events; cohort recovery remains unique-person.'));
+    const panels=recoveryElement(doc,'div','v9-recovery-v2-panels');
+    if(state.cohort==='hybrid_only'){
+      const explanation=data.explanation||{};
+      const narrative=explanation.llm_narrative||{};
+      const attributions=explanation.attributions||{};
+      const ledger=explanation.decision_ledger||{};
+      const componentPooling=ledger.component_pooling||{};
+      panels.appendChild(recoveryV2Panel(doc,'Validated local Gemma narrative',
+        narrative.validated===true&&narrative.source==='llm'?narrative:{status:'unavailable'}));
+      panels.appendChild(recoveryV2Panel(doc,'attributions.top_edges',attributions.top_edges));
+      panels.appendChild(recoveryV2Panel(doc,'attributions.top_local_nodes',attributions.top_local_nodes));
+      panels.appendChild(recoveryV2Panel(doc,'attributions.top_features',attributions.top_features));
+      panels.appendChild(recoveryV2Panel(doc,
+        'decision_ledger.component_pooling.top_members_by_absolute_contribution',
+        componentPooling.top_members_by_absolute_contribution));
+      panels.appendChild(recoveryV2Panel(doc,'decision_ledger.rank_fusion',ledger.rank_fusion));
+      panels.appendChild(recoveryV2Panel(doc,'Local GNNExplainer overlay',{
+        edge_importance:attributions.top_edges||[],
+        node_importance:attributions.top_local_nodes||[],
+        feature_importance:attributions.top_features||[]
+      }));
+    }else{
+      panels.appendChild(recoveryV2Panel(doc,
+        'No GNN explanation is generated for Baseline-only cases by policy.',
+        {policy:data.explanation_policy}));
+    }
+    detail.appendChild(panels);
+    if(!state.community) return;
+    const membershipTotal=(state.community.provenance_expansion_membership_chunks||[])
+      .reduce((sum,ref)=>sum+Number(ref.count||0),0);
+    const complete=state.loadedNodeCount===state.community.node_count
+      &&state.loadedEdgeCount===state.community.edge_count
+      &&state.loadedProvenanceCount===state.community.provenance_observation_count
+      &&state.loadedMembershipCount===membershipTotal;
+    const communityPanel=recoveryElement(doc,'section','v9-recovery-v2-panel');
+    communityPanel.appendChild(recoveryElement(doc,'h5','',complete
+      ?'Complete community':'Community loading'));
+    communityPanel.appendChild(recoveryElement(doc,'div','v9-recovery-progress',
+      'Nodes '+state.loadedNodeCount+' loaded / '+state.community.node_count
+        +' total; edges '+state.loadedEdgeCount+' loaded / '+state.community.edge_count
+        +' total; provenance '+state.loadedProvenanceCount+' loaded / '
+        +state.community.provenance_observation_count+' total; expansion memberships '
+        +state.loadedMembershipCount+' loaded / '+membershipTotal+' total.'));
+    const search=recoveryElement(doc,'input','v9-recovery-search');
+    search.type='search';search.placeholder='Node search (current node page)';
+    search.value=state.nodeQuery;search.dataset.v2Input='node';
+    search.setAttribute('aria-label','Node search, current node page only');
+    communityPanel.appendChild(search);
+    const relation=recoveryElement(doc,'select','v9-recovery-select');
+    relation.dataset.v2Change='relation';relation.setAttribute('aria-label','Relation filter');
+    const loadedEdges=Object.values(state.edgePages).flat();
+    for(const value of ['all',...new Set(loadedEdges.map(edge=>edge.edge_type||'RELATION'))]){
+      const option=recoveryElement(doc,'option','',value==='all'?'Relation filter: all':value);
+      option.value=value;relation.appendChild(option);
+    }
+    relation.value=state.relation;communityPanel.appendChild(relation);
+    const pageNodes=state.nodePages[state.nodePage]||[];
+    communityPanel.appendChild(recoveryV2Panel(doc,
+      'Clustered nodes (search scope: current node page)',
+      recoveryClusterNodes(pageNodes,state.nodeQuery)));
+    const pageEdges=state.edgePages[state.edgePage]||[];
+    const edges=state.relation==='all'?pageEdges:pageEdges.filter(
+      edge=>(edge.edge_type||'RELATION')===state.relation);
+    const provenanceRows=state.provenancePages[state.provenancePage]||[];
+    const membershipRows=state.membershipPages[state.membershipPage]||[];
+    const nodePageCount=Math.max(1,(state.community.node_chunks||[]).length);
+    const edgePageCount=Math.max(1,(state.community.edge_chunks||[]).length);
+    const provenancePageCount=Math.max(1,(state.community.provenance_chunks||[]).length);
+    const membershipPageCount=Math.max(1,
+      (state.community.provenance_expansion_membership_chunks||[]).length);
+    communityPanel.appendChild(recoveryV2Panel(doc,
+      'Node page (base community) '+(state.nodePage+1)+' / '+nodePageCount,pageNodes));
+    communityPanel.appendChild(recoveryV2Panel(doc,
+      'Edge page (base community) '+(state.edgePage+1)+' / '+edgePageCount,edges));
+    communityPanel.appendChild(recoveryV2Panel(doc,
+      'Provenance page (base community) '+(state.provenancePage+1)+' / '+provenancePageCount,
+      provenanceRows));
+    communityPanel.appendChild(recoveryV2Panel(doc,
+      'Expansion membership page (base community) '+(state.membershipPage+1)+' / '
+        +membershipPageCount,membershipRows));
+    const overlay=data.overlay_evidence;
+    let overlayPageCounts=null;
+    if(overlay){
+      overlayPageCounts={
+        node:Math.max(1,overlay.node_chunks.length),
+        edge:Math.max(1,overlay.edge_chunks.length),
+        provenance:Math.max(1,overlay.provenance_chunks.length),
+        membership:Math.max(1,overlay.provenance_expansion_membership_chunks.length)
+      };
+      communityPanel.appendChild(recoveryElement(doc,'div','v9-recovery-progress',
+        'Case attribution overlay: nodes '+state.loadedOverlayNodeCount+' loaded / '
+          +overlay.node_count+' total; edges '+state.loadedOverlayEdgeCount+' loaded / '
+          +overlay.edge_count+' total; provenance '+state.loadedOverlayProvenanceCount
+          +' loaded / '+overlay.provenance_observation_count+' total.'));
+      communityPanel.appendChild(recoveryV2Panel(doc,
+        'Case attribution overlay node page '+(state.overlayNodePage+1)+' / '
+          +overlayPageCounts.node,state.overlayNodePages[state.overlayNodePage]||[]));
+      communityPanel.appendChild(recoveryV2Panel(doc,
+        'Case attribution overlay edge page '+(state.overlayEdgePage+1)+' / '
+          +overlayPageCounts.edge,state.overlayEdgePages[state.overlayEdgePage]||[]));
+      communityPanel.appendChild(recoveryV2Panel(doc,
+        'Case attribution overlay provenance page '+(state.overlayProvenancePage+1)
+          +' / '+overlayPageCounts.provenance,
+        state.overlayProvenancePages[state.overlayProvenancePage]||[]));
+      communityPanel.appendChild(recoveryV2Panel(doc,
+        'Case attribution overlay expansion membership page '
+          +(state.overlayMembershipPage+1)+' / '+overlayPageCounts.membership,
+        state.overlayMembershipPages[state.overlayMembershipPage]||[]));
+    }
+    const pages=recoveryElement(doc,'div','v9-recovery-toolgroup');
+    const pageButtons=[
+      ['Previous node page','node-prev',state.nodePage===0],
+      ['Next node page','node-next',state.nodePage+1>=nodePageCount],
+      ['Previous edge page','edge-prev',state.edgePage===0],
+      ['Next edge page','edge-next',state.edgePage+1>=edgePageCount],
+      ['Previous provenance page','provenance-prev',state.provenancePage===0],
+      ['Next provenance page','provenance-next',state.provenancePage+1>=provenancePageCount],
+      ['Previous expansion membership page','membership-prev',state.membershipPage===0],
+      ['Next expansion membership page','membership-next',
+        state.membershipPage+1>=membershipPageCount]
+    ];
+    if(overlayPageCounts)pageButtons.push(
+      ['Previous overlay node page','overlay-node-prev',state.overlayNodePage===0],
+      ['Next overlay node page','overlay-node-next',
+        state.overlayNodePage+1>=overlayPageCounts.node],
+      ['Previous overlay edge page','overlay-edge-prev',state.overlayEdgePage===0],
+      ['Next overlay edge page','overlay-edge-next',
+        state.overlayEdgePage+1>=overlayPageCounts.edge],
+      ['Previous overlay provenance page','overlay-provenance-prev',
+        state.overlayProvenancePage===0],
+      ['Next overlay provenance page','overlay-provenance-next',
+        state.overlayProvenancePage+1>=overlayPageCounts.provenance],
+      ['Previous overlay membership page','overlay-membership-prev',
+        state.overlayMembershipPage===0],
+      ['Next overlay membership page','overlay-membership-next',
+        state.overlayMembershipPage+1>=overlayPageCounts.membership]
+    );
+    for(const [label,value,disabled] of pageButtons){
+      const button=recoveryElement(doc,'button','v9-recovery-button',label);
+      button.type='button';button.disabled=disabled;
+      button.setAttribute('data-v2-page',value);pages.appendChild(button);
+    }
+    communityPanel.appendChild(pages);
+    detail.appendChild(communityPanel);
+  }
+
+  function renderV2(){
+    const fragment=doc.createDocumentFragment();
+    const title=recoveryElement(doc,'h3','v9-recovery-title','Why Hybrid recovered different people');
+    title.id='v9-recovery-title';fragment.appendChild(title);
+    fragment.appendChild(recoveryElement(doc,'p','v9-recovery-intro',
+      'Seed-0, K=5 unique-person evidence. Main panels preserve distinct seed, ensemble, event and person semantics.'));
+    if(!view.available){fragment.appendChild(recoveryElement(doc,'div','v9-recovery-empty',view.reason));root.replaceChildren(fragment);return;}
+    fragment.appendChild(recoveryElement(doc,'div','v9-recovery-coverage',
+      fmt(view.coverage.hybrid_only_count)+' Hybrid-only / '
+        +fmt(view.coverage.baseline_only_count)+' Baseline-only / complete validated coverage'));
+    const seedLevel=view.seedLevelRecovery||{};
+    const semantics=recoveryElement(doc,'div','v9-recovery-v2-panels');
+    semantics.appendChild(recoveryV2Panel(doc,'Per-seed unique-person recovery',
+      seedLevel.seeds||null));
+    semantics.appendChild(recoveryV2Panel(doc,
+      'Per-seed mean / Population SD / common_validation_tuned_fusion_weight',{
+        mean:seedLevel.mean,population_sd:seedLevel.population_sd,
+        common_validation_tuned_fusion_weight:seedLevel.common_validation_tuned_fusion_weight
+      }));
+    semantics.appendChild(recoveryV2Panel(doc,
+      'score_averaged_ensemble / separate ensemble ranking',
+      seedLevel.score_averaged_ensemble||null));
+    semantics.appendChild(recoveryV2Panel(doc,'Ensemble ranking / event-level metrics',
+      {semantics:'Main V9 found@K panels count event hits; they do not count unique people.'}));
+    semantics.appendChild(recoveryV2Panel(doc,'Individual unique-person overlap',
+      view.summary));
+    fragment.appendChild(semantics);
+    const cohorts=recoveryElement(doc,'div','v9-recovery-cohorts');
+    for(const [value,label] of [['hybrid_only','Hybrid-only'],['baseline_only','Baseline-only']]){
+      const button=recoveryElement(doc,'button','',label);button.type='button';
+      button.dataset.v2Cohort=value;button.setAttribute('aria-pressed',String(state.cohort===value));
+      cohorts.appendChild(button);
+    }
+    fragment.appendChild(cohorts);
+    const grid=recoveryElement(doc,'div','v9-recovery-v2-grid');
+    const list=recoveryElement(doc,'aside','v9-recovery-v2-list');
+    for(const item of rows()){
+      const button=recoveryElement(doc,'button','v9-recovery-case');button.type='button';
+      button.dataset.v2Case=item.case_id;button.setAttribute('aria-current',String(item.case_id===state.caseId));
+      button.appendChild(recoveryElement(doc,'strong','',item.person_id));
+      button.appendChild(recoveryElement(doc,'div','v9-recovery-case-meta',
+        'B '+fmt(item.baseline_rank)+' / G '+fmt(item.seed0_gnn_rank)+' / H '+fmt(item.seed0_hybrid_rank)));
+      list.appendChild(button);
+    }
+    grid.appendChild(list);const detail=recoveryElement(doc,'div','v9-recovery-v2-detail');
+    renderV2Detail(detail);grid.appendChild(detail);fragment.appendChild(grid);root.replaceChildren(fragment);
+  }
+
+  async function loadSelected(){
+    const requestToken=++recoveryRequestToken;
+    state.loading=true;state.error=null;state.caseData=null;state.community=null;
+    state.nodePages={};state.edgePages={};state.provenancePages={};
+    state.membershipPages={};state.overlayNodePages={};state.overlayEdgePages={};
+    state.overlayProvenancePages={};state.overlayMembershipPages={};
+    state.loadedNodeCount=0;state.loadedEdgeCount=0;
+    state.loadedProvenanceCount=0;state.loadedMembershipCount=0;
+    state.loadedOverlayNodeCount=0;state.loadedOverlayEdgeCount=0;
+    state.loadedOverlayProvenanceCount=0;state.loadedOverlayMembershipCount=0;
+    state.nodePage=0;state.edgePage=0;state.provenancePage=0;
+    state.membershipPage=0;state.overlayNodePage=0;state.overlayEdgePage=0;
+    state.overlayProvenancePage=0;state.overlayMembershipPage=0;renderV2();
+    try{
+      const caseRecord=view.caseIndex[state.caseId];
+      const caseRef=caseRecord.ref||caseRecord;
+      const caseData=await recoveryFetchJson(recoverySidecarUrl(view,caseRef.path),caseRef.sha256);
+      if(disposed||requestToken!==recoveryRequestToken)return;
+      if(!recoveryIsRecord(caseData)||!recoveryIsRecord(caseData.case)
+          ||caseData.case.case_id!==state.caseId||caseData.cohort!==state.cohort
+          ||caseData.cohort!==caseRecord.cohort
+          ||caseData.community_key!==caseRecord.community_key
+          ||caseData.case.community_key!==caseRecord.community_key
+          ||(caseData.overlay_evidence!==null&&caseData.overlay_evidence!==undefined
+            &&!recoveryValidateChunkOwner(caseData.overlay_evidence))){
+        throw new Error('Case sidecar identity or chunk contract is invalid');
+      }
+      const communityRef=view.communityIndex[caseData.community_key];
+      const community=await recoveryFetchJson(
+        recoverySidecarUrl(view,communityRef.path),communityRef.sha256);
+      if(disposed||requestToken!==recoveryRequestToken)return;
+      if(!recoveryValidateChunkOwner(community)
+          ||community.community_key!==caseData.community_key){
+        throw new Error('Community sidecar identity or chunk contract is invalid');
+      }
+      state.caseData=caseData;state.community=community;
+      renderV2();
+      await loadRecoveryChunkPage('node',0,requestToken);
+      await loadRecoveryChunkPage('edge',0,requestToken);
+      await loadRecoveryChunkPage('provenance',0,requestToken);
+      await loadRecoveryChunkPage('membership',0,requestToken);
+      if(caseData.overlay_evidence){
+        await loadRecoveryChunkPage('overlay-node',0,requestToken);
+        await loadRecoveryChunkPage('overlay-edge',0,requestToken);
+        await loadRecoveryChunkPage('overlay-provenance',0,requestToken);
+        await loadRecoveryChunkPage('overlay-membership',0,requestToken);
+      }
+    }catch(error){if(requestToken===recoveryRequestToken)state.error=error;}
+    if(requestToken===recoveryRequestToken){
+      state.loading=false;if(!disposed)renderV2();
+    }
+  }
+  async function loadRecoveryChunkPage(kind,index,requestToken=recoveryRequestToken){
+    if(!state.community||requestToken!==recoveryRequestToken)return;
+    const overlay=kind.startsWith('overlay-');
+    const normalized=overlay?kind.slice(8):kind;
+    const owner=overlay?state.caseData&&state.caseData.overlay_evidence:state.community;
+    const config=(overlay?{
+      node:['node_chunks',state.overlayNodePages,'nodes'],
+      edge:['edge_chunks',state.overlayEdgePages,'edges'],
+      provenance:['provenance_chunks',state.overlayProvenancePages,'observations'],
+      membership:['provenance_expansion_membership_chunks',
+        state.overlayMembershipPages,'memberships']
+    }:{
+      node:['node_chunks',state.nodePages,'nodes'],
+      edge:['edge_chunks',state.edgePages,'edges'],
+      provenance:['provenance_chunks',state.provenancePages,'observations'],
+      membership:['provenance_expansion_membership_chunks',state.membershipPages,
+        'memberships']
+    })[normalized];
+    if(!config)return;
+    const refs=owner&&owner[config[0]];
+    const cache=config[1];
+    if(!Array.isArray(refs)||!refs[index]||cache[index])return;
+    const ref=refs[index];
+    const payload=await recoveryFetchJson(recoverySidecarUrl(view,ref.path),ref.sha256);
+    if(disposed||requestToken!==recoveryRequestToken)return;
+    const rows=recoveryValidatedChunkRows(payload,ref,config[2]);
+    if(rows===null)throw new Error('Chunk offset or count contract is invalid');
+    cache[index]=rows;
+    state.loadedNodeCount=Object.values(state.nodePages).reduce((sum,rows)=>sum+rows.length,0);
+    state.loadedEdgeCount=Object.values(state.edgePages).reduce((sum,rows)=>sum+rows.length,0);
+    state.loadedProvenanceCount=Object.values(state.provenancePages).reduce((sum,rows)=>sum+rows.length,0);
+    state.loadedMembershipCount=Object.values(state.membershipPages)
+      .reduce((sum,rows)=>sum+rows.length,0);
+    state.loadedOverlayNodeCount=Object.values(state.overlayNodePages)
+      .reduce((sum,rows)=>sum+rows.length,0);
+    state.loadedOverlayEdgeCount=Object.values(state.overlayEdgePages)
+      .reduce((sum,rows)=>sum+rows.length,0);
+    state.loadedOverlayProvenanceCount=Object.values(state.overlayProvenancePages)
+      .reduce((sum,rows)=>sum+rows.length,0);
+    state.loadedOverlayMembershipCount=Object.values(state.overlayMembershipPages)
+      .reduce((sum,rows)=>sum+rows.length,0);
+    if(!disposed)renderV2();
+  }
+  async function onV2Click(event){
+    const target=event.target.closest&&event.target.closest('[data-v2-cohort],[data-v2-case],[data-v2-page]');
+    if(!target||!root.contains(target))return;
+    if(target.dataset.v2Page){
+      const direction=target.dataset.v2Page.endsWith('next')?1:-1;
+      if(target.dataset.v2Page.startsWith('overlay-node')){
+        state.overlayNodePage+=direction;
+        await loadRecoveryChunkPage('overlay-node',state.overlayNodePage);
+      }else if(target.dataset.v2Page.startsWith('overlay-edge')){
+        state.overlayEdgePage+=direction;
+        await loadRecoveryChunkPage('overlay-edge',state.overlayEdgePage);
+      }else if(target.dataset.v2Page.startsWith('overlay-provenance')){
+        state.overlayProvenancePage+=direction;
+        await loadRecoveryChunkPage('overlay-provenance',state.overlayProvenancePage);
+      }else if(target.dataset.v2Page.startsWith('overlay-membership')){
+        state.overlayMembershipPage+=direction;
+        await loadRecoveryChunkPage('overlay-membership',state.overlayMembershipPage);
+      }else if(target.dataset.v2Page.startsWith('node')){
+        state.nodePage+=direction;await loadRecoveryChunkPage('node',state.nodePage);
+      }else if(target.dataset.v2Page.startsWith('edge')){
+        state.edgePage+=direction;await loadRecoveryChunkPage('edge',state.edgePage);
+      }else if(target.dataset.v2Page.startsWith('provenance')){
+        state.provenancePage+=direction;
+        await loadRecoveryChunkPage('provenance',state.provenancePage);
+      }else{
+        state.membershipPage+=direction;
+        await loadRecoveryChunkPage('membership',state.membershipPage);
+      }
+      renderV2();return;
+    }else if(target.dataset.v2Cohort){state.cohort=target.dataset.v2Cohort;
+      state.caseId=(view.cohorts[state.cohort][0]||{}).case_id||null;}
+    else state.caseId=target.dataset.v2Case;
+    if(state.caseId)loadSelected();else renderV2();
+  }
+  function onV2Input(event){if(event.target.dataset.v2Input==='node'){state.nodeQuery=event.target.value;renderV2();}}
+  function onV2Change(event){if(event.target.dataset.v2Change==='relation'){state.relation=event.target.value;state.edgePage=0;renderV2();}}
+  root.addEventListener('click',onV2Click);root.addEventListener('input',onV2Input);root.addEventListener('change',onV2Change);
+  renderV2();if(state.caseId)loadSelected();
+  return function(){disposed=true;recoveryRequestToken++;
+    root.removeEventListener('click',onV2Click);root.removeEventListener('input',onV2Input);
+    root.removeEventListener('change',onV2Change);};
+}
+
 const recoveryMounts=new WeakMap();
 
 function mountV9RecoveryExplainer(root,artifact,tools){
   if(!root||!root.ownerDocument||!root.classList) return;
   const prior=recoveryMounts.get(root);
   if(prior) prior();
+  if(recoveryIsRecord(artifact)&&artifact.schema_version==='2.0'){
+    root.classList.add('v9-recovery');
+    const cleanup=mountRecoveryExplorerV2(root,artifact,tools);
+    recoveryMounts.set(root,cleanup);
+    return;
+  }
   const doc=root.ownerDocument;
   const helpers=recoveryIsRecord(tools)?tools:{};
   const fmt=typeof helpers.fmt==='function'?helpers.fmt:
@@ -1156,7 +1719,7 @@ function mountV9RecoveryExplainer(root,artifact,tools){
     if(!explanation){
       detail.appendChild(recoveryElement(
         doc,'div','v9-recovery-empty',
-        'Explanation attempt failed or was not selected.'
+        'No validated explanation is available for this case.'
       ));
       workspace.appendChild(detail);
       return;

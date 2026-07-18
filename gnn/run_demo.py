@@ -391,7 +391,7 @@ from scipy.stats import rankdata
 from gnn.detector import fit_predict
 from gnn.demo_baseline import build_baseline_features, FEATURE_NAMES
 from gnn.explanation_narrative import generate_narrative, render_template
-from gnn.observability_artifact import build_observability_artifact
+from gnn.observability_artifact import build_observability_bundle
 from gnn.sage_explainer import Seed0ExplanationEngine
 
 KS = (50, 100, 200, 500, 1000, 2000, 5000)
@@ -416,21 +416,16 @@ def _atomic_json_write(path, payload):
 
 
 def _write_observability_output(path, build_payload):
-    """Replace one observability artifact or remove all current-run ambiguity."""
+    """Atomically replace observability only after a full new payload succeeds."""
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    path.unlink(missing_ok=True)
     temporary.unlink(missing_ok=True)
-    completed = False
     try:
         payload = build_payload()
         _atomic_json_write(path, payload)
-        completed = True
         return payload
     finally:
         temporary.unlink(missing_ok=True)
-        if not completed:
-            path.unlink(missing_ok=True)
 
 MODEL_ARMS = {
     "baseline": {
@@ -503,6 +498,83 @@ def _rank_fuse(base_score, gnn_score, w):
     br = rankdata(base_score) / len(base_score)
     gr = rankdata(gnn_score) / len(gnn_score)
     return w * gr + (1.0 - w) * br
+
+
+def _seed_level_unique_person_recovery(
+    pool,
+    baseline_raw,
+    gnn_scores_by_seed,
+    *,
+    blend_weight,
+    official_caught_times,
+    inspections_per_day=5,
+):
+    """Report seed-level and score-ensemble unique-person recovery at one K.
+
+    Every seed reuses the single validation-tuned fusion weight. Recovery uses
+    the production candidate-removal simulation, so later events for a person
+    found on an earlier day are excluded independently within each arm.
+    """
+    seed_order = tuple(int(seed) for seed in gnn_scores_by_seed)
+    if not seed_order:
+        raise ValueError("gnn_scores_by_seed must contain at least one seed")
+    if len(set(seed_order)) != len(seed_order):
+        raise ValueError("gnn_scores_by_seed must not contain duplicate seeds")
+    daily_budget = int(inspections_per_day)
+    if daily_budget <= 0:
+        raise ValueError("inspections_per_day must be positive")
+    baseline_raw = np.asarray(baseline_raw, dtype=float)
+    baseline = add_tiebreak(baseline_raw, pool)
+    scores_by_arm = {"baseline": baseline}
+    gnn_arrays = []
+    for seed in seed_order:
+        gnn_raw = np.asarray(gnn_scores_by_seed[seed], dtype=float)
+        gnn_arrays.append(gnn_raw)
+        scores_by_arm[f"hybrid_seed_{seed}"] = add_tiebreak(
+            _rank_fuse(baseline_raw, gnn_raw, blend_weight), pool
+        )
+    ensemble_gnn = np.mean(np.column_stack(gnn_arrays), axis=1)
+    scores_by_arm["hybrid_score_averaged_ensemble"] = add_tiebreak(
+        _rank_fuse(baseline_raw, ensemble_gnn, blend_weight), pool
+    )
+    simulated = evaluate_daily_simulated_catches(
+        pool,
+        scores_by_arm,
+        (daily_budget,),
+        official_caught_times,
+    )
+    found_key = f"daily_people_found@{daily_budget}"
+    baseline_count = int(simulated["arms"]["baseline"][found_key])
+
+    def record(hybrid_count):
+        hybrid_count = int(hybrid_count)
+        return {
+            "baseline_unique_people_recovered": baseline_count,
+            "hybrid_unique_people_recovered": hybrid_count,
+            "net_unique_people_gain": hybrid_count - baseline_count,
+        }
+
+    seed_records = {
+        str(seed): record(simulated["arms"][f"hybrid_seed_{seed}"][found_key])
+        for seed in seed_order
+    }
+    metric_names = tuple(next(iter(seed_records.values())))
+    return {
+        "inspections_per_day": daily_budget,
+        "common_validation_tuned_fusion_weight": float(blend_weight),
+        "seeds": seed_records,
+        "mean": {
+            metric: float(np.mean([row[metric] for row in seed_records.values()]))
+            for metric in metric_names
+        },
+        "population_sd": {
+            metric: float(np.std([row[metric] for row in seed_records.values()]))
+            for metric in metric_names
+        },
+        "score_averaged_ensemble": record(
+            simulated["arms"]["hybrid_score_averaged_ensemble"][found_key]
+        ),
+    }
 
 
 def _pick_fusion_weight(base_valid, gnn_valid, hidden_valid, ks,
@@ -725,7 +797,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
          epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS, gnn_arm="sage",
          valid_sample=20000, observability=False,
          observability_out_name="hybrid_recovery_explanations_v9.json",
-         explanation_limit=40, narrative=True):
+         explanation_limit=None, narrative=True):
     if observability and (
         gnn_arm != "sage" or tuple(seeds) != (0, 1, 2)
     ):
@@ -829,6 +901,17 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
         daily_ks,
         caught_time,
     )
+    seed_level_unique_person_recovery = _seed_level_unique_person_recovery(
+        pool,
+        base_raw,
+        {
+            seed: score_bundle.scores_by_seed[seed][1]
+            for seed in score_bundle.seed_order
+        },
+        blend_weight=w_gnn,
+        official_caught_times=caught_time,
+        inspections_per_day=5,
+    )
     strat = {k: stratum_metrics(v, pool, hidden, strata, ks=ks) for k, v in arms.items()}
     win = {f"gnn_vs_baseline@{k}": paired_event_bootstrap(
                gnn, base, hidden, ks=(k,), mask=None, n_boot=n_boot)[f"found@{k}"] for k in ks}
@@ -852,6 +935,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
            "stratum_hidden": {st: strat["baseline"][st]["hidden"] for st in STRATA},
            "overall": overall, "overall_daily": overall_daily, "stratified": strat,
            "simulated_catch_daily": simulated_catch_daily,
+           "seed_level_unique_person_recovery": seed_level_unique_person_recovery,
            "win_whole_pool": win, "win_observable": win_obs,
            "win_hybrid_whole_pool": win_hybrid, "win_hybrid_observable": win_hybrid_obs,
            "win_hybrid_daily": win_hybrid_daily}
@@ -867,7 +951,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
                 caught_time=caught_time,
                 num_rel=spec["num_rel"],
             )
-            return build_observability_artifact(
+            return build_observability_bundle(
                 pool=pool,
                 baseline_raw=base_raw,
                 seed0_gnn_raw=score_bundle.scores_by_seed[0][1],
@@ -876,8 +960,17 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
                 gnn_arm=gnn_arm,
                 surrounding_seeds=score_bundle.seed_order,
                 explanation_engine=engine,
+                seed_level_unique_person_recovery=(
+                    seed_level_unique_person_recovery
+                ),
                 explanation_limit=explanation_limit,
-                inspections_per_day=25,
+                inspections_per_day=5,
+                staging_root=(
+                    observability_path.parent
+                    / f".{observability_path.stem}.recovery-stage"
+                ),
+                final_root=observability_path.parent / "recovery",
+                corpus_identity=str(Path(cd).resolve()),
                 narrative_builder=(
                     generate_narrative if narrative else render_template
                 ),

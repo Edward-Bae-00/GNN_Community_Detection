@@ -374,6 +374,13 @@ def test_community_contains_complete_pool_and_two_hop_provenance():
     community = engine.community("target", SCORING_DAY)
 
     assert community["complete"] is True
+    assert community["scoring_day"] == "2025-01-02T00:00:00+00:00"
+    assert community["component_id"].startswith("component:sha256:")
+    assert community["community_key"].startswith("community:sha256:")
+    poolmate_view = engine.community("poolmate", SCORING_DAY)
+    assert poolmate_view["component_id"] == community["component_id"]
+    assert poolmate_view["community_key"] == community["community_key"]
+    assert poolmate_view == community
     assert set(community["nodes_by_id"]) == {
         "target",
         "poolmate",
@@ -396,7 +403,7 @@ def test_community_contains_complete_pool_and_two_hop_provenance():
         node["node_id"] for node in community["nodes"] if node["pooled_member"]
     }
     assert pooled == {"target", "poolmate"}
-    assert community["nodes_by_id"]["target"]["target"] is True
+    assert all("target" not in node for node in community["nodes"])
     assert community["nodes_by_id"]["hop1"]["caught_label_available_time"] == (
         "2025-01-01T23:59:59+00:00"
     )
@@ -435,6 +442,78 @@ def test_community_layout_is_deterministic_and_normalized():
         for position in first_positions.values()
         for coordinate in position
     )
+
+
+def test_same_component_reuses_one_immutable_cached_base_until_day_release(
+    monkeypatch,
+):
+    engine, _ = _explanation_fixture()
+    original_builder = se.build_complete_community
+    calls = []
+
+    def counted_builder(*args, **kwargs):
+        calls.append((args[1], pd.Timestamp(args[2])))
+        return original_builder(*args, **kwargs)
+
+    monkeypatch.setattr(se, "build_complete_community", counted_builder)
+
+    target = engine.community("target", SCORING_DAY)
+    before = json.dumps(target, sort_keys=True)
+    poolmate = engine.community("poolmate", SCORING_DAY)
+
+    assert target is poolmate
+    assert json.dumps(poolmate, sort_keys=True) == before
+    assert len(calls) == 1
+
+    assert engine.release_snapshot(SCORING_DAY) is True
+    rebuilt = engine.community("target", SCORING_DAY)
+    assert rebuilt is not target
+    assert rebuilt == target
+    assert len(calls) == 2
+
+
+def test_community_layout_never_uses_networkx_spring_layout(monkeypatch):
+    engine, _ = _explanation_fixture()
+
+    monkeypatch.setattr(
+        se.nx,
+        "spring_layout",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("spring layout must not run")
+        ),
+    )
+
+    community = engine.community("target", SCORING_DAY)
+
+    assert community["nodes"]
+
+
+def test_release_snapshot_evicts_day_bound_heavy_caches():
+    engine, _ = _explanation_fixture()
+    first_day = pd.Timestamp("2025-01-01T00:00:00Z")
+
+    engine.snapshot(first_day)
+    engine.snapshot(SCORING_DAY)
+    assert engine.cached_snapshot_days == (first_day, SCORING_DAY)
+
+    assert engine.release_snapshot(first_day) is True
+    assert engine.cached_snapshot_days == (SCORING_DAY,)
+    assert engine.release_snapshot(first_day) is False
+
+
+def test_observability_fingerprint_material_is_compact_and_deterministic():
+    engine, _ = _explanation_fixture(bind_rank_reference=True)
+
+    first = engine.observability_fingerprint_material()
+    second = engine.observability_fingerprint_material()
+
+    assert first == second
+    assert set(first) == {
+        "graph_sha256",
+        "model_state_sha256",
+        "rank_reference_fingerprint",
+    }
+    assert all(value for value in first.values())
 
 
 def test_community_is_json_serializable():
@@ -1792,13 +1871,16 @@ def test_member_explanation_uses_exact_restarts_and_isolated_model_copy():
 
     assert first["status"] == "ok"
     assert first["restart_seeds"] == (0, 1, 2)
-    assert len(first["edge_masks"]) == len(first["feature_masks"]) == 3
+    assert len(first["edge_masks"]) == len(first["node_feature_masks"]) == 3
     for actual, expected in zip(first["edge_masks"], second["edge_masks"]):
         np.testing.assert_array_equal(actual, expected)
     for actual, expected in zip(
-        first["feature_masks"], second["feature_masks"]
+        first["node_feature_masks"], second["node_feature_masks"]
     ):
         np.testing.assert_array_equal(actual, expected)
+        assert actual.shape == se.member_subgraph(
+            engine, "target", SCORING_DAY
+        ).x.shape
     assert len(calls) == 6
     np.testing.assert_array_equal(
         engine.snapshot(SCORING_DAY + pd.Timedelta(days=2)).probabilities,
@@ -1810,7 +1892,7 @@ def test_member_explanation_uses_exact_restarts_and_isolated_model_copy():
         torch.testing.assert_close(actual, expected)
 
 
-def test_member_explanation_reports_empty_message_edges_without_optimizer_call():
+def test_member_explanation_runs_all_restarts_for_isolated_target_node_masks():
     engine = se.Seed0ExplanationEngine(
         model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
         edges_typed=pd.DataFrame(
@@ -1830,21 +1912,59 @@ def test_member_explanation_reports_empty_message_edges_without_optimizer_call()
         num_rel=4,
     )
 
-    def forbidden_factory(*args, **kwargs):
-        raise AssertionError("empty explanations must not run GNNExplainer")
+    calls = []
+
+    class IsolatedExplainer:
+        def __call__(self, *, x, edge_index, index):
+            calls.append((tuple(x.shape), tuple(edge_index.shape), index))
+            return SimpleNamespace(
+                edge_mask=torch.zeros(0),
+                node_mask=torch.rand(x.shape),
+            )
+
+    def isolated_factory(*args, **kwargs):
+        return IsolatedExplainer()
 
     result = se.run_member_explanation(
         engine,
         "target",
         SCORING_DAY,
-        explainer_factory=forbidden_factory,
+        explainer_factory=isolated_factory,
     )
 
     assert result["status"] == "no-message-edges"
     assert result["restart_seeds"] == (0, 1, 2)
     assert len(result["edge_masks"]) == 3
     assert all(mask.size == 0 for mask in result["edge_masks"])
-    assert result["feature_masks"] == ()
+    assert len(result["node_feature_masks"]) == 3
+    assert all(mask.shape == (1, 8) for mask in result["node_feature_masks"])
+    assert all(mask.any() for mask in result["node_feature_masks"])
+    assert calls == [((1, 8), (2, 0), 0)] * 3
+    assert result["local_prepool_logit"] == pytest.approx(
+        result["full_prepool_logit"]
+    )
+
+
+def test_real_gnnexplainer_returns_isolated_target_node_masks():
+    engine = se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=pd.DataFrame(
+            columns=[
+                "source_row_id", "canonical_pair_group_id", "u", "v",
+                "avail_time", "rel", "edge_type",
+            ]
+        ),
+        node_ids=["target"],
+        node_feat={"target": np.array([1.0])},
+        caught_time={},
+        num_rel=4,
+    )
+
+    result = se.run_member_explanation(engine, "target", SCORING_DAY, epochs=2)
+
+    assert len(result["node_feature_masks"]) == 3
+    assert all(mask.shape == (1, 8) for mask in result["node_feature_masks"])
+    assert all(np.isfinite(mask).all() for mask in result["node_feature_masks"])
 
 
 @pytest.mark.parametrize(
@@ -2041,7 +2161,7 @@ def _sage_case_fixture():
         row_index=0,
         baseline_candidate_row_indices=(0, 1, 2, 3),
         hybrid_candidate_row_indices=(0, 1, 2, 3),
-        daily_budget=25,
+        daily_budget=5,
     )
     case = HybridOnlyCase(
         person_id="target",
@@ -2077,7 +2197,10 @@ def _deterministic_member_explainer(
         "plate": 0.25,
     }
     edge_mask = np.array(
-        [edge_values[str(source_id)] for source_id in local.tensor_edge_source_row_ids],
+        [
+            edge_values.get(str(source_id), 1.0)
+            for source_id in local.tensor_edge_source_row_ids
+        ],
         dtype=float,
     )
     feature_mask = np.arange(1, local.x.shape[1] + 1, dtype=float)
@@ -2085,7 +2208,12 @@ def _deterministic_member_explainer(
     logit = float(snapshot.prepool_logits[engine.person_index[person_id]])
     return {
         "edge_masks": tuple(edge_mask.copy() for _ in restart_seeds),
-        "feature_masks": tuple(feature_mask.copy() for _ in restart_seeds),
+        "node_feature_masks": tuple(
+            np.vstack(
+                [feature_mask * (node_index + 1) for node_index in range(local.x.shape[0])]
+            )
+            for _ in restart_seeds
+        ),
         "restart_seeds": tuple(restart_seeds),
         "local_prepool_logit": logit,
         "full_prepool_logit": logit,
@@ -2191,18 +2319,33 @@ def test_provenance_expansion_is_strict_asof_and_uses_source_row_ids():
     json.dumps(se.json_safe(expansion), allow_nan=False, sort_keys=True)
 
 
-def test_compose_case_explanation_collapses_member_masks_and_proves_parity():
+def test_compose_case_explanation_ranks_target_local_attributions_and_proves_ledger():
     engine, case = _sage_case_fixture()
+    calls = []
+    canonical_community = engine.community("target", SCORING_DAY)
+
+    def recording_explainer(*args, **kwargs):
+        calls.append((args[1], kwargs["restart_seeds"], kwargs["epochs"]))
+        return _deterministic_member_explainer(*args, **kwargs)
 
     explanation = se.compose_case_explanation(
-        engine, case, member_explainer=_deterministic_member_explainer
+        engine, case, member_explainer=recording_explainer
     )
 
+    assert calls == [("target", (0, 1, 2), 150)]
+    assert explanation["community"] == canonical_community
+    assert all(
+        not {
+            "explainer_median",
+            "explainer_q1",
+            "explainer_q3",
+            "selection_frequency",
+        }.intersection(edge)
+        for edge in explanation["community"]["edges"]
+    )
+    assert isinstance(explanation["provenance_expansions"], list)
     assert explanation["case_id"] == "case:target"
-    assert explanation["snapshot"]["component_member_ids"] == [
-        "poolmate",
-        "target",
-    ]
+    assert set(explanation["snapshot"]) == {"scoring_day"}
     assert explanation["parity"] == {
         "production_seed0_probability": True,
         "pooled_logit_decomposition": True,
@@ -2210,22 +2353,57 @@ def test_compose_case_explanation_collapses_member_masks_and_proves_parity():
         "frozen_daily_hybrid_rank": True,
         "anchor_event": True,
     }
-    edge_stats = {
-        edge["edge_id"]: edge for edge in explanation["community"]["edges"]
+    assert explanation["decision_trace"]["daily_budget"] == 5
+    attributions = explanation["attributions"]
+    assert attributions["scope"] == {
+        "target_person_id": "target",
+        "hops": 2,
+        "restart_seeds": [0, 1, 2],
+        "epochs": 150,
+        "unsigned_masks": True,
     }
-    assert edge_stats["g-cot:rel:0"]["explainer_median"] == pytest.approx(1.0)
-    assert edge_stats["g-res:rel:1"]["explainer_median"] == pytest.approx(0.5)
-    assert edge_stats["g-plate:rel:2"]["explainer_median"] == pytest.approx(0.125)
-    assert edge_stats["g-cot:rel:0"]["selection_frequency"] == 1.0
-    assert edge_stats["g-res:rel:1"]["selection_frequency"] == 0.0
-    assert edge_stats["g-plate:rel:2"]["selection_frequency"] == 0.0
+    assert 0 < len(attributions["top_local_nodes"]) <= 10
+    assert 0 < len(attributions["top_edges"]) <= 10
+    assert 0 < len(attributions["top_features"]) <= 5
+    assert all(
+        {"explainer_median", "explainer_q1", "explainer_q3", "selection_frequency"}
+        <= set(record)
+        for key in ("top_local_nodes", "top_edges", "top_features")
+        for record in attributions[key]
+    )
+    assert all("source_row_ids" in edge for edge in attributions["top_edges"])
+    local = se.member_subgraph(engine, "target", SCORING_DAY)
+    assert len(attributions["node_feature_mask_stats"]) == (
+        local.x.shape[0] * local.x.shape[1]
+    )
+    assert {
+        (record["node_id"], record["feature_name"])
+        for record in attributions["node_feature_mask_stats"]
+    } == {
+        (engine.node_ids[int(node_index)], feature_name)
+        for node_index in local.original_node_indices
+        for feature_name in se.caught_feature_names(engine.num_rel)
+    }
+    pooling = explanation["decision_ledger"]["component_pooling"]
+    assert "members" not in pooling
+    assert pooling["component_size"] == 2
+    assert sum(
+        member["pooled_logit_contribution"]
+        for member in pooling["top_members_by_absolute_contribution"]
+    ) == pytest.approx(pooling["contribution_sum"])
+    assert pooling["contribution_sum"] == pytest.approx(pooling["pooled_logit"])
+    assert len(pooling["top_members_by_absolute_contribution"]) <= 10
+    fusion = explanation["decision_ledger"]["rank_fusion"]
+    assert fusion["daily_budget"] == 5
+    assert fusion["hybrid_score"] == pytest.approx(
+        fusion["baseline_weighted_term"] + fusion["seed0_gnn_weighted_term"]
+    )
     assert explanation["stability"]["signed_effect_source"] == (
         "counterfactual_only"
     )
     assert explanation["stability"]["edge_restart_aggregate"][
         "top_factor_agreement"
     ] == 1.0
-    assert explanation["display_feature_mask_stats"][0]["feature_name"] == "bias"
     assert explanation["factors"]
     assert all("counterfactual" in factor for factor in explanation["factors"])
     assert [point["fraction"] for point in explanation["faithfulness"]["points"]] == [
@@ -2287,7 +2465,7 @@ def _sage_pooled_component_case_fixture(component_size):
         row_index=0,
         baseline_candidate_row_indices=(0, 1, 2, 3),
         hybrid_candidate_row_indices=(0, 1, 2, 3),
-        daily_budget=25,
+        daily_budget=5,
     )
     case = HybridOnlyCase(
         person_id="target",
@@ -2313,31 +2491,24 @@ def _sage_pooled_component_case_fixture(component_size):
     return engine, case
 
 
-def test_compose_case_explanation_rejects_size_seven_before_work(monkeypatch):
+def test_compose_case_explanation_handles_large_pool_with_target_only_explainer():
     engine, case = _sage_pooled_component_case_fixture(7)
+    calls = []
 
-    def forbidden_work(*args, **kwargs):
-        raise AssertionError(
-            "oversized components must not enter explanation work"
-        )
+    def recording_explainer(*args, **kwargs):
+        calls.append(args[1])
+        return _deterministic_member_explainer(*args, **kwargs)
 
-    monkeypatch.setattr(engine, "community", forbidden_work)
-    monkeypatch.setattr(
-        se, "diagnostic_edge_source_set_probability", forbidden_work
+    explanation = se.compose_case_explanation(
+        engine,
+        case,
+        member_explainer=recording_explainer,
     )
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "pooled component size 7 exceeds maximum explainable "
-            "component size 6"
-        ),
-    ):
-        se.compose_case_explanation(
-            engine,
-            case,
-            member_explainer=forbidden_work,
-        )
+    assert calls == ["target"]
+    pooling = explanation["decision_ledger"]["component_pooling"]
+    assert pooling["component_size"] == 7
+    assert "members" not in pooling
 
 
 def test_compose_case_explanation_admits_size_six_into_diagnostic(monkeypatch):
@@ -2359,7 +2530,7 @@ def test_compose_case_explanation_admits_size_six_into_diagnostic(monkeypatch):
 
 @pytest.mark.parametrize(
     "limit",
-    [0, -1, True, 1.5, "6", None],
+    [0, -1, True, 1.5, "6"],
 )
 def test_compose_case_explanation_rejects_invalid_component_limit(limit):
     engine, case = _sage_case_fixture()
@@ -2405,7 +2576,6 @@ def test_compose_case_explanation_rejects_stale_probability_parity():
         ("percentile_reference_id", lambda value: value + "-stale"),
         ("baseline_daily_reference_id", lambda value: value + "-stale"),
         ("hybrid_daily_reference_id", lambda value: value + "-stale"),
-        ("daily_budget", lambda value: value - 1),
         ("baseline_raw", lambda value: value + 0.01),
         ("baseline_percentile", lambda value: value + 0.01),
         ("baseline_weighted_term", lambda value: value + 0.01),
@@ -2468,7 +2638,7 @@ def test_compose_case_explanation_rejects_cross_day_baseline_candidate_pool():
         row_index=0,
         baseline_candidate_row_indices=baseline_candidates,
         hybrid_candidate_row_indices=hybrid_candidates,
-        daily_budget=25,
+        daily_budget=5,
     )
     poisoned = _copy_case(
         case,

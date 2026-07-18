@@ -236,6 +236,385 @@ def _valid_recovery_artifact(*, baseline_only=0):
     }
 
 
+def test_schema_v2_ui_contract_lazy_loads_both_complete_cohorts():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    for token in (
+        "schema_version==='2.0'",
+        "Hybrid-only",
+        "Baseline-only",
+        "recoveryFetchJson",
+        "python -m http.server 8000 --directory Documents/Data/v9_dashboard",
+        "http://localhost:8000/index.html",
+        "Validated local Gemma narrative",
+        "Selected anchor-event ranks",
+        "B / G / H values are anchor-event ranks",
+        "attributions.top_edges",
+        "attributions.top_local_nodes",
+        "attributions.top_features",
+        "decision_ledger.component_pooling.top_members_by_absolute_contribution",
+        "decision_ledger.rank_fusion",
+        "Local GNNExplainer overlay",
+        "No GNN explanation is generated for Baseline-only cases by policy.",
+        "Complete community",
+        "loaded /",
+        "Node search",
+        "current node page",
+        "Relation filter",
+        "Node page",
+        "Edge page",
+        "Provenance page",
+        "Expansion membership page",
+        "Case attribution overlay node page",
+        "Case attribution overlay edge page",
+        "Case attribution overlay provenance page",
+        "Case attribution overlay expansion membership page",
+    ):
+        assert token in js
+
+    assert "Explanation attempt failed or was not selected." not in js
+    assert "Selected unique-person ranks" not in js
+
+
+def test_schema_v2_ui_fetches_only_requested_sidecar_pages():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    assert "loadRecoveryChunkPage" in js
+    assert "for(const chunk of state.community.edge_chunks" not in js
+    assert "for(const chunk of state.community.provenance_chunks" not in js
+    assert "for(const chunk of state.community.node_chunks" not in js
+    assert "state.community.nodes" not in js
+    assert "loadRecoveryChunkPage('node',0" in js
+    assert "state.loadedEdgeCount" in js
+    assert "state.loadedProvenanceCount" in js
+    assert "state.loadedNodeCount" in js
+    assert "state.membershipPages" in js
+
+
+def test_schema_v2_ui_lazily_pages_case_overlay_evidence_separately():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    for token in (
+        "state.overlayNodePages",
+        "state.overlayEdgePages",
+        "state.overlayProvenancePages",
+        "state.overlayMembershipPages",
+        "loadRecoveryChunkPage('overlay-node',0",
+        "loadRecoveryChunkPage('overlay-edge',0",
+        "loadRecoveryChunkPage('overlay-provenance',0",
+        "loadRecoveryChunkPage('overlay-membership',0",
+    ):
+        assert token in js
+    assert "for(const chunk of state.caseData.overlay_evidence" not in js
+
+
+def test_schema_v2_ui_discards_stale_async_case_responses():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    assert "let recoveryRequestToken=0" in js
+    assert "const requestToken=++recoveryRequestToken" in js
+    assert "requestToken!==recoveryRequestToken" in js
+    assert "state.caseData=await recoveryFetchJson" not in js
+    assert "state.community=await recoveryFetchJson" not in js
+
+
+def _strict_manifest_artifact():
+    summary = {
+        "baseline_recovered": 1,
+        "recovered_by_both": 0,
+        "hybrid_only_recovered": 1,
+        "baseline_only_recovered": 1,
+        "hybrid_total": 1,
+        "net_gain": 0,
+    }
+    cohorts = {
+        "hybrid_only": [{
+            "case_id": "h1", "person_id": "p1", "community_key": "c1"
+        }],
+        "baseline_only": [{
+            "case_id": "b1", "person_id": "p2", "community_key": "c1"
+        }],
+    }
+    return {
+        "schema_version": "2.0",
+        "bundle_id": "0123456789abcdef01234567",
+        "sidecar_base": "recovery/bundles/0123456789abcdef01234567/",
+        "policy": {
+            "observability_seed": 0,
+            "inspections_per_day": 5,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+        },
+        "summary": summary,
+        "coverage": {
+            "hybrid_only_count": 1,
+            "baseline_only_count": 1,
+            "explained_count": 1,
+            "llm_validated_count": 1,
+            "failed_count": 0,
+            "complete": True,
+        },
+        "cohorts": cohorts,
+        "case_index": {
+            "h1": {
+                "path": "objects/h1.json", "sha256": "a",
+                "cohort": "hybrid_only", "community_key": "c1",
+            },
+            "b1": {
+                "path": "objects/b1.json", "sha256": "b",
+                "cohort": "baseline_only", "community_key": "c1",
+            },
+        },
+        "community_index": {"c1": {"path": "objects/c1.json", "sha256": "c"}},
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda artifact: artifact["policy"].update(gnn_arm="rgcn"),
+        lambda artifact: artifact["policy"].update(surrounding_results_seeds=[0, 2]),
+        lambda artifact: artifact["summary"].update(hybrid_total=2),
+        lambda artifact: artifact["cohorts"]["baseline_only"].__setitem__(
+            0, artifact["cohorts"]["hybrid_only"][0]
+        ),
+        lambda artifact: artifact["case_index"].pop("b1"),
+        lambda artifact: artifact["case_index"]["h1"].update(
+            cohort="baseline_only"
+        ),
+        lambda artifact: artifact["case_index"]["h1"].update(
+            community_key="c2"
+        ),
+    ],
+)
+def test_schema_v2_manifest_helper_fails_closed_on_identity_contract(mutation):
+    artifact = _strict_manifest_artifact()
+    mutation(artifact)
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nprocess.stdout.write(JSON.stringify(buildRecoveryManifestViewModel("
+        + json.dumps(artifact)
+        + ")));"
+    )
+
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout)["available"] is False
+
+
+@pytest.mark.parametrize(
+    ("bundle_id", "sidecar_base"),
+    [
+        ("0123456789abcdef01234567", None),
+        ("0123456789abcdef01234567", ""),
+        ("0123456789abcdef01234567", "recovery/bundles/../"),
+        ("0123456789abcdef01234567", "recovery/bundles/./"),
+        ("0123456789abcdef01234567", "recovery/bundles/abcdefabcdefabcdefabcdef/"),
+        ("not-a-producer-id", "recovery/bundles/not-a-producer-id/"),
+    ],
+)
+def test_schema_v2_manifest_helper_requires_safe_explicit_sidecar_base(
+    bundle_id, sidecar_base
+):
+    artifact = _strict_manifest_artifact()
+    artifact["bundle_id"] = bundle_id
+    if sidecar_base is None:
+        artifact.pop("sidecar_base")
+    else:
+        artifact["sidecar_base"] = sidecar_base
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nprocess.stdout.write(JSON.stringify(buildRecoveryManifestViewModel("
+        + json.dumps(artifact)
+        + ")));"
+    )
+
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout)["available"] is False
+
+
+def test_recovery_fetch_requires_canonical_hash_and_webcrypto():
+    script = UI.V9_RECOVERY_EXPLAINER_JS + r"""
+(async()=>{
+  const errors=[];
+  try{await recoveryFetchJson('unused','ABC');}catch(error){errors.push(error.message);}
+  const descriptor=Object.getOwnPropertyDescriptor(globalThis,'crypto');
+  Object.defineProperty(globalThis,'crypto',{value:undefined,configurable:true});
+  try{await recoveryFetchJson('unused','a'.repeat(64));}catch(error){errors.push(error.message);}
+  if(descriptor)Object.defineProperty(globalThis,'crypto',descriptor);
+  process.stdout.write(JSON.stringify(errors));
+})();
+"""
+
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    errors = json.loads(completed.stdout)
+    assert len(errors) == 2
+    assert "64-character lowercase SHA-256" in errors[0]
+    assert "WebCrypto SHA-256 is required" in errors[1]
+
+
+def test_schema_v2_chunk_validators_reject_identity_count_and_offset_mismatches():
+    script = UI.V9_RECOVERY_EXPLAINER_JS + r"""
+const owner={complete:true,node_count:1,edge_count:0,provenance_observation_count:0,
+  node_chunks:[{path:'n',sha256:'x',offset:0,count:1}],edge_chunks:[],
+  provenance_chunks:[],provenance_expansion_membership_chunks:[]};
+const validRef=owner.node_chunks[0];
+process.stdout.write(JSON.stringify({
+  owner:recoveryValidateChunkOwner(owner),
+  badOwner:recoveryValidateChunkOwner({...owner,node_count:2}),
+  rows:recoveryValidatedChunkRows({offset:0,count:1,nodes:[{node_id:'p'}]},validRef,'nodes'),
+  badOffset:recoveryValidatedChunkRows({offset:1,count:1,nodes:[{node_id:'p'}]},validRef,'nodes'),
+  badCount:recoveryValidatedChunkRows({offset:0,count:2,nodes:[{node_id:'p'}]},validRef,'nodes')
+}));
+"""
+
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    result = json.loads(completed.stdout)
+
+    assert result == {
+        "owner": True,
+        "badOwner": False,
+        "rows": [{"node_id": "p"}],
+        "badOffset": None,
+        "badCount": None,
+    }
+
+
+def test_schema_v2_manifest_helper_enforces_k5_complete_coverage_and_default_case():
+    artifact = {
+        "schema_version": "2.0",
+        "bundle_id": "0123456789abcdef01234567",
+        "sidecar_base": "recovery/bundles/0123456789abcdef01234567/",
+        "policy": {
+            "observability_seed": 0,
+            "inspections_per_day": 5,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+        },
+        "summary": {
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 1,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 1,
+            "net_gain": 0,
+            "seed_level_unique_person_recovery": {
+                "inspections_per_day": 5,
+                "common_validation_tuned_fusion_weight": 0.75,
+                "seeds": {
+                    "0": {"hybrid_unique_people_recovered": 8},
+                    "1": {"hybrid_unique_people_recovered": 7},
+                    "2": {"hybrid_unique_people_recovered": 9},
+                },
+                "mean": {"hybrid_unique_people_recovered": 8.0},
+                "population_sd": {"hybrid_unique_people_recovered": 0.816},
+                "score_averaged_ensemble": {"hybrid_unique_people_recovered": 9},
+            }
+        },
+        "coverage": {
+            "hybrid_only_count": 1,
+            "baseline_only_count": 1,
+            "explained_count": 1,
+            "llm_validated_count": 1,
+            "failed_count": 0,
+            "complete": True,
+        },
+        "cohorts": {
+            "hybrid_only": [{
+                "case_id": "h1", "person_id": "p1", "community_key": "c1"
+            }],
+            "baseline_only": [{
+                "case_id": "b1", "person_id": "p2", "community_key": "c1"
+            }],
+        },
+        "case_index": {
+            "h1": {
+                "path": "cases/h1.json", "sha256": "abc",
+                "cohort": "hybrid_only", "community_key": "c1"
+            },
+            "b1": {
+                "path": "cases/b1.json", "sha256": "def",
+                "cohort": "baseline_only", "community_key": "c1"
+            },
+        },
+        "community_index": {"c1": {"path": "communities/c1.json", "sha256": "ghi"}},
+    }
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nprocess.stdout.write(JSON.stringify(buildRecoveryManifestViewModel("
+        + json.dumps(artifact)
+        + ")));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    view = json.loads(completed.stdout)
+
+    assert view["available"] is True
+    assert view["defaultCohort"] == "hybrid_only"
+    assert view["defaultCaseId"] == "h1"
+    assert view["coverageComplete"] is True
+    assert view["seedLevelRecovery"]["seeds"]["0"][
+        "hybrid_unique_people_recovered"
+    ] == 8
+
+
+def test_schema_v2_ui_separates_seed_population_ensemble_event_and_person_semantics():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    for token in (
+        "Per-seed mean",
+        "Population SD",
+        "Ensemble ranking / event-level metrics",
+        "Individual unique-person overlap",
+        "common_validation_tuned_fusion_weight",
+        "score_averaged_ensemble",
+        "seed_level_unique_person_recovery",
+    ):
+        assert token in js
+
+
+def test_schema_v2_ui_has_real_edge_and_provenance_page_controls():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    assert "data-v2-page" in js
+    assert "edge-prev" in js
+    assert "edge-next" in js
+    assert "provenance-prev" in js
+    assert "provenance-next" in js
+
+
+def test_schema_v2_cluster_helper_groups_filtered_nodes_deterministically():
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nprocess.stdout.write(JSON.stringify(recoveryClusterNodes("
+        + json.dumps([
+            {"node_id": "p2", "cluster_id": "b"},
+            {"node_id": "p1", "cluster_id": "a"},
+            {"node_id": "x1", "cluster_id": "a"},
+        ])
+        + ", 'p')));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == [
+        {"cluster": "a", "node_ids": ["p1"]},
+        {"cluster": "b", "node_ids": ["p2"]},
+    ]
+
+
 def _run_ui(function_name, value, options=None):
     arguments = json.dumps(value)
     if options is not None:
@@ -322,7 +701,7 @@ def test_explorer_source_contract_covers_accessibility_lifecycle_and_states():
         "GraphSAGE seed 0",
         "Main results remain three-seed",
         "No Hybrid-only recoveries in this seed-0 run.",
-        "Explanation attempt failed or was not selected.",
+        "No validated explanation is available for this case.",
         "No stable factor found; inspect measured effects below.",
         "Complete community unavailable.",
         "Local Gemma output was unavailable or rejected.",
@@ -337,7 +716,7 @@ def test_explorer_source_contract_covers_accessibility_lifecycle_and_states():
     ):
         assert token in js
 
-    assert js.count("root.addEventListener('click'") == 1
+    assert js.count("root.addEventListener('click'") == 2
     assert "new WeakMap" in js
     assert "innerHTML" not in js
     assert "window.addEventListener('scroll'" not in js
