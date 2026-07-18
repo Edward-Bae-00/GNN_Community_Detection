@@ -1,6 +1,7 @@
 import csv
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -249,6 +250,24 @@ def test_v9_ui_adds_independent_simulated_catch_contract():
     assert "hideTip" in simulated_renderer
     assert "gnn" not in simulated_renderer.lower()
     assert "v9DailyCrossings" not in simulated_renderer
+
+
+def test_v9_ui_accessibility_table_does_not_expand_results_tab():
+    assert re.search(
+        r"#tab-v9Results\s+table\.v9-sr-only\s*\{[^}]*\bdisplay:\s*block\s*;",
+        V9_UI.V9_RESULTS_CSS,
+    )
+
+
+def test_v9_ui_model_list_uses_a_shrinkable_mobile_column():
+    _, separator, mobile_css = V9_UI.V9_RESULTS_CSS.partition("@media(max-width:700px){")
+
+    assert separator
+    assert re.search(
+        r"#tab-v9Results\s+\.v9-model-list\s*\{[^}]*"
+        r"grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;",
+        mobile_css,
+    )
 
 
 def test_v9_ui_keeps_daily_volume_and_simulated_catches_independent():

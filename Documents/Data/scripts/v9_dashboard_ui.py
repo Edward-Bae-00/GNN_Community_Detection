@@ -123,9 +123,11 @@ V9_RESULTS_CSS = r"""
 #tab-v9Results .v9-simulated-chart { min-width: 720px; }
 #tab-v9Results .v9-simulated-chart text { fill: var(--text2); font-size: 12px; }
 #tab-v9Results .v9-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+#tab-v9Results table.v9-sr-only { display: block; }
 @media(max-width:700px){
   #tab-v9Results { padding: 24px 16px; }
   #tab-v9Results .v9-summary { grid-template-columns: 1fr 1fr; }
+  #tab-v9Results .v9-model-list { grid-template-columns: minmax(0, 1fr); }
   #tab-v9Results .v9-summary-lead { grid-column: 1 / -1; }
   #tab-v9Results .v9-capacity-rows { grid-template-columns: 1fr; }
   #tab-v9Results .v9-capacity-row.is-best { box-shadow: inset 3px 0 0 #10b981; }
