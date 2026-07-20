@@ -447,6 +447,28 @@ def test_simulated_view_model_rejects_duplicate_daily_dates():
     }
 
 
+def test_simulated_view_model_reports_cumulative_series():
+    baseline = _simulated_arm({5: [
+        {"date": "2025-01-01", "found": 1},
+        {"date": "2025-01-02", "found": 0},
+        {"date": "2025-01-03", "found": 2},
+    ]})
+    hybrid = _simulated_arm({5: [
+        {"date": "2025-01-01", "found": 2},
+        {"date": "2025-01-02", "found": 3},
+        {"date": "2025-01-03", "found": 1},
+    ]})
+    view = _run_simulated_view_model(
+        {"arms": {"baseline": baseline, "hybrid": hybrid}}, 5
+    )
+    assert view["cumulativeByArm"] == {
+        "baseline": [1, 1, 3],
+        "hybrid": [2, 5, 6],
+    }
+    assert view["cumulativeMaxY"] == 6
+    assert view["cumulativeTicks"] == [0, 2, 4, 6]
+
+
 def test_dashboard_script_injection_keeps_helpers_outside_tabs_registry():
     template = "const Tabs={\nexplorer:{rendered:false,render(){}}\n};"
     helper = "function buildViewModel(){}"

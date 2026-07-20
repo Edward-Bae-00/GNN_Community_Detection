@@ -121,6 +121,8 @@ V9_RESULTS_CSS = r"""
 #tab-v9Results .v9-simulated-chart-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 #tab-v9Results .v9-simulated-chart-scroll:focus-visible { outline: 2px solid #16a34a; outline-offset: 2px; }
 #tab-v9Results .v9-simulated-chart { min-width: 720px; }
+#tab-v9Results .v9-seg-small { margin: 0; padding: 3px; }
+#tab-v9Results .v9-seg-small button { padding: 4px 10px; font-size: 12px; }
 #tab-v9Results .v9-simulated-chart text { fill: var(--text2); font-size: 12px; }
 #tab-v9Results .v9-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 #tab-v9Results table.v9-sr-only { display: block; }
@@ -185,7 +187,14 @@ SIMULATED_CATCH_VIEW_MODEL_JS = r"""
     const yTicks=Array.from(new Set(Array.from({length:4},(_,i)=>Math.round(foundMaxY*i/3))));
     const tickCount=Math.min(6,dates.length);
     const dateTickIndexes=Array.from(new Set(Array.from({length:tickCount},(_,i)=>Math.round(i*(dates.length-1)/Math.max(1,tickCount-1)))));
-    return {available:true,budgets,selected,dates,valuesByArm,metricsByArm,foundMaxY,yTicks,dateTickIndexes};
+    const cumulativeByArm=Object.fromEntries(arms.map(a=>{
+      let total=0;
+      return [a,valuesByArm[a].map(value=>(total+=value))];
+    }));
+    const cumulativeMax=Math.max(1,...arms.map(a=>cumulativeByArm[a][cumulativeByArm[a].length-1]||0));
+    const cumulativeMaxY=Math.max(1,Math.ceil(cumulativeMax));
+    const cumulativeTicks=Array.from(new Set(Array.from({length:4},(_,i)=>Math.round(cumulativeMaxY*i/3))));
+    return {available:true,budgets,selected,dates,valuesByArm,metricsByArm,foundMaxY,yTicks,dateTickIndexes,cumulativeByArm,cumulativeMaxY,cumulativeTicks};
   }
 """
 
@@ -226,6 +235,7 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
   const dailyBudget25=Number((demo.overall_daily.baseline||{})['daily_budget@25']||0);
   const dailyDays=Number((demo.overall_daily.baseline||{}).n_days||0);
   let pop='observable';
+  let simMode='cumulative';
   const modelVisibility={baseline:true,hybrid:true,gnn:true};
   const layerVisibility={crossings:true,'hidden-carriers':true};
 
@@ -245,7 +255,7 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
     +'<div class="v9-seg" id="v9-pop" role="group" aria-label="Population scope"><button data-v="observable" class="on" aria-pressed="true">Observable slice</button><button data-v="pool" aria-pressed="false">Whole pool</button></div>'
     +'<div class="v9-card"><h3>Depth event recall</h3><div class="v9-hint">Share of hidden-positive events hit in the selected population.</div><div id="v9-bars"></div></div>'
     +'<div class="v9-card" style="margin-top:18px"><h3>Daily capacity view</h3><div class="v9-hint">Found, precision, recall, and F1 under fixed per-day inspection budgets.</div><div id="v9-daily"></div></div>'
-    +'<div class="v9-card" style="margin-top:18px"><h3>Daily Crossing Volume</h3><div class="v9-hint">Daily test-window crossing volume and hidden-positive event hits by each model.</div><div class="v9-chart-stack"><section class="v9-chart-block"><div class="v9-daily-found-header"><h4>Crossing events and hidden-positive event hits per day</h4><label><span class="v9-sr-only">Daily inspection budget</span><select id="v9-daily-found-k" class="v9-daily-found-select"></select></label></div><div class="v9-hint">Daily top-k event hits only. Toggle a model to show or hide its line.</div><div id="v9-volume"></div></section><section id="v9-simulated-catches" class="v9-chart-block" aria-labelledby="v9-simulated-title"><div class="v9-daily-found-header"><h4 id="v9-simulated-title">Simulated catches - first-time unique-person recoveries</h4><label><span class="v9-sr-only">Simulated daily inspection budget</span><select id="v9-simulated-k" class="v9-daily-found-select"></select></label></div><div class="v9-hint">New people recovered each day after earlier simulated catches leave the candidate pool.</div><div id="v9-simulated-summary" class="v9-simulated-summary"></div><div id="v9-simulated-volume"></div></section></div></div>'
+    +'<div class="v9-card" style="margin-top:18px"><h3>Daily Crossing Volume</h3><div class="v9-hint">Daily test-window crossing volume and hidden-positive event hits by each model.</div><div class="v9-chart-stack"><section class="v9-chart-block"><div class="v9-daily-found-header"><h4>Crossing events and hidden-positive event hits per day</h4><label><span class="v9-sr-only">Daily inspection budget</span><select id="v9-daily-found-k" class="v9-daily-found-select"></select></label></div><div class="v9-hint">Daily top-k event hits only. Toggle a model to show or hide its line.</div><div id="v9-volume"></div></section><section id="v9-simulated-catches" class="v9-chart-block" aria-labelledby="v9-simulated-title"><div class="v9-daily-found-header"><h4 id="v9-simulated-title">Simulated catches - first-time unique-person recoveries</h4><div class="v9-seg v9-seg-small" id="v9-simulated-mode" role="group" aria-label="Simulated chart mode"><button data-v="cumulative" class="on" aria-pressed="true">Cumulative</button><button data-v="daily" aria-pressed="false">Daily</button></div><label><span class="v9-sr-only">Simulated daily inspection budget</span><select id="v9-simulated-k" class="v9-daily-found-select"></select></label></div><div class="v9-hint">New people recovered each day after earlier simulated catches leave the candidate pool.</div><div id="v9-simulated-summary" class="v9-simulated-summary"></div><div id="v9-simulated-volume"></div></section></div></div>'
     +'<div class="v9-card" style="margin-top:18px"><h3>Bootstrap verdicts</h3><div class="v9-hint">Paired event-bootstrap results for Hybrid minus baseline, using global and daily budgets.</div><div class="v9-table-wrap" id="v9-sig"></div></div>';
 
   mountV9RecoveryExplainer(
@@ -384,6 +394,16 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
     const summaryEl=document.getElementById('v9-simulated-summary');
     const chartEl=document.getElementById('v9-simulated-volume');
     if(!section||!simSelect||!summaryEl||!chartEl) return;
+    const modeSeg=document.getElementById('v9-simulated-mode');
+    if(modeSeg&&!modeSeg.dataset.wired){
+      modeSeg.dataset.wired='1';
+      modeSeg.addEventListener('click',e=>{
+        const b=e.target.closest('button'); if(!b) return;
+        simMode=b.dataset.v;
+        modeSeg.querySelectorAll('button').forEach(x=>{const on=x===b;x.classList.toggle('on',on);x.setAttribute('aria-pressed',String(on));});
+        drawSimulatedCatches();
+      });
+    }
     const arms=['baseline','hybrid'];
     const view=buildSimulatedCatchViewModel(demo.simulated_catch_daily,Number(simSelect.value));
     if(!view.available){
@@ -409,20 +429,23 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
         +'<div class="v9-simulated-metric"><b>'+fmt(metrics.laterHiddenEventsRemoved)+'</b><span>Later hidden-positive events removed</span></div>'
         +'</div></article>';
     }).join('');
-    const dates=view.dates, valuesByArm=view.valuesByArm;
+    const dates=view.dates;
+    const plotByArm=simMode==='cumulative'?view.cumulativeByArm:view.valuesByArm;
+    const plotMaxY=simMode==='cumulative'?view.cumulativeMaxY:view.foundMaxY;
+    const plotTicks=simMode==='cumulative'?view.cumulativeTicks:view.yTicks;
+    const yAxisTitle=simMode==='cumulative'?'total unique people caught':'new unique people / day';
     const width=720, height=240, left=48, right=20, top=24, bottom=42, chartW=width-left-right, chartH=height-top-bottom;
-    const foundMaxY=view.foundMaxY;
-    const x=i=>left+(dates.length===1?chartW/2:i*chartW/(dates.length-1)), y=v=>top+chartH-(v/foundMaxY)*chartH;
+    const x=i=>left+(dates.length===1?chartW/2:i*chartW/(dates.length-1)), y=v=>top+chartH-(v/plotMaxY)*chartH;
     const ticks=view.dateTickIndexes.map(i=>'<text x="'+x(i).toFixed(1)+'" y="'+(height-14)+'" text-anchor="'+(i===0?'start':i===dates.length-1?'end':'middle')+'">'+esc(dates[i])+'</text>').join('');
-    const rules=view.yTicks.map(v=>'<line class="v9-found-chart-rule" x1="'+left+'" x2="'+(width-right)+'" y1="'+y(v).toFixed(1)+'" y2="'+y(v).toFixed(1)+'"/><text x="'+(left-8)+'" y="'+(y(v)+4).toFixed(1)+'" text-anchor="end">'+fmt(v)+'</text>').join('');
-    const lines=arms.map(a=>'<path class="v9-found-chart-line '+a+'" d="'+valuesByArm[a].map((value,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(value).toFixed(1)).join(' ')+'"/>').join('');
-    const points=arms.map(a=>valuesByArm[a].map((value,i)=>'<circle class="v9-hover-point '+a+'" data-arm="'+a+'" data-index="'+i+'" cx="'+x(i).toFixed(1)+'" cy="'+y(value).toFixed(1)+'" r="4" stroke="'+(a==='baseline'?'#64748b':'#16a34a')+'"/>').join('')).join('');
+    const rules=plotTicks.map(v=>'<line class="v9-found-chart-rule" x1="'+left+'" x2="'+(width-right)+'" y1="'+y(v).toFixed(1)+'" y2="'+y(v).toFixed(1)+'"/><text x="'+(left-8)+'" y="'+(y(v)+4).toFixed(1)+'" text-anchor="end">'+fmt(v)+'</text>').join('');
+    const lines=arms.map(a=>'<path class="v9-found-chart-line '+a+'" d="'+plotByArm[a].map((value,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(value).toFixed(1)).join(' ')+'"/>').join('');
+    const points=arms.map(a=>plotByArm[a].map((value,i)=>'<circle class="v9-hover-point '+a+'" data-arm="'+a+'" data-index="'+i+'" cx="'+x(i).toFixed(1)+'" cy="'+y(value).toFixed(1)+'" r="4" stroke="'+(a==='baseline'?'#64748b':'#16a34a')+'"/>').join('')).join('');
     const accessibleName='Simulated first-time recoveries at '+fmt(selected)+' inspections per day: Baseline and Deployable Hybrid daily new unique people caught';
-    const accessibleRows=dates.map((date,i)=>'<tr><td>'+esc(date)+'</td><td>'+fmt(valuesByArm.baseline[i])+'</td><td>'+fmt(valuesByArm.hybrid[i])+'</td></tr>').join('');
-    chartEl.innerHTML='<div class="v9-chart-legend" aria-label="Simulated-catch model legend"><span><i class="v9-chart-key baseline"></i> Baseline</span><span><i class="v9-chart-key hybrid"></i> Deployable Hybrid</span></div><div class="v9-simulated-chart-scroll" tabindex="0" role="region" aria-label="'+esc(accessibleName)+' chart"><svg class="v9-found-chart v9-simulated-chart" viewBox="0 0 '+width+' '+height+'" role="img" aria-label="'+esc(accessibleName)+'" aria-describedby="v9-simulated-data-'+selected+'"><text x="'+left+'" y="12">new unique people / day</text>'+rules+lines+points+'<line class="v9-hover-guide" x1="'+left+'" x2="'+left+'" y1="'+top+'" y2="'+(top+chartH)+'"/>'+ticks+'<rect class="v9-hover-target" x="'+left+'" y="'+top+'" width="'+chartW+'" height="'+chartH+'"/></svg></div><table id="v9-simulated-data-'+selected+'" class="v9-sr-only"><caption>'+esc(accessibleName)+'</caption><thead><tr><th>Date</th><th>Baseline</th><th>Deployable Hybrid</th></tr></thead><tbody>'+accessibleRows+'</tbody></table>';
+    const accessibleRows=dates.map((date,i)=>'<tr><td>'+esc(date)+'</td><td>'+fmt(plotByArm.baseline[i])+'</td><td>'+fmt(plotByArm.hybrid[i])+'</td></tr>').join('');
+    chartEl.innerHTML='<div class="v9-chart-legend" aria-label="Simulated-catch model legend"><span><i class="v9-chart-key baseline"></i> Baseline</span><span><i class="v9-chart-key hybrid"></i> Deployable Hybrid</span></div><div class="v9-simulated-chart-scroll" tabindex="0" role="region" aria-label="'+esc(accessibleName)+' chart"><svg class="v9-found-chart v9-simulated-chart" viewBox="0 0 '+width+' '+height+'" role="img" aria-label="'+esc(accessibleName)+'" aria-describedby="v9-simulated-data-'+selected+'"><text x="'+left+'" y="12">'+esc(yAxisTitle)+'</text>'+rules+lines+points+'<line class="v9-hover-guide" x1="'+left+'" x2="'+left+'" y1="'+top+'" y2="'+(top+chartH)+'"/>'+ticks+'<rect class="v9-hover-target" x="'+left+'" y="'+top+'" width="'+chartW+'" height="'+chartH+'"/></svg></div><table id="v9-simulated-data-'+selected+'" class="v9-sr-only"><caption>'+esc(accessibleName)+'</caption><thead><tr><th>Date</th><th>Baseline</th><th>Deployable Hybrid</th></tr></thead><tbody>'+accessibleRows+'</tbody></table>';
     const svg=chartEl.querySelector('svg'), guide=svg.querySelector('.v9-hover-guide'), target=svg.querySelector('.v9-hover-target'), hoverPoints=svg.querySelectorAll('.v9-hover-point');
     const indexAt=e=>{const p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;const local=p.matrixTransform(svg.getScreenCTM().inverse());return Math.max(0,Math.min(dates.length-1,Math.round((local.x-left)/Math.max(1,chartW/Math.max(1,dates.length-1)))));};
-    target.addEventListener('pointermove',e=>{const i=indexAt(e);guide.setAttribute('x1',x(i).toFixed(1));guide.setAttribute('x2',x(i).toFixed(1));guide.style.opacity='1';hoverPoints.forEach(point=>point.style.opacity=Number(point.dataset.index)===i?'1':'0');showTip(e,'<b>'+esc(dates[i])+'</b><br>'+fmt(selected)+' inspections / day<br>'+arms.map(a=>esc(armLabel(a))+': '+fmt(valuesByArm[a][i])).join('<br>'));});
+    target.addEventListener('pointermove',e=>{const i=indexAt(e);guide.setAttribute('x1',x(i).toFixed(1));guide.setAttribute('x2',x(i).toFixed(1));guide.style.opacity='1';hoverPoints.forEach(point=>point.style.opacity=Number(point.dataset.index)===i?'1':'0');showTip(e,'<b>'+esc(dates[i])+'</b><br>'+fmt(selected)+' inspections / day<br>'+arms.map(a=>esc(armLabel(a))+': '+fmt(plotByArm[a][i])).join('<br>'));});
     target.addEventListener('pointerleave',()=>{guide.style.opacity='0';hoverPoints.forEach(point=>point.style.opacity='0');hideTip();});
   }
 
