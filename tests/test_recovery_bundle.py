@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from gnn.recovery_bundle import RecoveryBundleError, RecoveryBundleWriter
+from Documents.Data.scripts import v9_recovery_sidecars
 
 
 def _community(key="community:a"):
@@ -113,6 +114,18 @@ def test_community_objects_are_content_deduplicated_and_provenance_is_separate(t
     assert first == second
     manifest = _read_ref(tmp_path / "stage", first)
     assert manifest["complete"] is True
+    assert manifest["chunk_size"] == 1
+    assert manifest["chunking_policy"] == "bounded-page-records"
+    assert all(
+        reference["count"] <= manifest["chunk_size"]
+        for field in (
+            "node_chunks",
+            "edge_chunks",
+            "provenance_chunks",
+            "provenance_expansion_membership_chunks",
+        )
+        for reference in manifest[field]
+    )
     assert manifest["node_count"] == 3
     assert manifest["edge_count"] == 2
     assert manifest["provenance_observation_count"] == 3
@@ -145,7 +158,7 @@ def test_community_objects_are_content_deduplicated_and_provenance_is_separate(t
         ("edge", "edge:2", "expansion:1"),
     }
     object_files = list((tmp_path / "stage" / "objects").rglob("*.json"))
-    assert len(object_files) == 11  # records + expansion memberships + manifest
+    assert len(object_files) <= 18  # bounded catalog/day chunks, never one file per record
 
 
 def test_checkpoint_resumes_and_reuses_matching_fingerprint_objects(tmp_path):
@@ -219,7 +232,12 @@ def test_finalize_publishes_complete_cases_and_pointer_last(tmp_path):
     manifest = writer.finalize(
         expected_hybrid_case_ids={"case:h"},
         expected_baseline_case_ids={"case:b"},
-        policy={"observability_seed": 0, "inspections_per_day": 5},
+        policy={
+            "observability_seed": 0,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+            "inspections_per_day": 5,
+        },
         summary={"hybrid_only_recovered": 1, "baseline_only_recovered": 1},
     )
 
@@ -299,7 +317,7 @@ def test_prior_publication_survives_a_failed_replacement(tmp_path):
     first_manifest = writer.finalize(
         expected_hybrid_case_ids={"case:h"},
         expected_baseline_case_ids=set(),
-        policy={"inspections_per_day": 5},
+        policy={"observability_seed": 0, "inspections_per_day": 5},
         summary={},
     )
     pointer_path = tmp_path / "published" / "current.json"
@@ -829,7 +847,7 @@ def test_hybrid_case_allows_target_only_overlay_when_there_are_no_message_edges(
     assert writer.has_completed_case("case:h") is True
 
 
-def test_finalize_keeps_published_objects_independent_from_resumable_cache(tmp_path):
+def test_finalize_atomically_consumes_successful_staging_tree(tmp_path):
     stage = tmp_path / "stage"
     published = tmp_path / "published"
     writer = RecoveryBundleWriter(stage, published, run_fingerprint="hard-link")
@@ -843,16 +861,9 @@ def test_finalize_keeps_published_objects_independent_from_resumable_cache(tmp_p
         summary={},
     )
 
-    source = stage / community_ref["path"]
     target = published / manifest["bundle_path"] / community_ref["path"]
-    assert source.stat().st_dev == target.stat().st_dev
-    assert source.stat().st_ino != target.stat().st_ino
-    source_content = source.read_bytes()
-    target.write_text("{}", encoding="utf-8")
-    assert source.read_bytes() == source_content
-    assert (stage / "checkpoint.json").stat().st_ino != (
-        published / manifest["bundle_path"] / "manifest.json"
-    ).stat().st_ino
+    assert target.is_file()
+    assert not stage.exists()
 
 
 def test_finalize_never_uses_mutation_aliasing_hard_links(
@@ -875,10 +886,531 @@ def test_finalize_never_uses_mutation_aliasing_hard_links(
         summary={},
     )
 
-    source = stage / community_ref["path"]
     target = published / manifest["bundle_path"] / community_ref["path"]
-    assert source.read_bytes() == target.read_bytes()
-    assert source.stat().st_ino != target.stat().st_ino
+    assert target.is_file()
+    assert not stage.exists()
+
+
+def test_two_day_views_share_immutable_catalogs_but_not_caught_status(tmp_path):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published", run_fingerprint="two-day"
+    )
+    first = _community("community:day-1")
+    first["scoring_day"] = "2025-01-01T00:00:00+00:00"
+    first["nodes"][0].update(
+        {
+            "caught_before_snapshot": False,
+            "caught_label_available_time": None,
+        }
+    )
+    second = _community("community:day-2")
+    second["scoring_day"] = "2025-01-02T00:00:00+00:00"
+    second["nodes"][0].update(
+        {
+            "caught_before_snapshot": True,
+            "caught_label_available_time": "2025-01-01T12:00:00+00:00",
+        }
+    )
+
+    first_manifest = _read_ref(tmp_path / "stage", writer.write_community(first))
+    second_manifest = _read_ref(tmp_path / "stage", writer.write_community(second))
+
+    assert first_manifest["catalogs"] == second_manifest["catalogs"]
+    assert first_manifest["day_view"]["node_status_chunks"] != (
+        second_manifest["day_view"]["node_status_chunks"]
+    )
+
+
+def test_resume_hash_verifies_normalized_day_status_chunks(tmp_path):
+    stage = tmp_path / "stage"
+    published = tmp_path / "published"
+    writer = RecoveryBundleWriter(stage, published, run_fingerprint="day-status")
+    community_ref = writer.write_community(_community())
+    manifest = _read_ref(stage, community_ref)
+    status_ref = manifest["day_view"]["node_status_chunks"][0]
+    (stage / status_ref["path"]).write_text("{}", encoding="utf-8")
+
+    with pytest.raises(RecoveryBundleError, match="corrupt cached object"):
+        RecoveryBundleWriter(stage, published, run_fingerprint="day-status")
+
+
+def test_edge_and_provenance_transitions_reuse_run_global_immutable_records(tmp_path):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published", run_fingerprint="transition"
+    )
+    first = _community("community:day-1")
+    first["edges"][0]["message_hop"] = 1
+    second = _community("community:day-2")
+    second["scoring_day"] = "2025-01-03T00:00:00+00:00"
+    second["edges"][0]["message_hop"] = 2
+    second["edges"][0]["source_row_ids"].append("row:later")
+    second["edges"][0]["source_row_count"] = 3
+    second["edges"][0]["observations"].append(
+        {"source_row_id": "row:later", "available_time": "2025-01-02"}
+    )
+
+    first_manifest = _read_ref(tmp_path / "stage", writer.write_community(first))
+    second_manifest = _read_ref(tmp_path / "stage", writer.write_community(second))
+
+    assert first_manifest["catalogs"]["edge_count"] == 2
+    assert second_manifest["catalogs"]["edge_count"] == 2
+    assert first_manifest["catalogs"]["provenance_count"] == 3
+    assert second_manifest["catalogs"]["provenance_count"] == 4
+    assert first_manifest["day_view"] != second_manifest["day_view"]
+
+    first_case = _case("case:first", "community:day-1")
+    first_case["scoring_day"] = first["scoring_day"]
+    second_case = _case("case:second", "community:day-2")
+    second_case["scoring_day"] = second["scoring_day"]
+    writer.write_case("baseline_only", first_case)
+    writer.write_case("baseline_only", second_case)
+    bundle = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:first", "case:second"},
+        policy={},
+        summary={},
+    )
+    final_root = tmp_path / "published" / bundle["bundle_path"]
+    edge_index = bundle["catalog_index"]["edges"]
+    provenance_index = bundle["catalog_index"]["provenance"]
+    assert edge_index["record_count"] == 2
+    assert provenance_index["record_count"] == 4
+    assert len(edge_index["chunks"]) <= 2
+    assert len(provenance_index["chunks"]) <= 2
+    provenance_ids = [
+        record["record_id"]
+        for reference in provenance_index["chunks"]
+        for record in _read_ref(final_root, reference)["records"]
+    ]
+    assert provenance_ids.count("row:1") == 1
+
+
+def test_finalize_compacts_staging_in_place_without_producer_copy(tmp_path, monkeypatch):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published", run_fingerprint="no-copy"
+    )
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+    monkeypatch.setattr(
+        writer,
+        "_copy_bundle_objects",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("producer publication must not copy its bundle")
+        ),
+        raising=False,
+    )
+
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:b"},
+        policy={},
+        summary={},
+    )
+
+    assert (tmp_path / "published" / manifest["bundle_path"] / "manifest.json").is_file()
+
+
+def test_chunked_catalog_file_and_page_fetch_bounds(tmp_path):
+    chunk_size = 2_000
+    record_count = 10_001
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage",
+        tmp_path / "published",
+        run_fingerprint="catalog-bounds",
+        chunk_size=chunk_size,
+    )
+    community = {
+        "community_key": "community:bounded",
+        "complete": True,
+        "scoring_day": "2025-01-02T00:00:00+00:00",
+        "component_id": "component:bounded",
+        "nodes": (
+            {"node_id": f"node:{index:06d}", "kind": "person"}
+            for index in range(record_count)
+        ),
+        "edges": iter(()),
+        "provenance_expansions": iter(()),
+    }
+    writer.write_community(community)
+    writer.write_case(
+        "baseline_only", _case("case:bounded", "community:bounded")
+    )
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:bounded"},
+        policy={},
+        summary={},
+    )
+    expected_chunks = (record_count + chunk_size - 1) // chunk_size
+    node_catalog = manifest["catalog_index"]["nodes"]
+    assert node_catalog["record_count"] == record_count
+    assert len(node_catalog["chunks"]) == expected_chunks
+    assert all(chunk["count"] <= chunk_size for chunk in node_catalog["chunks"])
+
+    bundle = tmp_path / "published" / manifest["bundle_path"]
+    community_manifest = _read_ref(
+        bundle, manifest["community_index"]["community:bounded"]
+    )
+    for membership_ref in community_manifest["node_chunks"]:
+        ids = [
+            row["catalog_id"]
+            for row in _read_ref(bundle, membership_ref)["nodes"]
+        ]
+        matching_catalog_chunks = {
+            chunk["path"]
+            for catalog_id in ids
+            for chunk in node_catalog["chunks"]
+            if chunk["first_id"] <= catalog_id <= chunk["last_id"]
+        }
+        assert len(matching_catalog_chunks) == 1
+    assert len(list(bundle.rglob("*.json"))) <= expected_chunks * 3 + 4
+
+
+def test_disk_catalog_keeps_writer_state_and_checkpoint_bounded(tmp_path):
+    record_count = 10_001
+    stage = tmp_path / "stage"
+    writer = RecoveryBundleWriter(
+        stage,
+        tmp_path / "published",
+        run_fingerprint="disk-catalog",
+        chunk_size=2_000,
+    )
+    writer.write_community(
+        {
+            "community_key": "community:disk",
+            "complete": True,
+            "scoring_day": "2025-01-02T00:00:00+00:00",
+            "component_id": "component:disk",
+            "nodes": (
+                {
+                    "node_id": f"node:{index:06d}",
+                    "kind": "person",
+                    "payload": "x" * 128,
+                }
+                for index in range(record_count)
+            ),
+            "edges": iter(()),
+            "provenance_expansions": iter(()),
+        }
+    )
+    checkpoint = writer.checkpoint()
+
+    assert "catalog_records" not in writer._state
+    assert writer.catalog_store.in_memory_record_count == 0
+    assert checkpoint.stat().st_size < 100_000
+    assert writer.catalog_store.path.stat().st_size > checkpoint.stat().st_size
+
+
+def test_run_global_catalog_conflicts_fail_closed(tmp_path):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published", run_fingerprint="conflict"
+    )
+    first = _community("community:first")
+    writer.write_community(first)
+    second = _community("community:second")
+    second["nodes"][0]["kind"] = "conflicting-kind"
+
+    with pytest.raises(RecoveryBundleError, match="run-global nodes record"):
+        writer.write_community(second)
+
+
+def test_failed_streaming_objects_are_excluded_from_published_reference_closure(
+    tmp_path,
+):
+    stage = tmp_path / "stage"
+    writer = RecoveryBundleWriter(
+        stage, tmp_path / "published", run_fingerprint="orphan", chunk_size=1
+    )
+    broken = _community("community:broken")
+    broken["nodes"] = iter(
+        [
+            {"node_id": "orphan:node", "kind": "person"},
+            {"kind": "missing-id"},
+        ]
+    )
+    with pytest.raises(RecoveryBundleError, match="node_id"):
+        writer.write_community(broken)
+    failed_only = {
+        path.relative_to(stage).as_posix()
+        for path in (stage / "objects").rglob("*.json")
+    }
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:b"},
+        policy={},
+        summary={},
+    )
+    published = tmp_path / "published" / manifest["bundle_path"]
+
+    assert failed_only
+    assert all(not (published / relative).exists() for relative in failed_only)
+
+
+def test_case_attempt_phases_persist_and_are_capped_across_resume(tmp_path):
+    stage = tmp_path / "stage"
+    writer = RecoveryBundleWriter(
+        stage, tmp_path / "published", run_fingerprint="attempts"
+    )
+    writer.begin_case_attempt("case:h", "first_pass")
+    writer.record_failure({"case_id": "case:h", "message": "first"})
+    resumed = RecoveryBundleWriter(
+        stage, tmp_path / "published", run_fingerprint="attempts"
+    )
+
+    assert resumed.case_attempt_state("case:h") == {
+        "first_pass": "started",
+        "deferred_retry": "pending",
+    }
+    with pytest.raises(RecoveryBundleError, match="already started"):
+        resumed.begin_case_attempt("case:h", "first_pass")
+    resumed.begin_case_attempt("case:h", "deferred_retry")
+    with pytest.raises(RecoveryBundleError, match="already started"):
+        resumed.begin_case_attempt("case:h", "deferred_retry")
+
+
+def test_dashboard_physical_copy_fails_free_space_preflight_before_staging(
+    tmp_path, monkeypatch
+):
+    diagnostics = tmp_path / "diagnostics"
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage",
+        diagnostics / "recovery",
+        run_fingerprint={"run_identity": {"checkpoint_id": "abc"}},
+        sidecar_prefix="recovery",
+    )
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:b"},
+        policy={
+            "observability_seed": 0,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+            "inspections_per_day": 5,
+        },
+        summary={
+            "overlap_ids_available": True,
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 0,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 0,
+            "net_gain": -1,
+        },
+    )
+    monkeypatch.delattr(v9_recovery_sidecars.os, "clonefile", raising=False)
+    monkeypatch.setattr(
+        v9_recovery_sidecars.shutil,
+        "disk_usage",
+        lambda path: v9_recovery_sidecars.shutil._ntuple_diskusage(1, 1, 0),
+    )
+    output = tmp_path / "dashboard" / "recovery"
+
+    with pytest.raises(ValueError, match="insufficient free space"):
+        v9_recovery_sidecars.publish_prepackaged_manifest(
+            manifest, diagnostics / "demo.json", output
+        )
+
+    assert not output.exists()
+
+
+def test_dashboard_publication_rejects_mismatched_source_manifest(tmp_path):
+    diagnostics = tmp_path / "diagnostics"
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage",
+        diagnostics / "recovery",
+        run_fingerprint={"run_identity": {"checkpoint_id": "abc"}},
+        sidecar_prefix="recovery",
+    )
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:b"},
+        policy={
+            "observability_seed": 0,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+            "inspections_per_day": 5,
+        },
+        summary={
+            "overlap_ids_available": True,
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 0,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 0,
+            "net_gain": -1,
+        },
+    )
+    source_manifest = (
+        diagnostics / "recovery" / manifest["bundle_path"] / "manifest.json"
+    )
+    source_manifest.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="source manifest"):
+        v9_recovery_sidecars.publish_prepackaged_manifest(
+            manifest, diagnostics / "demo.json", tmp_path / "dashboard"
+        )
+
+
+def test_dashboard_publication_copies_only_verified_reference_closure(tmp_path):
+    diagnostics = tmp_path / "diagnostics"
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage",
+        diagnostics / "recovery",
+        run_fingerprint={"run_identity": {"checkpoint_id": "abc"}},
+        sidecar_prefix="recovery",
+    )
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:b"},
+        policy={
+            "observability_seed": 0,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+            "inspections_per_day": 5,
+        },
+        summary={
+            "overlap_ids_available": True,
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 0,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 0,
+            "net_gain": -1,
+        },
+    )
+    source_bundle = diagnostics / "recovery" / manifest["bundle_path"]
+    (source_bundle / "orphan.json").write_text("{}", encoding="utf-8")
+
+    v9_recovery_sidecars.publish_prepackaged_manifest(
+        manifest, diagnostics / "demo.json", tmp_path / "dashboard"
+    )
+
+    target = tmp_path / "dashboard" / manifest["bundle_path"]
+    assert not (target / "orphan.json").exists()
+
+
+def test_clone_runtime_fallback_preflights_before_physical_copy(
+    tmp_path, monkeypatch
+):
+    diagnostics = tmp_path / "diagnostics"
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage",
+        diagnostics / "recovery",
+        run_fingerprint={"run_identity": {"checkpoint_id": "abc"}},
+        sidecar_prefix="recovery",
+    )
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:b"},
+        policy={
+            "observability_seed": 0,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": [0, 1, 2],
+            "inspections_per_day": 5,
+        },
+        summary={
+            "overlap_ids_available": True,
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 0,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 0,
+            "net_gain": -1,
+        },
+    )
+    physical_copies = []
+
+    def unsupported_clone(source, destination):
+        raise OSError(v9_recovery_sidecars.errno.ENOTSUP, "unsupported")
+
+    monkeypatch.setattr(
+        v9_recovery_sidecars.os, "clonefile", unsupported_clone, raising=False
+    )
+    monkeypatch.setattr(
+        v9_recovery_sidecars.shutil,
+        "disk_usage",
+        lambda path: v9_recovery_sidecars.shutil._ntuple_diskusage(1, 1, 0),
+    )
+    monkeypatch.setattr(
+        v9_recovery_sidecars.shutil,
+        "copy2",
+        lambda source, destination: physical_copies.append((source, destination)),
+    )
+
+    with pytest.raises(ValueError, match="insufficient free space"):
+        v9_recovery_sidecars.publish_prepackaged_manifest(
+            manifest, diagnostics / "demo.json", tmp_path / "dashboard"
+        )
+
+    assert physical_copies == []
+
+
+def test_legacy_sidecar_packager_caps_input_before_community_materialization(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(v9_recovery_sidecars, "_validate_artifact", lambda value: None)
+    artifact = {
+        "communities": {
+            f"community:{index}": {"community_key": f"community:{index}"}
+            for index in range(101)
+        }
+    }
+
+    with pytest.raises(ValueError, match="legacy sidecar package limit"):
+        v9_recovery_sidecars.package_recovery_sidecars(
+            artifact, tmp_path / "legacy"
+        )
+
+
+@pytest.mark.parametrize("nested_field", ["nodes", "edges"])
+def test_legacy_packager_counts_nested_expansion_evidence_before_materializing(
+    tmp_path, monkeypatch, nested_field
+):
+    monkeypatch.setattr(v9_recovery_sidecars, "_validate_artifact", lambda value: None)
+    expansion = {"nodes": [], "edges": []}
+    expansion[nested_field] = [{} for _ in range(10_001)]
+    artifact = {
+        "communities": [
+            {
+                "nodes": [],
+                "edges": [],
+                "provenance_expansions": [expansion],
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="legacy sidecar package limit"):
+        v9_recovery_sidecars.package_recovery_sidecars(
+            artifact, tmp_path / "legacy"
+        )
+
+
+@pytest.mark.parametrize("nested_field", ["observations", "source_row_ids"])
+def test_legacy_packager_counts_nested_edge_rows_before_materializing(
+    tmp_path, monkeypatch, nested_field
+):
+    monkeypatch.setattr(v9_recovery_sidecars, "_validate_artifact", lambda value: None)
+    edge = {nested_field: [f"row:{index}" for index in range(10_001)]}
+    artifact = {
+        "communities": [
+            {"nodes": [], "edges": [edge], "provenance_expansions": []}
+        ]
+    }
+
+    with pytest.raises(ValueError, match="legacy sidecar package limit"):
+        v9_recovery_sidecars.package_recovery_sidecars(
+            artifact, tmp_path / "legacy"
+        )
 
 
 @pytest.mark.parametrize(

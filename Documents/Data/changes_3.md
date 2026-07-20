@@ -195,3 +195,89 @@ when relational signal is present.**
 > This is a positive control showing a GNN exploits relational signal when the generative
 > process contains it. It does **not** change the honest V8 finding that in
 > the realistic regime the real signal is thin and the GNN's edge is marginal.
+
+## Unsupervised Anomaly Detection Improvements
+
+The regional Isolation Forest is a one-class anomaly detector: it learns a region-specific
+profile of normal tabular behavior, then flags rows with unusually low decision scores.
+The dashboard presents two tracks:
+
+1. **Strict unsupervised:** the forest fits without target labels and does not exclude
+   rows using the positive label. This is the deployable unsupervised mode.
+2. **Label-assisted benchmark:** known positive training rows are excluded from the fit;
+   training labels are used only for that exclusion. This is a diagnostic benchmark, not
+   a claim of label-free performance.
+
+For either track, the validation split supplies threshold-selection metrics; the selected
+threshold and its source are frozen before the held-out test split is scored. Test
+precision, recall, F1, positive prevalence, and predicted-positive rate therefore describe
+the frozen operating point. F1 is **not** maximized on the test set. Train exclusion counts
+make the assisted-vs-strict fitting difference explicit.
+
+The benchmark uses oracle identity resolution on synthetic data, so it does not measure
+entity-resolution error. That oracle identity is a substrate limitation and must not be
+read as deployable identity quality.
+
+## Caught-supervised deployability comparison (2026-07-16)
+
+The V9 anomaly-ranking comparison now uses three primary arms in artifact order, plus
+one appendix ablation:
+
+| Role | Arm ID | Fit signal | Feature count |
+|---|---|---|---:|
+| Primary A | `tabular_unlabeled` | unlabeled feature distribution | 14 |
+| Primary B | `relational_unlabeled` | unlabeled feature distribution | 18 (14 + 4 relational proxies) |
+| Primary C | `relational_caught_supervised` | as-of caught positives versus unlabeled (naive PU) | 18 (14 + 4 relational proxies) |
+| Appendix | `tabular_caught_supervised` | as-of caught positives versus unlabeled (naive PU) | 14 |
+
+The caught-supervised arms do **not** inherit a SCAR ranking guarantee. Retrospective
+V9 corpus diagnostics show why: among actual carrier events, the observed catch rate is
+**50.9% for organization members versus 27.4% for non-organization members**. Catching
+is feature-dependent, so the score can reflect historical enforcement propensity as well
+as carrier risk. Recovery of missed carriers is therefore an empirical held-out result,
+not a theorem about preserving the true-carrier ranking.
+
+### As-of label maturity
+
+The fit cutoff is January 1, 2024. At that boundary, **229** training outcomes are
+immature and **79** of those events eventually become caught. The operational rule is
+explicit: **immature -> unlabeled**. Across full V9, all **8,013** caught labels mature
+after their crossing, with delays of up to **28 days**. A caught-positive is available to
+fit only when the observed catch and its label-availability timestamp are strictly before
+the fit cutoff; future maturation is never backfilled into an earlier fit.
+
+### Frozen operating point and evaluation strata
+
+Every primary and ablation arm uses a label-free validation-score quantile as its
+**operating point**. This equalizes the alert-volume policy; it is not probability
+calibration and does not put scores on a shared probability scale. Scores and thresholds
+freeze before synthetic oracle truth is joined for retrospective evaluation.
+
+The retrospective target report separates:
+
+- all carrier events;
+- missed-at-this-event carriers;
+- no-prior-catch missed events;
+- lifetime-never-caught person recovery;
+- unique-person first-hit recovery; and
+- observed-catch enrichment precision and lift.
+
+This distinction matters empirically: the V9 test split contains **2,691**
+missed-at-event carrier events, and **213** are tied to people caught somewhere else in
+their lifetime. A missed event is therefore not synonymous with a never-caught person.
+
+The label and threshold semantics are deployable only **conditional on resolved identity**.
+This synthetic study still uses oracle canonical identity and does not measure
+production entity-resolution error. Oracle carrier evaluation is unavailable in
+production; operational monitoring can observe caught enrichment only among adjudicated
+alerts.
+
+The former `assisted` result is quarantined under `legacy_oracle_benchmarks` as a legacy
+oracle-assisted diagnostic. It is nondeployable and **not a ceiling**, because it both
+changes the fit population with oracle labels and selects its threshold with oracle
+validation labels. It never belongs in the primary lineup.
+
+These numbers are **retrospective corpus diagnostics and evaluation, not fit inputs**.
+They document V9 as the **designed positive control** and do not supersede V8: V9 tests
+whether methods exploit deliberately propagable relational signal, while V8 remains the
+honest thin-graph-signal track.

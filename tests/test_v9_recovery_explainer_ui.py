@@ -291,6 +291,22 @@ def test_schema_v2_ui_fetches_only_requested_sidecar_pages():
     assert "state.membershipPages" in js
 
 
+def test_schema_v2_ui_lazily_merges_normalized_day_view_state():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    for token in (
+        "node_status_chunks",
+        "edge_membership_chunks",
+        "node_statuses",
+        "edge_memberships",
+        "resolvedRows",
+        "catalogIndex",
+        "recoveryCatalogChunkCache",
+    ):
+        assert token in js
+    assert "Salient counterfactual factors" in js
+
+
 def test_schema_v2_ui_lazily_pages_case_overlay_evidence_separately():
     js = UI.V9_RECOVERY_EXPLAINER_JS
 

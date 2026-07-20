@@ -880,6 +880,7 @@ function buildRecoveryManifestViewModel(artifact){
     },
     caseIndex:artifact.case_index,
     communityIndex:artifact.community_index,
+    catalogIndex:recoveryIsRecord(artifact.catalog_index)?artifact.catalog_index:{},
     sidecarBase,
     defaultCohort,
     defaultCaseId:(cohorts[defaultCohort][0]||{}).case_id||null
@@ -890,6 +891,8 @@ function recoverySidecarUrl(view,path){
   const base=view.sidecarBase.endsWith('/')?view.sidecarBase:view.sidecarBase+'/';
   return base+String(path).replace(/^\/+/, '');
 }
+
+const recoveryCatalogChunkCache=new Map();
 
 async function recoveryFetchJson(url,expectedHash){
   if(typeof expectedHash!=='string'||!/^[0-9a-f]{64}$/.test(expectedHash)){
@@ -955,6 +958,25 @@ function recoveryValidateChunkOwner(owner){
       expectedOffset+=ref.count;
     }
     if(countField&&owner[countField]!==expectedOffset)return false;
+  }
+  if(owner.day_view!==undefined){
+    if(!recoveryIsRecord(owner.day_view))return false;
+    const daySpecs=[
+      ['node_status_chunks','node_count'],
+      ['edge_membership_chunks','edge_count']
+    ];
+    for(const [field,countField] of daySpecs){
+      const refs=owner.day_view[field];
+      if(!Array.isArray(refs))return false;
+      let expectedOffset=0;
+      for(const ref of refs){
+        if(!recoveryIsRecord(ref)||!recoveryNonBlankString(ref.path)
+            ||!recoveryNonBlankString(ref.sha256)
+            ||ref.offset!==expectedOffset||!recoverySafeInteger(ref.count,false))return false;
+        expectedOffset+=ref.count;
+      }
+      if(owner[countField]!==expectedOffset)return false;
+    }
   }
   return true;
 }
@@ -1283,7 +1305,59 @@ function mountRecoveryExplorerV2(root,artifact,tools){
     if(disposed||requestToken!==recoveryRequestToken)return;
     const rows=recoveryValidatedChunkRows(payload,ref,config[2]);
     if(rows===null)throw new Error('Chunk offset or count contract is invalid');
-    cache[index]=rows;
+    let resolvedRows=rows;
+    if(!overlay&&['node','edge','provenance'].includes(normalized)){
+      const kind=normalized==='node'?'nodes':normalized==='edge'?'edges':'provenance';
+      const catalog=view.catalogIndex&&view.catalogIndex[kind];
+      if(!recoveryIsRecord(catalog)||!Array.isArray(catalog.chunks)){
+        throw new Error('Normalized catalog index is missing');
+      }
+      const needed=new Map();
+      for(const row of rows){
+        const catalogId=row&&row.catalog_id;
+        const chunk=catalog.chunks.find(
+          candidate=>candidate.first_id<=catalogId&&catalogId<=candidate.last_id);
+        if(!chunk)throw new Error('Normalized catalog record is not indexed');
+        needed.set(chunk.path,chunk);
+      }
+      const recordsById=new Map();
+      await Promise.all(Array.from(needed.values()).map(async chunk=>{
+        const cacheKey=recoverySidecarUrl(view,chunk.path);
+        let records=recoveryCatalogChunkCache.get(cacheKey);
+        if(!records){
+          const catalogPayload=await recoveryFetchJson(cacheKey,chunk.sha256);
+          records=recoveryValidatedChunkRows(catalogPayload,chunk,'records');
+          if(records===null)throw new Error('Normalized catalog chunk is invalid');
+          recoveryCatalogChunkCache.set(cacheKey,records);
+        }
+        for(const entry of records)recordsById.set(entry.record_id,entry.record);
+      }));
+      resolvedRows=rows.map(row=>{
+        const detached={...row};delete detached.catalog_id;
+        return {...(recordsById.get(row.catalog_id)||{}),...detached};
+      });
+      if(disposed||requestToken!==recoveryRequestToken)return;
+    }
+    if(!overlay&&recoveryIsRecord(owner.day_view)
+        &&(normalized==='node'||normalized==='edge')){
+      const dayConfig=normalized==='node'
+        ?['node_status_chunks','node_statuses','node_id']
+        :['edge_membership_chunks','edge_memberships','edge_id'];
+      const dayRefs=owner.day_view[dayConfig[0]];
+      if(!Array.isArray(dayRefs)||!dayRefs[index]){
+        throw new Error('Normalized day-view chunk is missing');
+      }
+      const dayRef=dayRefs[index];
+      const dayPayload=await recoveryFetchJson(
+        recoverySidecarUrl(view,dayRef.path),dayRef.sha256);
+      if(disposed||requestToken!==recoveryRequestToken)return;
+      const dayRows=recoveryValidatedChunkRows(dayPayload,dayRef,dayConfig[1]);
+      if(dayRows===null)throw new Error('Day-view chunk offset or count contract is invalid');
+      const stateById=new Map(dayRows.map(row=>[row[dayConfig[2]],row]));
+      resolvedRows=resolvedRows.map(
+        row=>({...row,...(stateById.get(row[dayConfig[2]])||{})}));
+    }
+    cache[index]=resolvedRows;
     state.loadedNodeCount=Object.values(state.nodePages).reduce((sum,rows)=>sum+rows.length,0);
     state.loadedEdgeCount=Object.values(state.edgePages).reduce((sum,rows)=>sum+rows.length,0);
     state.loadedProvenanceCount=Object.values(state.provenancePages).reduce((sum,rows)=>sum+rows.length,0);
@@ -1536,7 +1610,7 @@ function mountV9RecoveryExplainer(root,artifact,tools){
   function renderFactors(column,explanation){
     const panel=recoveryElement(doc,'section','v9-recovery-panel');
     const head=recoveryElement(doc,'div','v9-recovery-panel-head');
-    head.appendChild(recoveryElement(doc,'h5','','Measured factor effects'));
+    head.appendChild(recoveryElement(doc,'h5','','Salient counterfactual factors'));
     head.appendChild(recoveryElement(
       doc,'p','',
       'Signed effect is ablated rank minus original rank. Positive values mean removal worsened rank.'

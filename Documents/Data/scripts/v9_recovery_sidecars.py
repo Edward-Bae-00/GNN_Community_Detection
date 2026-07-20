@@ -239,7 +239,7 @@ _COMPACT_CHUNK_SPECS = (
 )
 
 
-def _verify_compact_chunks(bundle_root, owner, label):
+def _verify_compact_chunks(bundle_root, owner, label, catalog_ids=None):
     if not isinstance(owner, dict) or owner.get("complete") is not True:
         raise ValueError(f"{label} is incomplete")
     verified = set()
@@ -261,6 +261,20 @@ def _verify_compact_chunks(bundle_root, owner, label):
                 raise ValueError(f"{label} {field} metadata is invalid")
             expected_offset += len(rows)
             verified.add(reference["path"])
+            if catalog_ids is not None and field != "provenance_expansion_membership_chunks":
+                kind = {
+                    "node_chunks": "nodes",
+                    "edge_chunks": "edges",
+                    "provenance_chunks": "provenance",
+                }[field]
+                referenced_ids = {
+                    row.get("catalog_id") if isinstance(row, dict) else None
+                    for row in rows
+                }
+                if None in referenced_ids or not referenced_ids.issubset(
+                    catalog_ids[kind]
+                ):
+                    raise ValueError(f"{label} {field} catalog reference is invalid")
         if count_field is not None and owner.get(count_field) != expected_offset:
             raise ValueError(f"{label} {count_field} is invalid")
     return verified
@@ -272,8 +286,50 @@ def _case_reference(record):
     return record
 
 
-def _verify_prepackaged_references(bundle_root, manifest):
+def _verify_catalog_index(bundle_root, manifest):
+    index = manifest.get("catalog_index")
+    if not isinstance(index, dict):
+        raise ValueError("recovery manifest catalog_index is invalid")
     verified = set()
+    record_ids = {}
+    for kind in ("nodes", "edges", "provenance"):
+        catalog = index.get(kind)
+        if not isinstance(catalog, dict) or not isinstance(catalog.get("chunks"), list):
+            raise ValueError(f"recovery catalog {kind!r} is invalid")
+        expected_offset = 0
+        ids = []
+        for reference in catalog["chunks"]:
+            payload = _verify_reference(bundle_root, reference)
+            records = payload.get("records") if isinstance(payload, dict) else None
+            chunk_ids = [
+                record.get("record_id") if isinstance(record, dict) else None
+                for record in records or ()
+            ]
+            if (
+                payload.get("catalog_kind") != kind
+                or not isinstance(records, list)
+                or any(not isinstance(record, dict) for record in records)
+                or chunk_ids != sorted(set(chunk_ids))
+                or payload.get("offset") != expected_offset
+                or payload.get("count") != len(records)
+                or reference.get("offset") != expected_offset
+                or reference.get("count") != len(records)
+                or len(records) > catalog.get("chunk_size", 0)
+                or (records and reference.get("first_id") != chunk_ids[0])
+                or (records and reference.get("last_id") != chunk_ids[-1])
+            ):
+                raise ValueError(f"recovery catalog {kind!r} chunk is invalid")
+            expected_offset += len(records)
+            ids.extend(chunk_ids)
+            verified.add(reference["path"])
+        if expected_offset != catalog.get("record_count") or ids != sorted(set(ids)):
+            raise ValueError(f"recovery catalog {kind!r} count is invalid")
+        record_ids[kind] = frozenset(ids)
+    return verified, record_ids
+
+
+def _verify_prepackaged_references(bundle_root, manifest):
+    verified, catalog_ids = _verify_catalog_index(bundle_root, manifest)
     for case_id, record in manifest["case_index"].items():
         reference = _case_reference(record)
         payload = _verify_reference(bundle_root, reference)
@@ -303,9 +359,32 @@ def _verify_prepackaged_references(bundle_root, manifest):
         verified.add(reference["path"])
         verified.update(
             _verify_compact_chunks(
-                bundle_root, community, f"community {community_key!r}"
+                bundle_root,
+                community,
+                f"community {community_key!r}",
+                catalog_ids,
             )
         )
+        day_view = community.get("day_view", {})
+        if not isinstance(day_view, dict):
+            raise ValueError(f"community {community_key!r} day_view is invalid")
+        for field in ("node_status_chunks", "edge_membership_chunks"):
+            references = day_view.get(field, [])
+            if not isinstance(references, list):
+                raise ValueError(
+                    f"community {community_key!r} {field} is invalid"
+                )
+            for chunk_reference in references:
+                _verify_reference(bundle_root, chunk_reference)
+                verified.add(chunk_reference["path"])
+        catalogs = community.get("catalogs")
+        if not isinstance(catalogs, dict):
+            raise ValueError(f"community {community_key!r} catalogs are invalid")
+        if catalogs.get("scope") != "run_global" or any(
+            type(catalogs.get(field)) is not int or catalogs[field] < 0
+            for field in ("node_count", "edge_count", "provenance_count")
+        ):
+            raise ValueError(f"community {community_key!r} catalogs are invalid")
     return verified
 
 
@@ -317,37 +396,6 @@ _COW_CLONE_FALLBACK_ERRNOS = {
     getattr(errno, "ENOTSUP", -1),
     getattr(errno, "EOPNOTSUPP", -1),
 }
-_MUTABLE_POINTER_NAMES = {"current.json", "pointer.json"}
-
-
-def _bundle_stage_copy_function(source_root, verified_relative_paths):
-    source_root = Path(source_root).resolve()
-    verified = {Path(relative).as_posix() for relative in verified_relative_paths}
-
-    def clone_verified_or_copy(source, destination):
-        source_path = Path(source)
-        relative = source_path.resolve().relative_to(source_root).as_posix()
-        if source_path.name in _MUTABLE_POINTER_NAMES or relative not in verified:
-            return shutil.copy2(source, destination)
-        clonefile = getattr(os, "clonefile", None)
-        if not callable(clonefile):
-            return shutil.copy2(source, destination)
-        try:
-            clonefile(source, destination)
-        except OSError as error:
-            if error.errno not in _COW_CLONE_FALLBACK_ERRNOS:
-                raise
-            Path(destination).unlink(missing_ok=True)
-            return shutil.copy2(source, destination)
-        if Path(source).stat().st_ino == Path(destination).stat().st_ino:
-            Path(destination).unlink()
-            return shutil.copy2(source, destination)
-        shutil.copystat(source, destination)
-        return destination
-
-    return clone_verified_or_copy
-
-
 def publish_prepackaged_manifest(manifest, source_path, output_dir):
     """Atomically stage a validated producer bundle and publish its pointer last."""
     _validate_artifact(manifest)
@@ -377,11 +425,39 @@ def publish_prepackaged_manifest(manifest, source_path, output_dir):
         raise ValueError("prepackaged sidecar_base escapes artifact directory") from error
     if not source_bundle.is_dir():
         raise ValueError(f"prepackaged recovery bundle is missing: {source_bundle}")
+    manifest_content = _canonical_bytes(manifest)
+    source_manifest = source_bundle / "manifest.json"
+    if not source_manifest.is_file() or source_manifest.read_bytes() != manifest_content:
+        raise ValueError("source manifest bytes do not match the supplied manifest")
     verified_relative_paths = _verify_prepackaged_references(
         source_bundle, manifest
     )
 
     root = Path(output_dir)
+    required_bytes = sum(
+        (source_bundle / relative).stat().st_size
+        for relative in verified_relative_paths
+    ) + len(manifest_content)
+    physical_preflight_complete = False
+
+    def preflight_physical_copy():
+        nonlocal physical_preflight_complete
+        if physical_preflight_complete:
+            return
+        probe = root
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        available_bytes = shutil.disk_usage(probe).free
+        if available_bytes < required_bytes:
+            raise ValueError(
+                "insufficient free space for physical recovery bundle copy: "
+                f"required={required_bytes}, available={available_bytes}"
+            )
+        physical_preflight_complete = True
+
+    clonefile = getattr(os, "clonefile", None)
+    if not callable(clonefile):
+        preflight_physical_copy()
     root.mkdir(parents=True, exist_ok=True)
     final_bundle = root / bundle_path
     try:
@@ -390,28 +466,55 @@ def publish_prepackaged_manifest(manifest, source_path, output_dir):
         raise ValueError("prepackaged bundle_path escapes output directory") from error
     stage = Path(tempfile.mkdtemp(prefix=".bundle-stage-", dir=root))
     try:
-        shutil.copytree(
-            source_bundle,
-            stage,
-            dirs_exist_ok=True,
-            copy_function=_bundle_stage_copy_function(
-                source_bundle, verified_relative_paths
-            ),
-        )
-        _verify_prepackaged_references(stage, manifest)
-        final_bundle.parent.mkdir(parents=True, exist_ok=True)
-        if final_bundle.exists():
-            shutil.rmtree(stage)
-            _verify_prepackaged_references(final_bundle, manifest)
-        else:
-            os.replace(stage, final_bundle)
-        manifest_content = _canonical_bytes(manifest)
-        pointer = {
+        for relative in sorted(verified_relative_paths):
+            source = source_bundle / relative
+            destination = stage / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if callable(clonefile):
+                try:
+                    clonefile(source, destination)
+                except OSError as error:
+                    if error.errno not in _COW_CLONE_FALLBACK_ERRNOS:
+                        raise
+                    destination.unlink(missing_ok=True)
+                    preflight_physical_copy()
+                    shutil.copy2(source, destination)
+                else:
+                    if source.stat().st_ino == destination.stat().st_ino:
+                        destination.unlink()
+                        preflight_physical_copy()
+                        shutil.copy2(source, destination)
+                    else:
+                        shutil.copystat(source, destination)
+            else:
+                shutil.copy2(source, destination)
+        _write_atomic_file(stage / "manifest.json", manifest_content)
+        bundle_pointer = {
             "bundle_id": bundle_id,
             "bundle_path": bundle_path,
             "manifest_sha256": hashlib.sha256(manifest_content).hexdigest(),
         }
-        _write_atomic_file(root / "current.json", _canonical_bytes(pointer))
+        _write_atomic_file(
+            stage / "current.json", _canonical_bytes(bundle_pointer)
+        )
+        _verify_prepackaged_references(stage, manifest)
+        if (stage / "manifest.json").read_bytes() != manifest_content:
+            raise ValueError("copied source manifest verification failed")
+        final_bundle.parent.mkdir(parents=True, exist_ok=True)
+        if final_bundle.exists():
+            shutil.rmtree(stage)
+            existing_manifest = final_bundle / "manifest.json"
+            if (
+                not existing_manifest.is_file()
+                or existing_manifest.read_bytes() != manifest_content
+            ):
+                raise ValueError("published source manifest does not match")
+            _verify_prepackaged_references(final_bundle, manifest)
+        else:
+            os.replace(stage, final_bundle)
+        _write_atomic_file(
+            root / "current.json", _canonical_bytes(bundle_pointer)
+        )
         return manifest
     except Exception:
         if stage.exists():
@@ -549,6 +652,48 @@ def _publish_community(root, key, community, chunk_size):
 
 def package_recovery_sidecars(artifact, output_dir, *, chunk_size=250):
     """Stage a versioned bundle, then atomically publish its pointer last."""
+    raw_communities = artifact.get("communities") if isinstance(artifact, dict) else None
+    if isinstance(raw_communities, (dict, list)):
+        if len(raw_communities) > 100:
+            raise ValueError(
+                "legacy sidecar package limit exceeded; use the streaming bundle"
+            )
+        community_values = (
+            raw_communities.values()
+            if isinstance(raw_communities, dict)
+            else raw_communities
+        )
+        for community in community_values:
+            if not isinstance(community, dict):
+                continue
+            cost = sum(
+                len(community.get(field, ())) for field in ("nodes", "edges")
+            )
+            edges = list(community.get("edges", ()))
+            for edge in edges:
+                if isinstance(edge, dict):
+                    cost += sum(
+                        len(edge.get(field, ()))
+                        for field in ("observations", "source_row_ids")
+                    )
+            expansions = community.get("provenance_expansions", ())
+            cost += len(expansions)
+            for expansion in expansions:
+                if not isinstance(expansion, dict):
+                    continue
+                expansion_nodes = expansion.get("nodes", ())
+                expansion_edges = expansion.get("edges", ())
+                cost += len(expansion_nodes) + len(expansion_edges)
+                for edge in expansion_edges:
+                    if isinstance(edge, dict):
+                        cost += sum(
+                            len(edge.get(field, ()))
+                            for field in ("observations", "source_row_ids")
+                        )
+            if cost > 10_000:
+                raise ValueError(
+                    "legacy sidecar package limit exceeded; use the streaming bundle"
+                )
     _validate_artifact(artifact)
     if type(chunk_size) is not int or chunk_size < 1:
         raise ValueError("chunk_size must be a positive integer")
