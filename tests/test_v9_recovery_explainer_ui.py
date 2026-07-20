@@ -236,6 +236,35 @@ def _valid_recovery_artifact(*, baseline_only=0):
     }
 
 
+def _case(
+    case_id,
+    person_id,
+    *,
+    event_id=None,
+    scoring_day="2025-01-02T00:00:00Z",
+    baseline_rank=40,
+    seed0_gnn_rank=3,
+    seed0_hybrid_rank=8,
+    hybrid_rank_uplift=32,
+    gnn_percentile_uplift=0.5,
+    relationship_categories=None,
+    stable_factor_status="stable",
+):
+    return {
+        "case_id": case_id,
+        "person_id": person_id,
+        "event_id": event_id or "event:" + person_id,
+        "scoring_day": scoring_day,
+        "baseline_rank": baseline_rank,
+        "seed0_gnn_rank": seed0_gnn_rank,
+        "seed0_hybrid_rank": seed0_hybrid_rank,
+        "hybrid_rank_uplift": hybrid_rank_uplift,
+        "gnn_percentile_uplift": gnn_percentile_uplift,
+        "relationship_categories": relationship_categories or ["COTRAVEL"],
+        "stable_factor_status": stable_factor_status,
+    }
+
+
 def test_schema_v2_ui_contract_lazy_loads_both_complete_cohorts():
     js = UI.V9_RECOVERY_EXPLAINER_JS
 
@@ -1457,3 +1486,30 @@ def test_graph_point_is_deterministic_and_does_not_mutate_inputs():
 
     assert first == second == {"x": 13, "y": 38}
     assert [point, viewport] == original
+
+
+def test_filter_sorts_explained_cases_first_when_ids_supplied():
+    low_uplift_explained = _case("case:p1", "p1", hybrid_rank_uplift=10)
+    high_uplift_unexplained = _case("case:p2", "p2", hybrid_rank_uplift=90)
+    result = _run_ui(
+        "filterAndSortRecoveryCases",
+        [high_uplift_unexplained, low_uplift_explained],
+        {"explainedIds": ["case:p1"]},
+    )
+    assert [item["case_id"] for item in result] == ["case:p1", "case:p2"]
+
+
+def test_filter_evidence_only_drops_unexplained_cases():
+    result = _run_ui(
+        "filterAndSortRecoveryCases",
+        [_case("case:p1", "p1"), _case("case:p2", "p2")],
+        {"explainedIds": ["case:p1"], "evidence": "explained"},
+    )
+    assert [item["case_id"] for item in result] == ["case:p1"]
+
+
+def test_filter_without_new_options_keeps_legacy_order():
+    low = _case("case:p1", "p1", hybrid_rank_uplift=10)
+    high = _case("case:p2", "p2", hybrid_rank_uplift=90)
+    result = _run_ui("filterAndSortRecoveryCases", [high, low], {})
+    assert [item["case_id"] for item in result] == ["case:p2", "case:p1"]

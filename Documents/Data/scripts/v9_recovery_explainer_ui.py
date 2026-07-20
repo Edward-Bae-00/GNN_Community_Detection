@@ -32,6 +32,7 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
 #tab-v9Results .v9-recovery-case-top { display: flex; justify-content: space-between; gap: 8px; color: var(--text1); font-size: 11px; font-weight: 700; }
 #tab-v9Results .v9-recovery-case-ranks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 8px; font-family: var(--font-mono); font-size: 9px; }
 #tab-v9Results .v9-recovery-case-meta { margin-top: 7px; color: var(--text2); font-size: 9px; line-height: 1.35; }
+#tab-v9Results .v9-recovery-case-evidence { margin-top: 4px; color: var(--accent-hover); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 #tab-v9Results .v9-recovery-detail { min-width: 0; padding: 18px; }
 #tab-v9Results .v9-recovery-case-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
 #tab-v9Results .v9-recovery-case-header h4 { margin: 0 0 4px; color: var(--text1); font-size: 15px; }
@@ -307,12 +308,18 @@ function filterAndSortRecoveryCases(cases,options){
   const allowedSorts=['hybrid_rank_uplift','gnn_percentile_uplift'];
   const sortBy=allowedSorts.includes(settings.sortBy)
     ?settings.sortBy:'hybrid_rank_uplift';
+  const explainedIds=Array.isArray(settings.explainedIds)
+    ?new Set(settings.explainedIds.filter(recoveryNonBlankString)):null;
+  const evidence=settings.evidence==='explained'&&explainedIds?'explained':'all';
   return cases.filter(item=>recoveryValidCase(item)
       &&(stable==='all'||item.stable_factor_status===stable)
-      &&(relation==='all'||item.relationship_categories.includes(relation)))
+      &&(relation==='all'||item.relationship_categories.includes(relation))
+      &&(evidence==='all'||explainedIds.has(item.case_id)))
     .slice()
     .sort((left,right)=>
-      right[sortBy]-left[sortBy]
+      (explainedIds?Number(explainedIds.has(right.case_id))
+        -Number(explainedIds.has(left.case_id)):0)
+      ||right[sortBy]-left[sortBy]
       ||right.hybrid_rank_uplift-left.hybrid_rank_uplift
       ||recoveryCompareId(left.person_id,right.person_id)
       ||recoveryCompareId(left.case_id,right.case_id));
@@ -1438,6 +1445,7 @@ function mountV9RecoveryExplainer(root,artifact,tools){
     sortBy:'hybrid_rank_uplift',
     stableStatus:'all',
     relationshipCategory:'all',
+    evidence:'all',
     mode:'flow',
     stageId:'first_hop',
     selectedFactorId:null,
@@ -1548,6 +1556,10 @@ function mountV9RecoveryExplainer(root,artifact,tools){
       {value:'all',label:'All relationships'},
       ...relations.map(value=>({value,label:recoveryVisibleText(value)}))
     ],state.relationshipCategory));
+    filters.appendChild(recoverySelect(doc,'Evidence','evidence',[
+      {value:'all',label:'All cases'},
+      {value:'explained',label:'Validated evidence only'}
+    ],state.evidence));
     rail.appendChild(filters);
     rail.appendChild(recoveryElement(
       doc,'div','v9-recovery-case-count',
@@ -1576,6 +1588,11 @@ function mountV9RecoveryExplainer(root,artifact,tools){
         doc,'div','v9-recovery-case-meta',
         item.stable_factor_status+' / '+item.relationship_categories.join(' / ')
       ));
+      if(view.explanations.has(item.case_id)){
+        button.appendChild(recoveryElement(
+          doc,'div','v9-recovery-case-evidence','✓ evidence'
+        ));
+      }
       list.appendChild(button);
     }
     rail.appendChild(list);
@@ -1853,7 +1870,9 @@ function mountV9RecoveryExplainer(root,artifact,tools){
     const filtered=filterAndSortRecoveryCases(view.cases,{
       sortBy:state.sortBy,
       stableStatus:state.stableStatus,
-      relationshipCategory:state.relationshipCategory
+      relationshipCategory:state.relationshipCategory,
+      explainedIds:Array.from(view.explanations.keys()),
+      evidence:state.evidence
     });
     if(!filtered.some(item=>item.case_id===state.caseId)){
       state.caseId=filtered.length?filtered[0].case_id:null;
@@ -1918,6 +1937,7 @@ function mountV9RecoveryExplainer(root,artifact,tools){
     if(action==='sort') state.sortBy=control.value;
     if(action==='stable') state.stableStatus=control.value;
     if(action==='relation') state.relationshipCategory=control.value;
+    if(action==='evidence') state.evidence=control.value;
     if(action==='density') state.labelDensity=control.value;
     if(action){
       render();
