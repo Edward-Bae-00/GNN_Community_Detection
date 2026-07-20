@@ -30,6 +30,10 @@ V9_RECOVERY_EXPLANATIONS = os.path.join(
     "diagnostics",
     "hybrid_recovery_explanations_v9.json",
 )
+DIAGNOSTICS_DIR = os.path.join(REPO_ROOT, "gnn", "diagnostics")
+V9_UNSUPERVISED_ARTIFACT = "unsupervised_ad_results_v9.json"
+GENERIC_UNSUPERVISED_ARTIFACT = "unsupervised_ad_results.json"
+V9_CORPUS_NAME = "synthetic_cbp_graph_corpus_v9"
 OUT_DIR = os.path.join(DATA_DIR, "v9_dashboard")
 
 
@@ -153,6 +157,57 @@ def _load_recovery_artifact(path, output_dir=None):
     return artifact
 
 
+def _load_v9_unsupervised_artifact(diagnostics_dir):
+    """Load the safest available anomaly artifact for the V9-only dashboard."""
+    diagnostics_dir = os.fspath(diagnostics_dir)
+    qualified = os.path.join(diagnostics_dir, V9_UNSUPERVISED_ARTIFACT)
+    generic = os.path.join(diagnostics_dir, GENERIC_UNSUPERVISED_ARTIFACT)
+    selected = qualified if os.path.exists(qualified) else generic
+    if not os.path.exists(selected):
+        return None
+
+    with open(selected) as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise ValueError(f"unsupervised AD artifact must be an object: {selected}")
+
+    try:
+        schema_version = int(payload.get("schema_version", 2))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"unsupervised AD artifact has invalid schema_version: {selected}"
+        ) from exc
+
+    if schema_version >= 3:
+        provenance = payload.get("provenance")
+        corpus_name = (
+            provenance.get("corpus_name")
+            if isinstance(provenance, dict)
+            else None
+        )
+        if corpus_name != V9_CORPUS_NAME:
+            raise ValueError(
+                "V9 dashboard refused schema-v3 artifact for wrong corpus "
+                f"{corpus_name!r}: {selected}"
+            )
+        if selected == generic:
+            p(
+                "[v9-dashboard] WARNING: using generic schema-v3 compatibility "
+                f"fallback {generic}; regenerate {qualified}."
+            )
+    elif selected == generic:
+        p(
+            "[v9-dashboard] WARNING: using legacy schema-v2 generic fallback "
+            f"{generic}; provenance cannot verify the V9 corpus."
+        )
+    else:
+        p(
+            "[v9-dashboard] WARNING: using legacy schema-v2 corpus-qualified "
+            f"artifact {qualified}; provenance cannot verify the V9 corpus."
+        )
+    return payload
+
+
 def _load_v9_data(output_dir=None) -> dict:
     if not os.path.exists(V9_DATA):
         p(f"[v9-dashboard] ERROR: {V9_DATA} not found.")
@@ -181,6 +236,15 @@ def _load_v9_data(output_dir=None) -> dict:
     )
     if recovery_artifact is not None:
         data["v9RecoveryExplainer"] = recovery_artifact
+
+    v9_unsup = _load_v9_unsupervised_artifact(DIAGNOSTICS_DIR)
+    if v9_unsup is not None:
+        data["unsupervisedAD"] = v9_unsup
+    else:
+        p(
+            "[v9-dashboard] WARNING: no corpus-qualified or generic "
+            "unsupervised AD artifact found; anomaly-ranking tab will be sparse."
+        )
 
     return data
 
@@ -348,6 +412,11 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
         V9_RESULTS_JS,
         V9_RESULTS_NAV_BTN,
         V9_RESULTS_SECTION,
+        UNSUP_AD_NAV_BTN,
+        UNSUP_AD_SECTION,
+        UNSUP_AD_JS,
+        UNSUP_AD_CSS,
+        UNSUP_AD_VIEW_MODEL_JS,
     )
     from v9_recovery_explainer_ui import (
         V9_RECOVERY_EXPLAINER_CSS,
@@ -356,20 +425,24 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
 
     html = html.replace(
         '    <!-- V9_NAV_TABS -->\n',
-        '    ' + V9_RESULTS_NAV_BTN,
+        '    ' + V9_RESULTS_NAV_BTN + '    ' + UNSUP_AD_NAV_BTN,
     )
     html = html.replace(
         '  <!-- V9_TAB_SECTIONS -->\n',
-        V9_RESULTS_SECTION,
+        V9_RESULTS_SECTION + UNSUP_AD_SECTION,
     )
     html = _inject_recovery_assets(
         html,
         V9_RECOVERY_EXPLAINER_CSS,
         V9_RECOVERY_EXPLAINER_JS,
     )
-    html = _inject_dashboard_tab_scripts(html, "", V9_RESULTS_JS)
+    html = _inject_dashboard_tab_scripts(
+        html,
+        UNSUP_AD_VIEW_MODEL_JS,
+        V9_RESULTS_JS + UNSUP_AD_JS,
+    )
     html = _validate_recovery_explorer_mount(html)
-    html = html.replace("</style>", V9_RESULTS_CSS + "\n</style>", 1)
+    html = html.replace("</style>", V9_RESULTS_CSS + "\n" + UNSUP_AD_CSS + "\n</style>", 1)
     html = _make_d3_optional(html)
 
     # 4. Remove Entity Resolution if present

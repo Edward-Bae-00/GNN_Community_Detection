@@ -417,6 +417,44 @@ def build_day_snapshot_inputs(
     )
 
 
+def validate_pool_identities(
+    pool, obs_to_identity, node_index, *, pool_name="pool"
+) -> pd.Series:
+    """Map every pool row to one nonblank identity in the graph node universe."""
+    if "primary_obs_id" not in pool.columns:
+        raise ValueError(f"{pool_name} requires primary_obs_id")
+    identities = pool["primary_obs_id"].map(obs_to_identity)
+    unmapped = identities.isna()
+    if unmapped.any():
+        examples = pool.loc[unmapped, "primary_obs_id"].astype(str).head(5).tolist()
+        raise ValueError(
+            f"{pool_name} contains {int(unmapped.sum())} unmapped primary_obs_id "
+            f"value(s); examples: {examples}"
+        )
+    non_strings = ~identities.map(lambda value: isinstance(value, str))
+    if non_strings.any():
+        examples = identities.loc[non_strings].head(5).tolist()
+        raise ValueError(
+            f"{pool_name} contains {int(non_strings.sum())} non-string canonical "
+            f"identity value(s); examples: {examples}"
+        )
+    blank = identities.str.strip().eq("")
+    if blank.any():
+        examples = pool.loc[blank, "primary_obs_id"].astype(str).head(5).tolist()
+        raise ValueError(
+            f"{pool_name} contains {int(blank.sum())} blank canonical identity "
+            f"value(s); observed ID examples: {examples}"
+        )
+    outside = ~identities.isin(node_index)
+    if outside.any():
+        examples = identities.loc[outside].head(5).tolist()
+        raise ValueError(
+            f"{pool_name} contains {int(outside.sum())} canonical identity value(s) "
+            f"outside the graph node universe; examples: {examples}"
+        )
+    return identities
+
+
 def _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool,
                        obs_to_identity, train_labels, *, seed, epochs, lr,
                        train_cutoff, train_bucket, num_rel=NUM_REL, model_cls=_RGCN):
@@ -431,13 +469,17 @@ def _train_caught_rgcn(edges_typed, node_ids, node_feat, caught_time, train_pool
         else cutoff.tz_convert("UTC")
     )
     index = {p: i for i, p in enumerate(node_ids)}
+    validate_pool_identities(
+        train_pool, obs_to_identity, index, pool_name="complete training pool"
+    )
     tr, eligible_labels = _eligible_training_supervision(
         train_pool, train_labels, cutoff
     )
-    tr["identity"] = tr["primary_obs_id"].map(obs_to_identity)
+    tr["identity"] = validate_pool_identities(
+        tr, obs_to_identity, index, pool_name="training pool"
+    )
     tr["_t"] = pd.to_datetime(tr["t"], utc=True, errors="coerce")
     tr["_lab"] = np.asarray(eligible_labels, dtype=float)
-    tr = tr[tr["identity"].isin(index)].copy()
     if len(tr) == 0:
         return model_cls(_asof_x_caught(node_ids, node_feat, edges_typed.iloc[0:0],
                                     caught_time, cutoff, num_rel=num_rel).shape[1],
@@ -473,7 +515,9 @@ def _score_pool(model, pool, obs_to_identity, edges_typed, node_ids, node_feat,
                 caught_time, index, *, num_rel=NUM_REL):
     """Score a pool of crossing events with a trained caught-propagation model."""
     rows = pool.reset_index(drop=True).copy()
-    rows["identity"] = rows["primary_obs_id"].map(obs_to_identity)
+    rows["identity"] = validate_pool_identities(
+        rows, obs_to_identity, index, pool_name="scoring pool"
+    )
     rows["_t"] = pd.to_datetime(rows["t"], utc=True, errors="coerce").dt.floor("D")
     out = np.zeros(len(rows))
     prepared_source = prepare_snapshot_source(
@@ -501,11 +545,7 @@ def _score_pool(model, pool, obs_to_identity, edges_typed, node_ids, node_feat,
                 .numpy()
             )
             for ridx, ident in zip(grp.index, grp["identity"]):
-                out[ridx] = (
-                    prob[prepared_source.index[ident]]
-                    if ident in prepared_source.index
-                    else 0.0
-                )
+                out[ridx] = prob[prepared_source.index[ident]]
     return out
 
 

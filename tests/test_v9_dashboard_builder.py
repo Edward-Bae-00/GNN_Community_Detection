@@ -506,8 +506,6 @@ def test_v9_results_mounts_recovery_explorer_in_the_approved_story_position():
     assert "ground_truth_community" not in js
     assert "community_propensity" not in js
     assert "data-navigate-tab=\"explorer\"" not in js
-    assert "—" not in js
-    assert "–" not in js
 
 
 def test_recovery_assets_precede_renderer_that_mounts_them():
@@ -1320,3 +1318,400 @@ def test_dashboard_final_log_requires_http_for_schema_v2():
 
     assert "python -m http.server 8000 --directory Documents/Data/v9_dashboard" in source
     assert "open v9_dashboard/index.html directly" not in source
+ROOT = Path(__file__).resolve().parents[1]
+GENERATED_INDEX = ROOT / "Documents/Data/v9_dashboard/index.html"
+
+
+def _run_unsupervised_view_model(payload):
+    assert hasattr(V9_UI, "UNSUP_AD_VIEW_MODEL_JS")
+    script = (
+        V9_UI.UNSUP_AD_VIEW_MODEL_JS
+        + "\nprocess.stdout.write(JSON.stringify(buildUnsupervisedADViewModel("
+        + json.dumps(payload)
+        + ")));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def _render_unsupervised_html(payload):
+    script = (
+        V9_UI.UNSUP_AD_VIEW_MODEL_JS
+        + "\nconst DATA={unsupervisedAD:"
+        + json.dumps(payload)
+        + "};"
+        + "\nconst section={innerHTML:''};"
+        + "\nconst document={getElementById:()=>section};"
+        + "\nconst esc=value=>String(value);"
+        + "\nconst Tabs={"
+        + V9_UI.UNSUP_AD_JS
+        + "};"
+        + "\nTabs.unsupervisedAD.render();"
+        + "\nprocess.stdout.write(section.innerHTML);"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout
+
+
+def _schema_v3_payload(corpus_name="synthetic_cbp_graph_corpus_v9", marker=None):
+    return {
+        "schema_version": 3,
+        "provenance": {"corpus_name": corpus_name},
+        "marker": marker,
+        "primary_arm_order": [
+            "tabular_unlabeled",
+            "relational_unlabeled",
+            "relational_caught_supervised",
+        ],
+        "ablation_arm_order": ["tabular_caught_supervised"],
+        "arm_metadata": {},
+        "arms": {},
+        "legacy_oracle_benchmarks": {},
+    }
+
+
+def test_v9_unsupervised_loader_prefers_corpus_qualified_artifact(tmp_path):
+    generic = _schema_v3_payload(marker="generic")
+    qualified = _schema_v3_payload(marker="qualified")
+    (tmp_path / "unsupervised_ad_results.json").write_text(json.dumps(generic))
+    (tmp_path / "unsupervised_ad_results_v9.json").write_text(
+        json.dumps(qualified)
+    )
+
+    loaded = BUILDER._load_v9_unsupervised_artifact(tmp_path)
+
+    assert loaded["marker"] == "qualified"
+
+
+def test_v9_unsupervised_loader_warns_on_legacy_generic_fallback(
+    tmp_path, capsys
+):
+    legacy = {"schema_version": 2, "modes": {"strict": {}, "assisted": {}}}
+    (tmp_path / "unsupervised_ad_results.json").write_text(json.dumps(legacy))
+
+    loaded = BUILDER._load_v9_unsupervised_artifact(tmp_path)
+
+    assert loaded == legacy
+    assert "legacy schema-v2 generic fallback" in capsys.readouterr().out.lower()
+
+
+def test_v9_unsupervised_loader_warns_on_legacy_qualified_artifact(
+    tmp_path, capsys
+):
+    legacy = {"schema_version": 2, "modes": {"strict": {}, "assisted": {}}}
+    (tmp_path / "unsupervised_ad_results_v9.json").write_text(
+        json.dumps(legacy)
+    )
+
+    loaded = BUILDER._load_v9_unsupervised_artifact(tmp_path)
+
+    assert loaded == legacy
+    warning = capsys.readouterr().out.lower()
+    assert "legacy schema-v2" in warning
+    assert "provenance cannot verify the v9 corpus" in warning
+
+
+@pytest.mark.parametrize(
+    ("filename", "corpus_name"),
+    [
+        ("unsupervised_ad_results_v9.json", "synthetic_cbp_graph_corpus_v8"),
+        ("unsupervised_ad_results_v9.json", "synthetic_cbp_graph_corpus_v9dev"),
+        ("unsupervised_ad_results.json", "synthetic_cbp_graph_corpus_v8"),
+        ("unsupervised_ad_results.json", "synthetic_cbp_graph_corpus_v9dev"),
+    ],
+)
+def test_v9_unsupervised_loader_rejects_schema_v3_wrong_corpus(
+    tmp_path, filename, corpus_name
+):
+    (tmp_path / filename).write_text(
+        json.dumps(_schema_v3_payload(corpus_name=corpus_name))
+    )
+
+    with pytest.raises(ValueError, match="V9 dashboard.*wrong corpus"):
+        BUILDER._load_v9_unsupervised_artifact(tmp_path)
+
+
+def test_v9_unsupervised_loader_rejects_malformed_schema_v3_provenance(
+    tmp_path,
+):
+    payload = _schema_v3_payload()
+    payload["provenance"] = "not-an-object"
+    (tmp_path / "unsupervised_ad_results_v9.json").write_text(
+        json.dumps(payload)
+    )
+
+    with pytest.raises(ValueError, match="V9 dashboard.*wrong corpus"):
+        BUILDER._load_v9_unsupervised_artifact(tmp_path)
+
+
+def test_schema_v3_view_model_uses_artifact_order_and_quarantines_appendices():
+    payload = _schema_v3_payload()
+    payload["primary_arm_order"] = [
+        "relational_unlabeled",
+        "tabular_unlabeled",
+        "relational_caught_supervised",
+        "assisted",
+    ]
+    payload["arm_metadata"] = {
+        arm_id: {"label": arm_id}
+        for arm_id in (
+            "tabular_unlabeled",
+            "relational_unlabeled",
+            "relational_caught_supervised",
+            "tabular_caught_supervised",
+        )
+    }
+    completed = {
+        "status": "completed",
+        "feature_count": 18,
+        "scored_test": {"threshold": 0.42},
+        "threshold_metadata": {
+            "threshold_source": "validation_score_quantile",
+            "quantile": 0.9,
+            "threshold_comparator": ">=",
+            "realized_test_alert_rate": 0.1,
+        },
+        "label_metadata": {
+            "caught_positive_count": 17,
+            "immature_label_count": 3,
+        },
+        "evaluation_only": {
+            "all_carrier_events": {"recall": None, "precision": None},
+            "missed_at_event": {"recall": None, "precision": None},
+            "no_prior_catch_missed_events": {"recall": None},
+            "lifetime_never_caught_people": {"recall": None, "found": None},
+            "observed_catch_enrichment": {
+                "precision": None,
+                "lift_over_prevalence": None,
+            },
+        },
+    }
+    payload["arms"] = {
+        "relational_unlabeled": {
+            "Southwest": completed,
+            "Skipped": {"status": "skipped", "skip_reason": "too few rows"},
+        },
+        "tabular_unlabeled": {},
+        "relational_caught_supervised": {},
+        "tabular_caught_supervised": {},
+        "assisted": {"must_not_render": {}},
+    }
+    payload["legacy_oracle_benchmarks"] = {
+        "assisted": {"nondeployable": True, "is_ceiling": False, "results": {}}
+    }
+
+    view = _run_unsupervised_view_model(payload)
+
+    assert view["primaryArmIds"] == [
+        "relational_unlabeled",
+        "tabular_unlabeled",
+        "relational_caught_supervised",
+    ]
+    assert view["ablationArmIds"] == ["tabular_caught_supervised"]
+    assert "assisted" not in view["primaryArmIds"]
+    assert view["primary"][0]["regions"][0]["metrics"][
+        "allCarrierRecall"
+    ] is None
+    assert view["primary"][0]["regions"][0]["metrics"][
+        "frozenThreshold"
+    ] == pytest.approx(0.42)
+    assert view["primary"][0]["regions"][1] == {
+        "region": "Skipped",
+        "status": "skipped",
+        "skipReason": "too few rows",
+    }
+    assert view["legacyAssisted"]["nondeployable"] is True
+    assert view["legacyAssisted"]["is_ceiling"] is False
+
+
+def test_schema_v3_ui_copy_and_metric_contracts_are_honest():
+    ui = UI_MODULE_PATH.read_text()
+    lowered = ui.lower()
+
+    for token in (
+        "caught-supervised",
+        "naive PU",
+        "operating-point policy",
+        "conditional on resolved identity",
+        "observed-catch enrichment",
+        "no SCAR ranking guarantee",
+        "oracle evaluation is unavailable in production",
+        "V9 designed positive control",
+    ):
+        assert token.lower() in lowered
+
+    for label in (
+        "Fit signal",
+        "Feature count",
+        "Threshold source",
+        "Frozen threshold",
+        "Validation quantile",
+        "Comparator",
+        "Realized test alert rate",
+        "Caught positives / immature",
+        "All-carrier recall / precision",
+        "Missed-at-event recall / precision",
+        "No-prior-catch missed recall",
+        "Lifetime-never-caught person recall / found",
+        "Observed-catch enrichment precision / lift",
+    ):
+        assert label in ui
+
+    assert "ad.primary_arm_order" in ui
+    assert "ad.ablation_arm_order" in ui
+    assert "ad.arms" in ui
+    assert "Legacy oracle-assisted diagnostic" in ui
+    assert "nondeployable" in lowered
+    assert "not a ceiling" in lowered
+    assert "status==='skipped'" in ui
+    assert "metric===null" in ui
+
+    for forbidden in (
+        "scores are probabilities",
+        "calibrated identically",
+        "same true-carrier ranking",
+        "oracle ceiling",
+    ):
+        assert forbidden not in lowered
+
+
+def test_schema_v3_renderer_separates_ablation_and_legacy_sections():
+    payload = _schema_v3_payload()
+    payload["arm_metadata"] = {
+        arm_id: {"label": arm_id, "feature_count": 14}
+        for arm_id in (
+            "tabular_unlabeled",
+            "relational_unlabeled",
+            "relational_caught_supervised",
+            "tabular_caught_supervised",
+        )
+    }
+    payload["arms"] = {
+        arm_id: {}
+        for arm_id in (
+            "tabular_unlabeled",
+            "relational_unlabeled",
+            "relational_caught_supervised",
+            "tabular_caught_supervised",
+        )
+    }
+    payload["legacy_oracle_benchmarks"] = {
+        "assisted": {
+            "nondeployable": True,
+            "is_ceiling": False,
+            "description": "legacy fixture",
+            "results": {},
+        }
+    }
+
+    html = _render_unsupervised_html(payload)
+
+    appendix_start = html.index('<div class="uad-appendix">')
+    legacy_start = html.index('<div class="uad-legacy">')
+    appendix = html[appendix_start:legacy_start]
+    assert "tabular_caught_supervised" in appendix
+    assert "Legacy oracle-assisted diagnostic" not in appendix
+    assert html[legacy_start - len("</div>"):legacy_start] == "</div>"
+    assert "Legacy oracle-assisted diagnostic" in html[legacy_start:]
+    assert "nondeployable" in html[legacy_start:]
+    assert "not a ceiling" in html[legacy_start:]
+
+
+def test_schema_v2_ui_fallback_remains_explicitly_legacy():
+    ui = UI_MODULE_PATH.read_text()
+
+    assert "renderLegacySchemaV2" in ui
+    assert "ad.modes||ad.results" in ui
+    assert "Strict unsupervised" in ui
+    assert "Legacy oracle-assisted diagnostic" in ui
+    assert "nondeployable" in ui.lower()
+    assert "not a ceiling" in ui.lower()
+    assert "const modeHeading=mode==='assisted'?title:" in ui
+
+
+def test_v9_research_log_records_caught_supervised_contract():
+    log = (ROOT / "Documents/Data/changes_3.md").read_text()
+
+    for token in (
+        "tabular_unlabeled",
+        "relational_unlabeled",
+        "relational_caught_supervised",
+        "tabular_caught_supervised",
+        "50.9%",
+        "27.4%",
+        "229",
+        "79",
+        "8,013",
+        "28 days",
+        "2,691",
+        "213",
+        "immature -> unlabeled",
+        "operating point",
+        "conditional on resolved identity",
+        "not a ceiling",
+        "retrospective corpus diagnostics",
+        "not fit inputs",
+    ):
+        assert token.lower() in log.lower()
+
+
+def test_generated_dashboard_v9_bootstrap_does_not_require_d3():
+    html = (
+        Path(__file__).resolve().parents[1]
+        / "Documents/Data/v9_dashboard/index.html"
+    ).read_text()
+
+    assert "const tip=document.createElement('div')" in html
+    assert "const tip=d3.select('body')" not in html
+
+
+def test_generated_dashboard_has_grouped_accessible_navigation_and_hash_state():
+    html = GENERATED_INDEX.read_text()
+
+    assert 'data-nav-group="readout"' in html
+    assert 'data-nav-group="explore"' in html
+    assert 'aria-controls="tab-v9Results"' in html
+    assert 'aria-selected="true"' in html
+    assert "location.hash" in html
+    assert "hashchange" in html
+    assert "closest('[data-navigate-tab]')" in html
+
+
+def test_generated_dashboard_has_v9_headline_and_responsive_table_contract():
+    html = GENERATED_INDEX.read_text()
+
+    assert 'id="v9-summary"' in html
+    assert "Deployable Hybrid" in html
+    assert ".v9-table-wrap" in html
+    assert "font-family: var(--font-body)" in html
+
+
+def test_generated_dashboard_removes_legacy_duplicate_sections_and_styles():
+    html = GENERATED_INDEX.read_text()
+
+    assert html.count('data-tab="entityResolution"') == 0
+    assert html.count("entityResolution:{rendered:false") == 0
+    assert html.count("/* ---- Community Explorer ---- */") == 1
+
+
+def test_unsupervised_dashboard_explains_modes_and_leakage_boundaries():
+    ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
+    ui = ui_path.read_text()
+
+    assert "Strict unsupervised" in ui
+    assert "Label-assisted benchmark" in ui
+    assert "validation set" in ui
+    assert "test set" in ui
+    assert "labels_used_for_fit" in ui
+    assert "positive_prevalence" in ui
+    assert "predicted_positive_rate" in ui

@@ -1809,7 +1809,14 @@ def _cotravel_groups_changing_pooling(active_edges, groups):
     return frozenset(changing)
 
 
-def build_ablation_specs(snapshot, person_id, community):
+def build_ablation_specs(
+    snapshot,
+    person_id,
+    community,
+    *,
+    ranked_edge_source_row_ids=(),
+    pooled_logit_contributions=None,
+):
     if not isinstance(person_id, str) or not person_id.strip():
         raise ValueError("person_id must be a non-blank string")
     required = {
@@ -1845,11 +1852,41 @@ def build_ablation_specs(snapshot, person_id, community):
     internal = active.loc[
         active["source_row_id"].astype(str).isin(base_source_ids)
     ]
+    ranked_source_ids = _canonical_string_ids(
+        tuple(ranked_edge_source_row_ids),
+        field_name="ranked_edge_source_row_ids",
+    )
+    source_rank = {
+        source_row_id: rank
+        for rank, source_row_id in enumerate(ranked_source_ids)
+    }
     specs = []
     group_columns = ["canonical_pair_group_id", "rel"]
-    for (group_id, relation_id), frame in internal.groupby(
-        group_columns, sort=True, dropna=False
-    ):
+    grouped = internal.groupby(group_columns, sort=True, dropna=False)
+    if ranked_source_ids:
+        attributed = internal.loc[
+            internal["source_row_id"].astype(str).isin(ranked_source_ids)
+        ]
+        group_ranks = {}
+        for group_id, relation_id, source_row_id in attributed[
+            [*group_columns, "source_row_id"]
+        ].itertuples(index=False, name=None):
+            key = (group_id, int(relation_id))
+            group_ranks[key] = min(
+                group_ranks.get(key, len(source_rank)),
+                source_rank[str(source_row_id)],
+            )
+        ranked_groups = sorted(
+            group_ranks,
+            key=lambda key: (group_ranks[key], str(key[0]), key[1]),
+        )[:10]
+    else:
+        ranked_groups = [
+            (group_id, int(relation_id))
+            for group_id, relation_id in list(grouped.groups)[:10]
+        ]
+    for group_id, relation_id in ranked_groups:
+        frame = grouped.get_group((group_id, relation_id))
         source_ids = tuple(sorted(frame["source_row_id"].astype(str)))
         specs.append(
             AblationSpec(
@@ -1874,7 +1911,22 @@ def build_ablation_specs(snapshot, person_id, community):
         )
 
     caught_before = frozenset(snapshot.caught_before_snapshot)
-    for caught_person_id in sorted(caught_before.intersection(visible_people)):
+    caught_visible = caught_before.intersection(visible_people)
+    if pooled_logit_contributions is None:
+        contributions = {}
+    elif not isinstance(pooled_logit_contributions, Mapping):
+        raise ValueError("pooled_logit_contributions must be a mapping")
+    else:
+        contributions = {
+            str(key): float(value)
+            for key, value in pooled_logit_contributions.items()
+        }
+        if any(not np.isfinite(value) for value in contributions.values()):
+            raise ValueError("pooled_logit_contributions must be finite")
+    for caught_person_id in sorted(
+        caught_visible,
+        key=lambda value: (-abs(contributions.get(value, 0.0)), value),
+    )[:5]:
         specs.append(
             AblationSpec(
                 factor_id=f"caught:{caught_person_id}",
@@ -1922,6 +1974,8 @@ def build_ablation_specs(snapshot, person_id, community):
             )
         source_ids = tuple(sorted(frame["source_row_id"].astype(str)))
         endpoint_pair = next(iter(endpoint_pairs))
+        if ranked_source_ids and not set(source_ids).intersection(source_rank):
+            continue
         cotravel_groups.append(
             (
                 (group_id, int(relation_id)),
@@ -1932,6 +1986,7 @@ def build_ablation_specs(snapshot, person_id, community):
     pooling_changes = _cotravel_groups_changing_pooling(
         active, cotravel_groups
     )
+    selected_pooling = 0
     for (group_id, relation_id), source_ids, _ in cotravel_groups:
         if (group_id, relation_id) in pooling_changes:
             specs.append(
@@ -1943,6 +1998,9 @@ def build_ablation_specs(snapshot, person_id, community):
                     edge_source_row_ids=tuple(source_ids),
                 )
             )
+            selected_pooling += 1
+            if selected_pooling == 5:
+                break
 
     by_factor_id = {}
     for spec in specs:
@@ -2746,9 +2804,33 @@ def compose_case_explanation(
         for feature_index in range(feature_count)
     ]
 
+    pooled_contributions = {
+        member_id: float(
+            snapshot.prepool_logits[engine.person_index[member_id]]
+        )
+        / len(member_ids)
+        for member_id in member_ids
+    }
+    ranked_source_row_ids = tuple(
+        source_row_id
+        for edge in top_edges
+        for source_row_id in edge["source_row_ids"]
+    )
+    salient_specs = build_ablation_specs(
+        snapshot,
+        case.person_id,
+        community,
+        ranked_edge_source_row_ids=ranked_source_row_ids,
+        pooled_logit_contributions=pooled_contributions,
+    )
+    rank_state = engine._Seed0ExplanationEngine__rank_state
+    engine._Seed0ExplanationEngine__factor_specs_cache[
+        (rank_state.fingerprint, context.scoring_day, context.person_id)
+    ] = tuple(salient_specs)
+
     factors = []
     provenance_expansions = []
-    for spec in build_ablation_specs(snapshot, case.person_id, community):
+    for spec in salient_specs:
         counterfactual = engine.score_counterfactual(context, spec)
         frequency, iqr, restart_source = _factor_restart_metrics(
             spec, edges, feature_names, feature_aggregate
@@ -2944,6 +3026,7 @@ def compose_case_explanation(
             "node_feature_mask_stats": node_feature_mask_stats,
         },
         "factors": factors,
+        "factor_scope": "salient_counterfactual_factors",
         "community": community,
         "provenance_expansions": provenance_expansions,
         "display_feature_mask_stats": display_feature_mask_stats,

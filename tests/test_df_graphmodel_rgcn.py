@@ -3,7 +3,12 @@ import pandas as pd
 import pytest
 import torch
 from gnn import graphmodel_rgcn as gm
-from gnn.learned_cell import build_caught_times
+from gnn.learned_cell import (
+    _RGCN,
+    _score_pool,
+    _train_caught_rgcn,
+    build_caught_times,
+)
 
 def _toy():
     # A-B co-travel early; C-D co-travel late; A,C also each have a RESIDENCE edge.
@@ -76,6 +81,208 @@ def test_build_person_graph_typed_smoke():
     assert len(node_ids) > 0 and len(edges) > 0
     assert set(edges["rel"].unique()) <= {0,1}
     assert (edges["rel"]==0).any()  # some COTRAVEL edges exist
+
+
+def test_build_person_graph_typed_keeps_canonical_person_without_edges(
+    tmp_path, monkeypatch
+):
+    pd.DataFrame(
+        {
+            "observed_person_record_id": ["r1", "r2", "r3"],
+            "event_id": ["shared", "shared", "singleton"],
+            "event_timestamp_utc": [
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+                "2024-01-02T00:00:00Z",
+            ],
+            "observed_residence_location_id": [pd.NA, pd.NA, pd.NA],
+        }
+    ).to_csv(tmp_path / "observed_person_records.csv", index=False)
+    monkeypatch.setattr(
+        "gnn.run_demo._build_oracle",
+        lambda corpus_dir: {"r1": "p1", "r2": "p2", "r3": "p3", "blank": ""},
+    )
+
+    edges, node_ids, node_feat = gm.build_person_graph_typed(tmp_path)
+
+    assert node_ids == ["p1", "p2", "p3"]
+    np.testing.assert_array_equal(node_feat["p3"], np.array([1.0]))
+    assert not edges["u"].eq("p3").any()
+    assert not edges["v"].eq("p3").any()
+
+
+@pytest.mark.parametrize(
+    ("mapping", "message"),
+    [
+        ({}, "unmapped"),
+        ({"obs-singleton": ""}, "blank"),
+        ({"obs-singleton": "outside-graph"}, "node universe"),
+    ],
+)
+def test_train_caught_rgcn_rejects_invalid_training_identity(mapping, message):
+    edges = pd.DataFrame(
+        columns=["u", "v", "avail_time", "rel", "source_row_id"]
+    )
+    pool = pd.DataFrame(
+        {
+            "event_id": ["event-singleton"],
+            "primary_obs_id": ["obs-singleton"],
+            "t": [pd.Timestamp("2023-01-01T00:00:00Z")],
+            "label_available_time": [pd.Timestamp("2023-01-02T00:00:00Z")],
+        }
+    )
+
+    with pytest.raises(ValueError, match=message):
+        _train_caught_rgcn(
+            edges,
+            ["singleton"],
+            {"singleton": np.array([1.0])},
+            {},
+            pool,
+            mapping,
+            np.array([1]),
+            seed=0,
+            epochs=1,
+            lr=1e-2,
+            train_cutoff="2024-01-01",
+            train_bucket="M",
+        )
+
+
+def test_train_validates_complete_pool_before_eligibility_filter():
+    edges = pd.DataFrame(
+        columns=["u", "v", "avail_time", "rel", "source_row_id"]
+    )
+    pool = pd.DataFrame(
+        {
+            "event_id": ["eligible", "ineligible-unmapped"],
+            "primary_obs_id": ["obs-known", "obs-unmapped"],
+            "t": pd.to_datetime(
+                ["2023-01-01T00:00:00Z", "2023-01-02T00:00:00Z"]
+            ),
+            "label_available_time": pd.to_datetime(
+                ["2023-01-02T00:00:00Z", "2024-01-01T00:00:00Z"]
+            ),
+        }
+    )
+
+    with pytest.raises(ValueError, match="unmapped"):
+        _train_caught_rgcn(
+            edges,
+            ["known"],
+            {"known": np.array([1.0])},
+            {},
+            pool,
+            {"obs-known": "known"},
+            np.array([1, 0]),
+            seed=0,
+            epochs=1,
+            lr=1e-2,
+            train_cutoff="2024-01-01",
+            train_bucket="M",
+        )
+
+
+def test_disconnected_rows_with_opposing_labels_both_enter_training_loss():
+    class BaseFeatureEncoder(torch.nn.Module):
+        def forward(self, x, edge_index, edge_type):
+            return x[:, :1]
+
+    class DirectionalModel(torch.nn.Module):
+        def __init__(self, in_dim, num_relations):
+            super().__init__()
+            self.enc = BaseFeatureEncoder()
+            self.head = torch.nn.Linear(1, 1, bias=False)
+            torch.nn.init.zeros_(self.head.weight)
+
+    edges = pd.DataFrame(
+        columns=["u", "v", "avail_time", "rel", "source_row_id"]
+    )
+    node_ids = ["positive", "negative"]
+    node_feat = {
+        "positive": np.array([1.0]),
+        "negative": np.array([2.0]),
+    }
+    mapping = {"obs-positive": "positive", "obs-negative": "negative"}
+    pool = pd.DataFrame(
+        {
+            "event_id": ["event-positive", "event-negative"],
+            "primary_obs_id": ["obs-positive", "obs-negative"],
+            "t": pd.to_datetime(
+                ["2023-01-01T00:00:00Z", "2023-01-01T01:00:00Z"]
+            ),
+            "label_available_time": pd.to_datetime(
+                ["2023-01-02T00:00:00Z", "2023-01-02T00:00:00Z"]
+            ),
+        }
+    )
+    model = _train_caught_rgcn(
+        edges,
+        node_ids,
+        node_feat,
+        {},
+        pool,
+        mapping,
+        np.array([1, 0]),
+        seed=0,
+        epochs=1,
+        lr=1e-2,
+        train_cutoff="2024-01-01",
+        train_bucket="M",
+        model_cls=DirectionalModel,
+    )
+
+    # At zero logits, the positive feature contributes -0.5 while the larger
+    # negative feature contributes +1.0. A negative update proves both labels
+    # reached BCE loss; positive-only supervision would update in the opposite direction.
+    assert model.head.weight.item() < 0
+
+    score = _score_pool(
+        model,
+        pool,
+        mapping,
+        edges,
+        node_ids,
+        node_feat,
+        {},
+        {"positive": 0, "negative": 1},
+    )
+
+    assert score.shape == (2,)
+    assert np.isfinite(score).all()
+
+
+@pytest.mark.parametrize(
+    ("mapping", "message"),
+    [
+        ({}, "unmapped"),
+        ({"obs-missing": ""}, "blank"),
+        ({"obs-missing": "outside-graph"}, "node universe"),
+    ],
+)
+def test_score_pool_rejects_invalid_identity_instead_of_zero(mapping, message):
+    edges = pd.DataFrame(
+        columns=["u", "v", "avail_time", "rel", "source_row_id"]
+    )
+    pool = pd.DataFrame(
+        {
+            "primary_obs_id": ["obs-missing"],
+            "t": [pd.Timestamp("2024-01-01T00:00:00Z")],
+        }
+    )
+    model = _RGCN(in_dim=6)
+
+    with pytest.raises(ValueError, match=message):
+        _score_pool(
+            model,
+            pool,
+            mapping,
+            edges,
+            ["singleton"],
+            {"singleton": np.array([1.0])},
+            {},
+            {"singleton": 0},
+        )
 
 
 def test_source_provenance_is_deterministic_unique_and_collision_safe():

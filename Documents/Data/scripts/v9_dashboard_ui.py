@@ -457,3 +457,373 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
   drawSimulatedCatches();
 }},
 """
+
+UNSUP_AD_CSS = r"""
+#tab-unsupervisedAD {
+  padding: 32px 24px;
+  max-width: 1200px;
+  font-family: var(--font-body);
+  color: var(--text1);
+}
+.uad-header { margin-bottom: 40px; }
+.uad-header h2 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text1);
+  margin: 0 0 12px 0;
+  letter-spacing: -0.02em;
+}
+.uad-header p {
+  color: var(--text2);
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 750px;
+  margin: 0;
+}
+.uad-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 18px 0 12px;
+}
+.uad-mode-heading {
+  margin: 32px 0 14px;
+  color: var(--text1);
+  font-size: 16px;
+  font-weight: 700;
+}
+.uad-mode, .uad-contract, .uad-validation, .uad-note {
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.uad-mode {
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.uad-mode b { display: block; color: var(--text1); margin-bottom: 4px; }
+.uad-note { max-width: 850px; margin: 0 0 20px; }
+.uad-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 28px;
+}
+.uad-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+}
+.uad-region-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text1);
+  margin: 0 0 24px 0;
+  display: flex;
+  align-items: center;
+}
+.uad-contract {
+  display: grid;
+  gap: 5px;
+  margin: -8px 0 18px;
+}
+.uad-contract b { color: var(--text1); font-weight: 600; }
+.uad-validation {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-bottom: 16px;
+}
+.uad-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.uad-metric {
+  text-align: center;
+  background: var(--elevated);
+  border-radius: 8px;
+  padding: 16px 8px;
+  border: 1px solid var(--border);
+}
+.uad-metric-val {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text1);
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.uad-metric-val.best {
+  color: #10b981;
+}
+.uad-metric-val.f1 {
+  color: #3b82f6;
+}
+.uad-metric-lbl {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text3);
+  font-weight: 600;
+}
+.uad-stats {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+}
+.uad-stat {
+  font-size: 12px;
+  color: var(--text2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.uad-stat b {
+  color: var(--text1);
+  font-weight: 600;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.uad-arm { margin: 0 0 30px; }
+.uad-arm-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 14px;
+  margin: 0 0 12px;
+}
+.uad-arm-header h4 { margin: 0; color: var(--text1); font-size: 14px; }
+.uad-arm-header span { color: var(--text3); font-size: 11px; }
+.uad-region-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.uad-region-table th, .uad-region-table td {
+  padding: 7px 5px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+.uad-region-table th { width: 48%; color: var(--text3); font-weight: 500; }
+.uad-region-table td { color: var(--text1); font-variant-numeric: tabular-nums; }
+.uad-skipped {
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  color: var(--text2);
+  font-size: 12px;
+}
+.uad-appendix {
+  margin-top: 36px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-strong);
+}
+.uad-legacy {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px dashed var(--border-strong);
+}
+.uad-badge {
+  display: inline-flex;
+  margin: 0 6px 0 0;
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text2);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.uad-empty { color: var(--text3); font-size: 12px; }
+"""
+
+UNSUP_AD_NAV_BTN = '  <button data-tab="unsupervisedAD" aria-controls="tab-unsupervisedAD" aria-selected="false">Anomaly ranking</button>\n'
+UNSUP_AD_SECTION = '  <section id="tab-unsupervisedAD" class="tab-content"></section>\n'
+
+UNSUP_AD_VIEW_MODEL_JS = r"""
+function buildUnsupervisedADViewModel(ad){
+  const PRIMARY_IDS=new Set([
+    'tabular_unlabeled',
+    'relational_unlabeled',
+    'relational_caught_supervised'
+  ]);
+  const ABLATION_IDS=new Set(['tabular_caught_supervised']);
+  const arms=ad&&ad.arms&&typeof ad.arms==='object'?ad.arms:{};
+  const metadata=ad&&ad.arm_metadata&&typeof ad.arm_metadata==='object'
+    ?ad.arm_metadata:{};
+  const orderedIds=(order, allowed)=>{
+    const seen=new Set();
+    return (Array.isArray(order)?order:[]).filter(id=>{
+      if(!allowed.has(id)||seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  };
+  const read=(obj, key)=>obj&&obj[key]!==undefined?obj[key]:null;
+  const normalizeRegion=(region, raw)=>{
+    raw=raw&&typeof raw==='object'?raw:{};
+    if(raw.status==='skipped') return {
+      region,
+      status:'skipped',
+      skipReason:String(raw.skip_reason||'No reason recorded')
+    };
+    const threshold=raw.threshold_metadata||{};
+    const scoredTest=raw.scored_test||{};
+    const labels=raw.label_metadata||{};
+    const evaluation=raw.evaluation_only||{};
+    const allCarrier=evaluation.all_carrier_events||{};
+    const missed=evaluation.missed_at_event||{};
+    const noPrior=evaluation.no_prior_catch_missed_events||{};
+    const neverCaught=evaluation.lifetime_never_caught_people||{};
+    const observed=evaluation.observed_catch_enrichment||{};
+    return {
+      region,
+      status:String(raw.status||'completed'),
+      metrics:{
+        featureCount:read(raw,'feature_count'),
+        thresholdSource:read(threshold,'threshold_source'),
+        frozenThreshold:read(scoredTest,'threshold'),
+        thresholdQuantile:read(threshold,'threshold_quantile'),
+        thresholdComparator:read(threshold,'threshold_comparator'),
+        realizedTestAlertRate:read(raw,'realized_test_alert_rate')
+          ??read(threshold,'realized_test_alert_rate'),
+        caughtPositiveCount:read(labels,'caught_positive_count'),
+        immatureLabelCount:read(labels,'immature_label_count'),
+        fitSignal:read(labels,'fit_signal'),
+        allCarrierRecall:read(allCarrier,'recall'),
+        allCarrierPrecision:read(allCarrier,'precision'),
+        missedRecall:read(missed,'recall'),
+        missedPrecision:read(missed,'precision'),
+        noPriorMissedRecall:read(noPrior,'recall'),
+        lifetimeNeverCaughtRecall:read(neverCaught,'recall'),
+        lifetimeNeverCaughtFound:read(neverCaught,'found'),
+        observedCatchPrecision:read(observed,'precision'),
+        observedCatchLift:read(observed,'lift_over_prevalence')
+      }
+    };
+  };
+  const normalizeArm=id=>({
+    id,
+    metadata:metadata[id]||{},
+    regions:Object.entries(arms[id]||{}).map(
+      ([region, raw])=>normalizeRegion(region, raw)
+    )
+  });
+  const primaryArmIds=orderedIds(ad&&ad.primary_arm_order, PRIMARY_IDS);
+  const ablationArmIds=orderedIds(ad&&ad.ablation_arm_order, ABLATION_IDS);
+  const legacy=ad&&ad.legacy_oracle_benchmarks;
+  return {
+    primaryArmIds,
+    ablationArmIds,
+    primary:primaryArmIds.map(normalizeArm),
+    ablation:ablationArmIds.map(normalizeArm),
+    legacyAssisted:legacy&&legacy.assisted?legacy.assisted:null
+  };
+}
+"""
+
+UNSUP_AD_JS = r"""unsupervisedAD:{rendered:false,render(){
+  if(this.rendered) return; this.rendered=true;
+  const sec=document.getElementById('tab-unsupervisedAD');
+  const ad=(typeof DATA!=='undefined'&&DATA)?DATA.unsupervisedAD:null;
+  if(!ad){sec.innerHTML='<div class="v9-card">No anomaly-ranking result embedded.</div>';return;}
+
+  const fmt=n=>n===null||n===undefined?'—':Number(n).toLocaleString();
+  const pct=v=>v===null||v===undefined?'—':(Number(v)*100).toFixed(1)+'%';
+  const metricText=metric=>metric===null||metric===undefined?'—':esc(String(metric));
+  const pair=(left,right,formatter)=>formatter(left)+' / '+formatter(right);
+  const val=(obj, keys, fallback=0)=>{
+    for(const key of keys){ if(obj[key]!==undefined && obj[key]!==null) return obj[key]; }
+    return fallback;
+  };
+
+  const renderRegion=region=>{
+    if(region.status==='skipped') return '<div class="uad-skipped"><b>'+esc(region.region)+'</b> · skipped — '+esc(region.skipReason)+'</div>';
+    const m=region.metrics;
+    return '<div class="uad-card">'
+      +'<div class="uad-region-name">'+esc(region.region)+'</div>'
+      +'<table class="uad-region-table"><tbody>'
+      +'<tr><th>Fit signal</th><td>'+metricText(m.fitSignal)+'</td></tr>'
+      +'<tr><th>Feature count</th><td>'+fmt(m.featureCount)+'</td></tr>'
+      +'<tr><th>Threshold source</th><td>'+metricText(m.thresholdSource)+'</td></tr>'
+      +'<tr><th>Frozen threshold</th><td>'+metricText(m.frozenThreshold)+'</td></tr>'
+      +'<tr><th>Validation quantile</th><td>'+metricText(m.thresholdQuantile)+'</td></tr>'
+      +'<tr><th>Comparator</th><td>'+metricText(m.thresholdComparator)+'</td></tr>'
+      +'<tr><th>Realized test alert rate</th><td>'+pct(m.realizedTestAlertRate)+'</td></tr>'
+      +'<tr><th>Caught positives / immature</th><td>'+pair(m.caughtPositiveCount,m.immatureLabelCount,fmt)+'</td></tr>'
+      +'<tr><th>All-carrier recall / precision</th><td>'+pair(m.allCarrierRecall,m.allCarrierPrecision,pct)+'</td></tr>'
+      +'<tr><th>Missed-at-event recall / precision</th><td>'+pair(m.missedRecall,m.missedPrecision,pct)+'</td></tr>'
+      +'<tr><th>No-prior-catch missed recall</th><td>'+pct(m.noPriorMissedRecall)+'</td></tr>'
+      +'<tr><th>Lifetime-never-caught person recall / found</th><td>'+pct(m.lifetimeNeverCaughtRecall)+' / '+fmt(m.lifetimeNeverCaughtFound)+'</td></tr>'
+      +'<tr><th>Observed-catch enrichment precision / lift</th><td>'+pct(m.observedCatchPrecision)+' / '+(m.observedCatchLift===null?'—':Number(m.observedCatchLift).toFixed(2)+'×')+'</td></tr>'
+      +'</tbody></table></div>';
+  };
+  const renderArm=arm=>{
+    const meta=arm.metadata||{};
+    let out='<div class="uad-arm"><div class="uad-arm-header"><h4>'+esc(meta.label||arm.id)+'</h4>';
+    out+='<span>'+esc(arm.id)+'</span><span>'+fmt(meta.feature_count)+' features</span></div>';
+    if(!arm.regions.length) out+='<div class="uad-empty">No regional results embedded.</div>';
+    else out+='<div class="uad-grid">'+arm.regions.map(renderRegion).join('')+'</div>';
+    return out+'</div>';
+  };
+
+  function renderLegacySchemaV2(){
+    const modeMeta=ad.mode_metadata||{};
+    const modeResults=ad.modes||ad.results||{};
+    let legacy='<div class="uad-header"><h2>Legacy schema-v2 anomaly diagnostics</h2>';
+    legacy+='<p>This compatibility view preserves the historical <strong>Label-assisted benchmark</strong> beside strict Isolation Forest. The validation set selects the historical assisted threshold and the test set remains its held-out report. The assisted result is a <strong>Legacy oracle-assisted diagnostic</strong>: nondeployable and not a ceiling.</p></div>';
+    for(const mode of ['strict','assisted']){
+      const regions=modeResults[mode]||{};
+      if(!Object.keys(regions).length) continue;
+      const title=mode==='strict'?'Strict unsupervised':'Legacy oracle-assisted diagnostic · nondeployable · not a ceiling';
+      const modeHeading=mode==='assisted'?title:((modeMeta[mode]||{}).label||title);
+      legacy+='<h3 class="uad-mode-heading">'+esc(modeHeading)+'</h3><div class="uad-grid">';
+      for(const [region, metrics] of Object.entries(regions)){
+        const validation=metrics.validation||{};
+        const test=metrics.test||{};
+        const testPrecision=val(metrics,['test_precision'],val(test,['precision'],0));
+        const testRecall=val(metrics,['test_recall'],val(test,['recall'],0));
+        const testF1=val(metrics,['test_f1'],val(test,['f1'],0));
+        legacy+='<div class="uad-card"><div class="uad-region-name">'+esc(region)+'</div>';
+        legacy+='<div class="uad-contract"><span><b>Fit labels</b> '+(val(metrics,['labels_used_for_fit'],false)?'used':'not used')+'</span>';
+        legacy+='<span><b>Positive prevalence</b> '+pct(val(metrics,['positive_prevalence'],val(test,['positive_prevalence'],0)))+'</span>';
+        legacy+='<span><b>Predicted positive rate</b> '+pct(val(metrics,['predicted_positive_rate'],val(test,['predicted_positive_rate'],0)))+'</span>';
+        legacy+='<span><b>Threshold</b> '+Number(val(metrics,['threshold'],0)).toFixed(4)+' ('+esc(String(val(metrics,['threshold_source'],'training score')))+')</span></div>';
+        legacy+='<div class="uad-metrics"><div class="uad-metric"><div class="uad-metric-val">'+pct(testPrecision)+'</div><div class="uad-metric-lbl">Test precision</div></div>';
+        legacy+='<div class="uad-metric"><div class="uad-metric-val">'+pct(testRecall)+'</div><div class="uad-metric-lbl">Test recall</div></div>';
+        legacy+='<div class="uad-metric"><div class="uad-metric-val f1">'+pct(testF1)+'</div><div class="uad-metric-lbl">Test F1</div></div></div>';
+        legacy+='<div class="uad-validation">Validation — P '+pct(val(metrics,['val_precision'],val(validation,['precision'],0)))+' · R '+pct(val(metrics,['val_recall'],val(validation,['recall'],0)))+' · F1 '+pct(val(metrics,['val_f1'],val(validation,['f1'],0)))+'</div></div>';
+      }
+      legacy+='</div>';
+    }
+    return legacy;
+  }
+
+  if(Number(ad.schema_version||2)<3){sec.innerHTML=renderLegacySchemaV2();return;}
+
+  const view=buildUnsupervisedADViewModel(ad);
+  let h='<div class="uad-header"><h2>Unsupervised and caught-supervised anomaly ranking</h2>';
+  h+='<p>This <strong>V9 designed positive control</strong> follows the primary progression from tabular and relational unlabeled detection to a relational <strong>caught-supervised</strong> ranker. The caught-supervised arm is a <strong>naive PU</strong> historical-enforcement ranker with <strong>no SCAR ranking guarantee</strong>. The label-free validation quantile is an <strong>operating-point policy</strong>, not probability calibration.</p>';
+  h+='<p class="uad-note">Label and threshold semantics are deployable <strong>conditional on resolved identity</strong>. Oracle evaluation is unavailable in production and appears here only as retrospective synthetic evaluation after scores and thresholds are frozen. Day-to-day monitoring can use observed-catch enrichment.</p></div>';
+  h+='<h3 class="uad-mode-heading">Primary deployability progression</h3>';
+  if(view.primary.length!==3) h+='<div class="uad-skipped">Primary artifact contract incomplete: expected the three named deployability arms.</div>';
+  h+=view.primary.map(renderArm).join('');
+
+  h+='<div class="uad-appendix"><h3 class="uad-mode-heading">Ablation appendix</h3>';
+  h+='<p class="uad-note">The 14-feature caught-supervised arm completes the 2×2 diagnostic and is not part of the primary lineup.</p>';
+  h+=view.ablation.map(renderArm).join('');
+  h+='</div>';
+  if(view.legacyAssisted){
+    const assisted=view.legacyAssisted;
+    h+='<div class="uad-legacy"><div class="uad-card"><div class="uad-region-name">Legacy oracle-assisted diagnostic</div>';
+    h+='<span class="uad-badge">nondeployable</span><span class="uad-badge">not a ceiling</span>';
+    h+='<p class="uad-note">'+esc(assisted.description||'Oracle-label-assisted benchmark retained only for legacy context.')+'</p></div></div>';
+  }
+  sec.innerHTML=h;
+}},
+"""

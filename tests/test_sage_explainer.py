@@ -1128,6 +1128,242 @@ def test_cotravel_factor_construction_builds_one_graph_for_many_groups(monkeypat
     assert calls == {"graph": 1}
 
 
+def test_giant_community_salient_counterfactual_factors_are_constant_bounded(
+    monkeypatch,
+):
+    pair_count = 100_001
+    source_ids = [f"row-{index:06d}" for index in range(pair_count)]
+    active_edges = pd.DataFrame(
+        {
+            "source_row_id": source_ids,
+            "canonical_pair_group_id": [
+                f"group-{index:06d}" for index in range(pair_count)
+            ],
+            "u": ["target"] * pair_count,
+            "v": [f"person-{index:06d}" for index in range(pair_count)],
+            "rel": [1] * pair_count,
+            "edge_type": ["RESIDENCE"] * pair_count,
+        }
+    )
+    caught_people = {f"person-{index:06d}" for index in range(20)}
+    snapshot = SimpleNamespace(
+        active_edges=active_edges,
+        caught_before_snapshot=frozenset(caught_people),
+    )
+    community = {
+        "base_source_row_ids": source_ids,
+        "nodes_by_id": {
+            "target": {},
+            **{person_id: {} for person_id in caught_people},
+        },
+    }
+    monkeypatch.setattr(
+        se,
+        "structural_provenance_rows",
+        lambda active, visible: active.iloc[0:0].copy(deep=True),
+    )
+
+    specs = build_ablation_specs(
+        snapshot,
+        "target",
+        community,
+        ranked_edge_source_row_ids=reversed(source_ids[-10:]),
+        pooled_logit_contributions={
+            person_id: float(index)
+            for index, person_id in enumerate(sorted(caught_people))
+        },
+    )
+
+    assert len([spec for spec in specs if spec.kind == "pair_relation"]) == 10
+    assert len([spec for spec in specs if spec.kind == "relation_star"]) == 1
+    assert len([spec for spec in specs if spec.kind == "caught_flag"]) == 5
+    assert len(specs) == 16
+
+    model = _SAGE(in_dim=8, hidden=4, out=4, num_relations=4)
+    engine = se.Seed0ExplanationEngine(
+        model=model,
+        edges_typed=pd.DataFrame(
+            columns=[
+                "source_row_id",
+                "canonical_pair_group_id",
+                "u",
+                "v",
+                "avail_time",
+                "rel",
+                "edge_type",
+            ]
+        ),
+        node_ids=["target"],
+        node_feat={"target": np.array([1.0])},
+        caught_time={},
+        num_rel=4,
+    )
+    local = se.MemberSubgraph(
+        x=torch.ones((1, 8), dtype=torch.float32),
+        edge_index=torch.empty((2, 0), dtype=torch.long),
+        target_index=0,
+        original_node_indices=np.array([0]),
+        tensor_edge_source_row_ids=np.array([], dtype=object),
+    )
+    with torch.no_grad():
+        local_logit = float(
+            se.PrePoolSAGELogitWrapper(engine.explanation_model_copy())(
+                local.x, local.edge_index
+            )[0]
+        )
+    real_snapshot = se.DaySnapshot(
+        scoring_day=SCORING_DAY,
+        active_edges=active_edges.assign(
+            avail_time=pd.Timestamp("2025-01-01T00:00:00Z")
+        ),
+        x=local.x,
+        edge_index=local.edge_index,
+        edge_type=torch.empty(0, dtype=torch.long),
+        tensor_edge_source_row_ids=np.array([], dtype=object),
+        component_roots=np.array([0]),
+        prepool_embeddings=torch.zeros((1, 4)),
+        prepool_logits=torch.tensor([local_logit]),
+        pooled_logits=torch.tensor([local_logit]),
+        probabilities=np.array([0.80]),
+        caught_before_snapshot=frozenset(caught_people),
+    )
+    display_source_ids = source_ids[-10:]
+    giant_community = {
+        "community_key": "community:giant",
+        "complete": True,
+        "base_source_row_ids": source_ids,
+        "nodes_by_id": {
+            "target": {},
+            **{person_id: {} for person_id in caught_people},
+        },
+        "nodes": [{"node_id": "target"}],
+        "edges": [
+            {
+                "edge_id": f"edge:{index}",
+                "u": "target",
+                "v": sorted(caught_people)[index % len(caught_people)],
+                "edge_type": "RESIDENCE",
+                "message_hop": 0,
+                "source_row_ids": [source_row_id],
+            }
+            for index, source_row_id in enumerate(display_source_ids)
+        ],
+        "provenance_expansions": [],
+    }
+    reference = _counterfactual_reference(target_probability=0.80)
+    engine.bind_rank_reference(reference, _counterfactual_row_bindings())
+    trace = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        daily_budget=5,
+    )
+    case = HybridOnlyCase(
+        person_id="target",
+        anchor=RecoveryAnchor(
+            person_id="target",
+            event_id="target-a",
+            row_index=0,
+            scoring_day=SCORING_DAY,
+            inspected_rank=1,
+        ),
+        baseline_rank=trace["baseline_rank"],
+        gnn_rank=trace["seed0_gnn_rank"],
+        hybrid_rank=trace["seed0_hybrid_rank"],
+        baseline_percentile=trace["baseline_percentile"],
+        gnn_percentile=trace["seed0_gnn_percentile"],
+        relationship_categories=("RESIDENCE",),
+        scoring_period="2025-01",
+        same_day_person_row_indices=(0, 1),
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        decision_trace=trace,
+    )
+
+    restart_runs = []
+    counterfactual_forwards = []
+    original_member_explainer = se.run_member_explanation
+    original_score_counterfactual = engine.score_counterfactual
+
+    class LightweightExplainer:
+        def __call__(self, *, x, edge_index, index):
+            restart_runs.append(torch.initial_seed())
+            return SimpleNamespace(
+                edge_mask=torch.zeros(edge_index.shape[1]),
+                node_mask=torch.ones_like(x),
+            )
+
+    def lightweight_member_explainer(*args, **kwargs):
+        return original_member_explainer(
+            *args,
+            **kwargs,
+            explainer_factory=lambda *factory_args, **factory_kwargs: (
+                LightweightExplainer()
+            ),
+        )
+
+    def lightweight_grouped_counterfactual(_engine, context, factor):
+        return {
+            "factor_id": factor.factor_id,
+            "kind": factor.kind,
+            "original_hybrid_rank": context.original_hybrid_rank,
+            "ablated_hybrid_rank": context.original_hybrid_rank,
+            "hybrid_rank_delta": 0,
+        }
+
+    def recording_score_counterfactual(context, factor):
+        counterfactual_forwards.append(factor.factor_id)
+        return original_score_counterfactual(context, factor)
+
+    monkeypatch.setattr(engine, "snapshot", lambda scoring_day: real_snapshot)
+    monkeypatch.setattr(engine, "community", lambda person_id, scoring_day: giant_community)
+    monkeypatch.setattr(se, "member_subgraph", lambda *args, **kwargs: local)
+    monkeypatch.setattr(se, "run_member_explanation", lightweight_member_explainer)
+    monkeypatch.setattr(se, "score_grouped_counterfactual", lightweight_grouped_counterfactual)
+    monkeypatch.setattr(
+        se,
+        "diagnostic_edge_source_set_probability",
+        lambda *args, **kwargs: 0.80,
+    )
+    monkeypatch.setattr(engine, "score_counterfactual", recording_score_counterfactual)
+
+    explanation = se.compose_case_explanation(engine, case)
+
+    assert restart_runs == [0, 1, 2]
+    assert len(counterfactual_forwards) == len(explanation["factors"])
+    assert len(counterfactual_forwards) <= 25
+    assert explanation["factor_scope"] == "salient_counterfactual_factors"
+
+
+def test_composed_salient_factors_run_three_restarts_and_bounded_forwards(
+    monkeypatch,
+):
+    engine, case = _sage_case_fixture()
+    restart_runs = []
+    counterfactual_forwards = []
+    original_counterfactual = engine.score_counterfactual
+
+    def recording_explainer(*args, **kwargs):
+        restart_runs.extend(kwargs["restart_seeds"])
+        return _deterministic_member_explainer(*args, **kwargs)
+
+    def recording_counterfactual(context, factor):
+        counterfactual_forwards.append(factor.factor_id)
+        return original_counterfactual(context, factor)
+
+    monkeypatch.setattr(engine, "score_counterfactual", recording_counterfactual)
+
+    explanation = se.compose_case_explanation(
+        engine, case, member_explainer=recording_explainer
+    )
+
+    assert restart_runs == [0, 1, 2]
+    assert len(counterfactual_forwards) == len(explanation["factors"])
+    assert len(counterfactual_forwards) <= 25
+    assert explanation["factor_scope"] == "salient_counterfactual_factors"
+
+
 def test_cotravel_counterfactual_rebuilds_features_pooling_and_component():
     engine, _ = _explanation_fixture(bind_rank_reference=True)
     community = engine.community("target", SCORING_DAY)
