@@ -272,6 +272,16 @@ def test_v9_ui_adds_independent_simulated_catch_contract():
     assert "v9DailyCrossings" not in simulated_renderer
 
 
+def test_v9_ui_simulated_mode_toggle_defaults_to_cumulative():
+    ui = UI_MODULE_PATH.read_text()
+
+    assert 'id="v9-simulated-mode"' in ui
+    assert 'data-v="cumulative" class="on" aria-pressed="true"' in ui
+    assert 'data-v="daily" aria-pressed="false"' in ui
+    assert "const accessibleName=" in ui
+    assert "simMode" in ui.split("const accessibleName=", 1)[1].split(";", 1)[0]
+
+
 def test_v9_ui_accessibility_table_does_not_expand_results_tab():
     assert re.search(
         r"#tab-v9Results\s+table\.v9-sr-only\s*\{[^}]*\bdisplay:\s*block\s*;",
