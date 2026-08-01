@@ -28,6 +28,7 @@ from gnn.recovery_observability import (
 )
 from gnn.recovery_bundle import RecoveryBundleWriter
 from gnn.sage_explainer import (
+    CommunityScope,
     compose_case_explanation,
     json_safe,
     validate_explanation_payload,
@@ -211,57 +212,80 @@ def _build_exclusive_cases(
 ):
     """Build exact case records for one exclusive recovery cohort."""
     rows, scoring_days = _prepared_pool(pool)
-    cases = []
     people = rows["primary_person_id"].to_numpy(dtype=str)
-    for person_id in sorted(person_ids):
-        anchor = anchor_run.first_recovery[person_id]
-        same_day_rows = tuple(
-            int(index)
-            for index in np.flatnonzero(
-                (people == person_id)
-                & scoring_days.eq(anchor.scoring_day).to_numpy()
-            )
-        )
-        baseline_day = baseline_run.days.get(anchor.scoring_day)
-        hybrid_day = hybrid_run.days.get(anchor.scoring_day)
-        if baseline_day is None or hybrid_day is None:
-            raise ValueError("recovery anchor day is missing from a recovery run")
-        baseline_candidates = baseline_day.candidate_row_indices
-        hybrid_candidates = hybrid_day.candidate_row_indices
-        trace = build_decision_trace(
+    return [
+        _build_exclusive_case(
+            rows,
+            scoring_days,
+            people,
+            person_id,
+            anchor_run,
+            baseline_run,
+            hybrid_run,
             reference,
-            row_index=anchor.row_index,
-            baseline_candidate_row_indices=baseline_candidates,
-            hybrid_candidate_row_indices=hybrid_candidates,
-            daily_budget=hybrid_run.daily_budget,
+            explanation_engine,
         )
-        categories = tuple(
-            sorted(
-                set(
-                    explanation_engine.relationship_categories(
-                        person_id, anchor.scoring_day
-                    )
+        for person_id in sorted(person_ids)
+    ]
+
+
+def _build_exclusive_case(
+    rows,
+    scoring_days,
+    people,
+    person_id,
+    anchor_run,
+    baseline_run,
+    hybrid_run,
+    reference,
+    explanation_engine,
+):
+    """Build one recovery case so construction failures can be retried."""
+    anchor = anchor_run.first_recovery[person_id]
+    same_day_rows = tuple(
+        int(index)
+        for index in np.flatnonzero(
+            (people == person_id)
+            & scoring_days.eq(anchor.scoring_day).to_numpy()
+        )
+    )
+    baseline_day = baseline_run.days.get(anchor.scoring_day)
+    hybrid_day = hybrid_run.days.get(anchor.scoring_day)
+    if baseline_day is None or hybrid_day is None:
+        raise ValueError("recovery anchor day is missing from a recovery run")
+    baseline_candidates = baseline_day.candidate_row_indices
+    hybrid_candidates = hybrid_day.candidate_row_indices
+    trace = build_decision_trace(
+        reference,
+        row_index=anchor.row_index,
+        baseline_candidate_row_indices=baseline_candidates,
+        hybrid_candidate_row_indices=hybrid_candidates,
+        daily_budget=hybrid_run.daily_budget,
+    )
+    categories = tuple(
+        sorted(
+            set(
+                explanation_engine.relationship_categories(
+                    person_id, anchor.scoring_day
                 )
             )
         )
-        cases.append(
-            HybridOnlyCase(
-                person_id=person_id,
-                anchor=anchor,
-                baseline_rank=int(trace["baseline_rank"]),
-                gnn_rank=int(trace["seed0_gnn_rank"]),
-                hybrid_rank=int(trace["seed0_hybrid_rank"]),
-                baseline_percentile=float(trace["baseline_percentile"]),
-                gnn_percentile=float(trace["seed0_gnn_percentile"]),
-                relationship_categories=categories,
-                scoring_period=anchor.scoring_day.strftime("%Y-%m"),
-                same_day_person_row_indices=same_day_rows,
-                baseline_candidate_row_indices=baseline_candidates,
-                hybrid_candidate_row_indices=hybrid_candidates,
-                decision_trace=trace,
-            )
-        )
-    return cases
+    )
+    return HybridOnlyCase(
+        person_id=person_id,
+        anchor=anchor,
+        baseline_rank=int(trace["baseline_rank"]),
+        gnn_rank=int(trace["seed0_gnn_rank"]),
+        hybrid_rank=int(trace["seed0_hybrid_rank"]),
+        baseline_percentile=float(trace["baseline_percentile"]),
+        gnn_percentile=float(trace["seed0_gnn_percentile"]),
+        relationship_categories=categories,
+        scoring_period=anchor.scoring_day.strftime("%Y-%m"),
+        same_day_person_row_indices=same_day_rows,
+        baseline_candidate_row_indices=baseline_candidates,
+        hybrid_candidate_row_indices=hybrid_candidates,
+        decision_trace=trace,
+    )
 
 
 def build_hybrid_only_cases(
@@ -363,6 +387,66 @@ def _community_evidence(community):
 
 
 def _validate_complete_community(community, snapshot):
+    if isinstance(community, CommunityScope):
+        if community.complete is not True:
+            raise ValueError("incomplete explanation community")
+        if community.scoring_day != snapshot:
+            raise ValueError("community scoring day does not match its case")
+        for value, field_name in (
+            (community.component_id, "component_id"),
+            (community.community_key, "community_key"),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"complete community requires {field_name}")
+        for node in community.iter_nodes():
+            caught_before = node.get("caught_before_snapshot", False)
+            if not isinstance(caught_before, bool):
+                raise ValueError("caught-before-snapshot evidence must be boolean")
+            caught_time = node.get("caught_label_available_time")
+            if caught_before:
+                if not _as_utc_timestamp(
+                    caught_time, field_name="caught label available time"
+                ) < snapshot:
+                    raise ValueError("caught evidence is not strictly as-of")
+            elif caught_time is not None:
+                raise ValueError(
+                    "caught label time is exposed without strictly as-of caught evidence"
+                )
+        provenance = iter(community.iter_provenance())
+        for edge in community.iter_edges():
+            source_row_ids = edge.get("source_row_ids")
+            if (
+                not isinstance(source_row_ids, list)
+                or not source_row_ids
+                or len(set(source_row_ids)) != len(source_row_ids)
+            ):
+                raise ValueError(
+                    "edge strictly as-of provenance requires unique source_row_ids"
+                )
+            for source_row_id in source_row_ids:
+                try:
+                    observation = next(provenance)
+                except StopIteration as exc:
+                    raise ValueError(
+                        "edge evidence lacks strictly as-of provenance"
+                    ) from exc
+                if (
+                    observation.get("edge_id") != edge["edge_id"]
+                    or observation.get("source_row_id") != source_row_id
+                ):
+                    raise ValueError(
+                        "edge strictly as-of observations disagree with source_row_ids"
+                    )
+                if not _as_utc_timestamp(
+                    observation.get("available_time"),
+                    field_name="edge available_time",
+                ) < snapshot:
+                    raise ValueError("edge evidence is not strictly as-of")
+        try:
+            next(provenance)
+        except StopIteration:
+            return community
+        raise ValueError("provenance observations reference an unknown edge")
     if not isinstance(community, Mapping) or community.get("complete") is not True:
         raise ValueError("incomplete explanation community")
     community_snapshot = _as_utc_timestamp(
@@ -505,6 +589,16 @@ def _published_community(community, scoring_day):
 
 
 def _store_community(communities, source_communities, community, scoring_day):
+    if not isinstance(community, Mapping):
+        raise ValueError("community must be an object")
+    materialized_records = sum(
+        len(community.get(field, ()))
+        for field in ("nodes", "edges", "provenance_expansions")
+    )
+    if materialized_records > 10_000:
+        raise ValueError(
+            "legacy materialization limit exceeded; use the streaming bundle path"
+        )
     source_key, key, detached = _published_community(community, scoring_day)
     prior_source = source_communities.get(source_key)
     if prior_source is not None and prior_source != detached:
@@ -593,8 +687,10 @@ def explain_representatives(
 
 
 def _explain_case_with_narrative(case, explanation_engine, narrative_builder):
+    raw_explanation = explain_case(explanation_engine, case)
+    community_scope = getattr(raw_explanation, "community_scope", None)
     explanation = _detached_json_object(
-        explain_case(explanation_engine, case),
+        raw_explanation,
         field_name="explanation",
     )
     if (
@@ -622,6 +718,8 @@ def _explain_case_with_narrative(case, explanation_engine, narrative_builder):
     _validate_grounded_narrative(fact_packet, narrative)
     explanation["llm_narrative"] = narrative
     _validate_complete_explanation(explanation)
+    if community_scope is not None:
+        explanation["_community_scope"] = community_scope
     return explanation
 
 
@@ -1029,6 +1127,17 @@ def _bundle_case_record(case, cohort, community_key, explanation=None):
 
 def _community_stream_source(community):
     """Split canonical records from raw observations using one-shot iterators."""
+    if isinstance(community, CommunityScope):
+        return {
+            "complete": True,
+            "scoring_day": community.scoring_day.isoformat(),
+            "component_id": community.component_id,
+            "community_key": community.community_key,
+            "nodes": community.iter_nodes(),
+            "edges": community.iter_edges(),
+            "provenance_observations": community.iter_provenance(),
+            "provenance_expansions": iter(()),
+        }
     key = community["community_key"]
 
     def nodes():
@@ -1041,6 +1150,23 @@ def _community_stream_source(community):
         for edge in community.get("edges", ()):
             record = dict(edge)
             record.pop("observations", None)
+            source_row_ids = record.get("source_row_ids")
+            if isinstance(source_row_ids, list):
+                # A giant/dense community edge may be bounded to
+                # MAX_LOCAL_SOURCE_ROWS_PER_EDGE, leaving source_row_count as the
+                # full untruncated total while source_row_ids (and the matching
+                # observations) hold only the bounded subset. The recovery bundle
+                # requires day-membership source_row_count == len(source_row_ids),
+                # so normalize to the bounded count here and preserve the true
+                # total under complete_source_row_count, exactly as the overlay
+                # stream does for attribution edges.
+                record["complete_source_row_count"] = int(
+                    record.get(
+                        "complete_source_row_count",
+                        record.get("source_row_count", len(source_row_ids)),
+                    )
+                )
+                record["source_row_count"] = len(source_row_ids)
             yield record
 
     def provenance():
@@ -1076,9 +1202,26 @@ def _overlay_stream_source(explanation, community, expansions):
                 raise ValueError(
                     f"attribution edge {edge_id!r} is absent from its community"
                 )
+            projected_source_row_ids = list(canonical["source_row_ids"])
             yield {
                 **dict(attribution),
-                "source_row_ids": list(canonical["source_row_ids"]),
+                "source_row_ids": projected_source_row_ids,
+                "source_row_count": len(projected_source_row_ids),
+                "complete_source_row_count": int(
+                    attribution.get(
+                        "complete_source_row_count",
+                        canonical.get(
+                            "source_row_count", len(projected_source_row_ids)
+                        ),
+                    )
+                ),
+                "source_rows_truncated": (
+                    attribution.get(
+                        "source_rows_truncated",
+                        canonical.get("source_rows_truncated", False),
+                    )
+                    is True
+                ),
                 "observations": [
                     dict(observation)
                     for observation in canonical.get("observations", ())
@@ -1099,6 +1242,7 @@ def _recovery_run_fingerprint(
     *,
     corpus_identity,
     seeds,
+    recovery_run_identity=None,
 ):
     material_builder = getattr(
         explanation_engine, "observability_fingerprint_material", None
@@ -1110,9 +1254,17 @@ def _recovery_run_fingerprint(
     material = _detached_json_object(
         material_builder(), field_name="engine fingerprint material"
     )
+    run_identity = (
+        {"corpus_identity": str(corpus_identity)}
+        if recovery_run_identity is None
+        else _detached_json_object(
+            recovery_run_identity, field_name="recovery run identity"
+        )
+    )
     return {
         "schema_version": "1.0",
         "corpus_identity": str(corpus_identity),
+        "run_identity": run_identity,
         "engine": material,
         "policy": {
             "observability_seed": 0,
@@ -1141,6 +1293,7 @@ def build_observability_bundle(
     staging_root,
     final_root,
     corpus_identity,
+    recovery_run_identity=None,
     explanation_limit=None,
     inspections_per_day=5,
     narrative_builder=generate_narrative,
@@ -1193,29 +1346,20 @@ def build_observability_bundle(
     )
     overlap = recovery_overlap(baseline_run, hybrid_run)
     _validate_seed0_recovery_overlap(seed_recovery, overlap)
-    hybrid_cases = build_hybrid_only_cases(
-        rows,
-        overlap,
-        baseline_run,
-        hybrid_run,
-        reference,
-        explanation_engine,
-    )
-    baseline_cases = build_baseline_only_cases(
-        rows,
-        overlap,
-        baseline_run,
-        hybrid_run,
-        reference,
-        explanation_engine,
-    )
-    if limit is not None and limit < len(hybrid_cases):
+    expected_hybrid_case_ids = {
+        f"case:{person_id}" for person_id in overlap.hybrid_only_ids
+    }
+    expected_baseline_case_ids = {
+        f"case:{person_id}" for person_id in overlap.baseline_only_ids
+    }
+    if limit is not None and limit < len(expected_hybrid_case_ids):
         raise ValueError("explanation_limit must cover the complete Hybrid-only cohort")
 
     run_fingerprint = _recovery_run_fingerprint(
         explanation_engine,
         corpus_identity=corpus_identity,
         seeds=seeds,
+        recovery_run_identity=recovery_run_identity,
     )
     fingerprint_bytes = json.dumps(
         run_fingerprint, sort_keys=True, separators=(",", ":")
@@ -1228,90 +1372,117 @@ def build_observability_bundle(
         sidecar_prefix="recovery",
     )
 
+    people = rows["primary_person_id"].to_numpy(dtype=str)
     scheduled = [
-        (case, "hybrid_only") for case in hybrid_cases
+        (person_id, "hybrid_only", hybrid_run)
+        for person_id in overlap.hybrid_only_ids
     ] + [
-        (case, "baseline_only") for case in baseline_cases
+        (person_id, "baseline_only", baseline_run)
+        for person_id in overlap.baseline_only_ids
     ]
     scheduled.sort(
         key=lambda item: (
-            item[0].anchor.scoring_day,
+            item[2].first_recovery[item[0]].scoring_day,
             0 if item[1] == "hybrid_only" else 1,
-            item[0].person_id,
+            item[0],
         )
     )
-    for scoring_day, day_items in groupby(
-        scheduled, key=lambda item: item[0].anchor.scoring_day
-    ):
+
+    def process_descriptor(descriptor, phase):
+        person_id, cohort, anchor_run = descriptor
+        anchor = anchor_run.first_recovery[person_id]
+        case_id = f"case:{person_id}"
+        if writer.has_completed_case(case_id, cohort):
+            return True
+        if writer.case_attempt_state(case_id)[phase] != "pending":
+            return False
+        writer.begin_case_attempt(case_id, phase)
         try:
-            for case, cohort in day_items:
-                case_id = f"case:{case.person_id}"
-                if writer.has_completed_case(case_id, cohort):
-                    continue
-                try:
-                    if cohort == "hybrid_only":
-                        explanation = _explain_case_with_narrative(
-                            case, explanation_engine, narrative_builder
-                        )
-                        community = explanation.pop("community")
-                        expansions = explanation.pop(
-                            "provenance_expansions", []
-                        )
-                        _validate_complete_community(
-                            community, case.anchor.scoring_day
-                        )
-                        community_key = community["community_key"]
-                        if community_key not in writer.community_index:
-                            writer.write_community(
-                                _community_stream_source(community)
-                            )
-                        explanation["community_key"] = community_key
-                        explanation["provenance_expansion_ids"] = [
-                            expansion["expansion_id"]
-                            for expansion in expansions
-                        ]
-                        case_record = _bundle_case_record(
-                            case, cohort, community_key, explanation
-                        )
-                        writer.write_case(
-                            cohort,
-                            case_record,
-                            explanation=explanation,
-                            validation_metadata=explanation["llm_narrative"],
-                            overlay_evidence=_overlay_stream_source(
-                                explanation, community, expansions
-                            ),
-                        )
-                    else:
-                        community = explanation_engine.community(
-                            case.person_id, case.anchor.scoring_day
-                        )
-                        _validate_complete_community(
-                            community, case.anchor.scoring_day
-                        )
-                        community_key = community["community_key"]
-                        if community_key not in writer.community_index:
-                            writer.write_community(
-                                _community_stream_source(community)
-                            )
-                        writer.write_case(
-                            cohort,
-                            _bundle_case_record(case, cohort, community_key),
-                        )
-                except Exception as error:
-                    writer.record_failure(
-                        {
-                            "case_id": case_id,
-                            "cohort": cohort,
-                            "person_id": case.person_id,
-                            "event_id": case.anchor.event_id,
-                            "reason_code": type(error).__name__,
-                            "message": str(error),
-                        }
-                    )
-                    raise
-        finally:
-            explanation_engine.release_snapshot(scoring_day)
+            case = _build_exclusive_case(
+                rows,
+                scoring_days,
+                people,
+                person_id,
+                anchor_run,
+                baseline_run,
+                hybrid_run,
+                reference,
+                explanation_engine,
+            )
+            if cohort == "hybrid_only":
+                explanation = _explain_case_with_narrative(
+                    case, explanation_engine, narrative_builder
+                )
+                local_community = explanation.pop("community")
+                community = explanation.pop("_community_scope", local_community)
+                expansions = explanation.pop("provenance_expansions", [])
+                _validate_complete_community(community, case.anchor.scoring_day)
+                community_key = (
+                    community.community_key
+                    if isinstance(community, CommunityScope)
+                    else community["community_key"]
+                )
+                if community_key not in writer.community_index:
+                    writer.write_community(_community_stream_source(community))
+                explanation["community_key"] = community_key
+                explanation["provenance_expansion_ids"] = [
+                    expansion["expansion_id"] for expansion in expansions
+                ]
+                writer.write_case(
+                    cohort,
+                    _bundle_case_record(case, cohort, community_key, explanation),
+                    explanation=explanation,
+                    validation_metadata=explanation["llm_narrative"],
+                    overlay_evidence=_overlay_stream_source(
+                        explanation, local_community, expansions
+                    ),
+                )
+            else:
+                community = explanation_engine.community(
+                    case.person_id, case.anchor.scoring_day
+                )
+                _validate_complete_community(community, case.anchor.scoring_day)
+                community_key = (
+                    community.community_key
+                    if isinstance(community, CommunityScope)
+                    else community["community_key"]
+                )
+                if community_key not in writer.community_index:
+                    writer.write_community(_community_stream_source(community))
+                writer.write_case(
+                    cohort, _bundle_case_record(case, cohort, community_key)
+                )
+            return True
+        except Exception as error:
+            writer.record_failure(
+                {
+                    "case_id": case_id,
+                    "cohort": cohort,
+                    "person_id": person_id,
+                    "event_id": anchor.event_id,
+                    "reason_code": type(error).__name__,
+                    "message": str(error),
+                }
+            )
+            return False
+
+    def run_pass(descriptors, phase):
+        failures = []
+        for scoring_day, day_items in groupby(
+            descriptors,
+            key=lambda item: item[2].first_recovery[item[0]].scoring_day,
+        ):
+            try:
+                for descriptor in day_items:
+                    if not process_descriptor(descriptor, phase):
+                        failures.append(descriptor)
+            finally:
+                explanation_engine.release_snapshot(scoring_day)
+        return failures
+
+    retry_descriptors = run_pass(scheduled, "first_pass")
+    if retry_descriptors:
+        run_pass(retry_descriptors, "deferred_retry")
 
     policy = {
         "observability_seed": 0,
@@ -1324,10 +1495,8 @@ def build_observability_bundle(
     summary = dict(overlap.summary)
     summary["seed_level_unique_person_recovery"] = seed_recovery
     manifest = writer.finalize(
-        expected_hybrid_case_ids=[f"case:{case.person_id}" for case in hybrid_cases],
-        expected_baseline_case_ids=[
-            f"case:{case.person_id}" for case in baseline_cases
-        ],
+        expected_hybrid_case_ids=expected_hybrid_case_ids,
+        expected_baseline_case_ids=expected_baseline_case_ids,
         policy=policy,
         summary=summary,
     )

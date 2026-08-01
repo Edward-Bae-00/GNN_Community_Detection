@@ -32,6 +32,7 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
 #tab-v9Results .v9-recovery-case-top { display: flex; justify-content: space-between; gap: 8px; color: var(--text1); font-size: 11px; font-weight: 700; }
 #tab-v9Results .v9-recovery-case-ranks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 8px; font-family: var(--font-mono); font-size: 9px; }
 #tab-v9Results .v9-recovery-case-meta { margin-top: 7px; color: var(--text2); font-size: 9px; line-height: 1.35; }
+#tab-v9Results .v9-recovery-case-evidence { margin-top: 4px; color: var(--accent-hover); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 #tab-v9Results .v9-recovery-detail { min-width: 0; padding: 18px; }
 #tab-v9Results .v9-recovery-case-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
 #tab-v9Results .v9-recovery-case-header h4 { margin: 0 0 4px; color: var(--text1); font-size: 15px; }
@@ -53,6 +54,22 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
 #tab-v9Results .v9-recovery-narrative { margin-top: 12px; padding: 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
 #tab-v9Results .v9-recovery-narrative h5 { margin: 0 0 8px; color: var(--text1); font-size: 11px; }
 #tab-v9Results .v9-recovery-narrative p { margin: 6px 0; color: var(--text2); font-size: 11px; line-height: 1.55; }
+#tab-v9Results .v9-attribution-panel { margin-top: 12px; padding: 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+#tab-v9Results .v9-attribution-panel h5 { margin: 0 0 4px; color: var(--text1); font-size: 11px; }
+#tab-v9Results .v9-attribution-caveat { margin: 0 0 10px; color: var(--text2); font-size: 10px; line-height: 1.45; }
+#tab-v9Results .v9-attribution-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+#tab-v9Results .v9-attribution-section { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--elevated); }
+#tab-v9Results .v9-attribution-section h6 { margin: 0 0 8px; color: var(--text1); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+#tab-v9Results .v9-attribution-row { display: grid; gap: 5px; padding: 7px 0; border-top: 1px solid var(--border); color: var(--text2); font-size: 10px; }
+#tab-v9Results .v9-attribution-row:first-of-type { border-top: 0; padding-top: 0; }
+#tab-v9Results .v9-attribution-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+#tab-v9Results .v9-attribution-rank { color: var(--accent-hover); font-family: var(--font-mono); font-size: 9px; font-weight: 700; }
+#tab-v9Results .v9-attribution-id { min-width: 0; overflow-wrap: anywhere; color: var(--text1); font-family: var(--font-mono); }
+#tab-v9Results .v9-attribution-connection { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+#tab-v9Results .v9-attribution-relation { padding: 2px 5px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--accent-hover); font-size: 8px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+#tab-v9Results .v9-attribution-weight { color: var(--text1); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+#tab-v9Results .v9-attribution-bar { height: 6px; overflow: hidden; border-radius: 999px; background: var(--sunk); }
+#tab-v9Results .v9-attribution-bar-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
 #tab-v9Results .v9-recovery-source-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 #tab-v9Results .v9-recovery-source { padding: 2px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font-family: var(--font-mono); font-size: 8px; }
 #tab-v9Results .v9-recovery-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px; border-bottom: 1px solid var(--border); }
@@ -91,7 +108,7 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
   #tab-v9Results .v9-recovery-header, #tab-v9Results .v9-recovery-case-header { display: block; }
   #tab-v9Results .v9-recovery-scope { max-width: none; margin-top: 12px; }
   #tab-v9Results .v9-recovery-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #tab-v9Results .v9-recovery-filter-grid, #tab-v9Results .v9-recovery-case-list, #tab-v9Results .v9-recovery-evidence-grid { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-filter-grid, #tab-v9Results .v9-recovery-case-list, #tab-v9Results .v9-recovery-evidence-grid, #tab-v9Results .v9-attribution-grid { grid-template-columns: 1fr; }
   #tab-v9Results .v9-recovery-detail { padding: 12px; }
   #tab-v9Results .v9-recovery-ranks { margin-top: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #tab-v9Results .v9-recovery-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -281,6 +298,140 @@ function validateRecoveryNarrative(narrative){
   };
 }
 
+function recoveryAttributionRank(value){
+  return Number.isSafeInteger(value)&&value>0?value:null;
+}
+
+function recoveryAttributionRows(records,kind){
+  if(records===undefined) return [];
+  if(!Array.isArray(records)) return null;
+  const rows=[];
+  for(const record of records){
+    if(!recoveryIsRecord(record)||!recoveryFiniteUnit(record.explainer_median)){
+      continue;
+    }
+    const rank=recoveryAttributionRank(record.rank);
+    if(kind==='node'){
+      if(!recoveryNonBlankString(record.node_id)) continue;
+      rows.push({
+        rank,
+        id:record.node_id.trim(),
+        weight:record.explainer_median
+      });
+    }else{
+      const relation=recoveryNonBlankString(record.relation)
+        ?record.relation.trim():recoveryNonBlankString(record.edge_type)
+          ?record.edge_type.trim():null;
+      if(!recoveryNonBlankString(record.edge_id)
+          ||!recoveryNonBlankString(record.u)
+          ||!recoveryNonBlankString(record.v)
+          ||!relation) continue;
+      rows.push({
+        rank,
+        id:record.edge_id.trim(),
+        u:record.u.trim(),
+        v:record.v.trim(),
+        relation,
+        weight:record.explainer_median
+      });
+    }
+  }
+  const useRanks=rows.length>0&&rows.every(row=>row.rank!==null)
+    &&new Set(rows.map(row=>row.rank)).size===rows.length;
+  rows.sort((left,right)=>useRanks
+    ?left.rank-right.rank||recoveryCompareId(left.id,right.id)
+    :right.weight-left.weight||recoveryCompareId(left.id,right.id));
+  return rows.slice(0,3).map((row,index)=>kind==='node'?{
+    rank:index+1,
+    nodeId:row.id,
+    weight:row.weight
+  }:{
+    rank:index+1,
+    edgeId:row.id,
+    u:row.u,
+    v:row.v,
+    relation:row.relation,
+    weight:row.weight
+  });
+}
+
+function buildHighestAttributionViewModel(explanation){
+  const attributions=recoveryIsRecord(explanation)?explanation.attributions:null;
+  if(!recoveryIsRecord(attributions)){
+    return recoveryUnavailable('no-valid-attribution-ranking');
+  }
+  const nodes=recoveryAttributionRows(attributions.top_local_nodes,'node');
+  const connections=recoveryAttributionRows(attributions.top_edges,'edge');
+  if(nodes===null||connections===null){
+    return recoveryUnavailable('no-valid-attribution-ranking');
+  }
+  if(nodes.length===0&&connections.length===0){
+    return recoveryUnavailable('no-valid-attribution-ranking');
+  }
+  return {available:true,nodes,connections};
+}
+
+function recoveryAttributionBar(doc,weight,label){
+  const bar=recoveryElement(doc,'div','v9-attribution-bar');
+  bar.setAttribute('role','progressbar');
+  bar.setAttribute('aria-label',label);
+  bar.setAttribute('aria-valuemin','0');
+  bar.setAttribute('aria-valuemax','1');
+  bar.setAttribute('aria-valuenow',String(weight));
+  const fill=recoveryElement(doc,'span','v9-attribution-bar-fill');
+  fill.style.width=String(weight*100)+'%';
+  bar.appendChild(fill);
+  return bar;
+}
+
+function renderHighestAttributionPanel(doc,explanation){
+  const panel=recoveryElement(doc,'section','v9-attribution-panel');
+  panel.setAttribute('aria-label','Highest-attribution evidence');
+  panel.appendChild(recoveryElement(doc,'h5','', 'Highest-attribution evidence'));
+  panel.appendChild(recoveryElement(doc,'p','v9-attribution-caveat',
+    'Unsigned median attribution weights show salience across deterministic explainer restarts, not causal direction.'));
+  const view=buildHighestAttributionViewModel(explanation);
+  if(!view.available){
+    panel.appendChild(recoveryElement(doc,'div','v9-recovery-status',
+      'Attribution ranking unavailable in this artifact.'));
+    return panel;
+  }
+  const grid=recoveryElement(doc,'div','v9-attribution-grid');
+  const sections=[['Nodes',view.nodes],['Connections',view.connections]];
+  for(const [title,rows] of sections){
+    const section=recoveryElement(doc,'section','v9-attribution-section');
+    section.appendChild(recoveryElement(doc,'h6','',title));
+    if(!rows.length){
+      section.appendChild(recoveryElement(doc,'div','v9-recovery-status',
+        'No valid ranked data is available.'));
+    }
+    for(const row of rows){
+      const item=recoveryElement(doc,'div','v9-attribution-row');
+      const head=recoveryElement(doc,'div','v9-attribution-row-head');
+      const label=title==='Nodes'?row.nodeId:row.u+' ↔ '+row.v;
+      const identifier=recoveryElement(doc,'div','v9-attribution-connection');
+      identifier.appendChild(recoveryElement(doc,'span','v9-attribution-rank','#'+row.rank));
+      identifier.appendChild(recoveryElement(doc,'span','v9-attribution-id',label));
+      if(title==='Connections'){
+        identifier.appendChild(recoveryElement(doc,'span','v9-attribution-relation',row.relation));
+        identifier.appendChild(recoveryElement(doc,'span','v9-attribution-id','edge '+row.edgeId));
+      }
+      head.appendChild(identifier);
+      head.appendChild(recoveryElement(doc,'span','v9-attribution-weight',row.weight.toFixed(3)));
+      item.appendChild(head);
+      item.appendChild(recoveryAttributionBar(doc,row.weight,
+        title==='Nodes'
+          ?'Nodes attribution weight for '+label
+          :'Connections attribution weight for '+label+' relation '+row.relation
+            +' edge '+row.edgeId));
+      section.appendChild(item);
+    }
+    grid.appendChild(section);
+  }
+  panel.appendChild(grid);
+  return panel;
+}
+
 function validateRecoveryEvidenceBoundary(explanation,scoringDay){
   const boundary=recoveryIsRecord(explanation)
     ?explanation.evidence_boundary:null;
@@ -307,12 +458,18 @@ function filterAndSortRecoveryCases(cases,options){
   const allowedSorts=['hybrid_rank_uplift','gnn_percentile_uplift'];
   const sortBy=allowedSorts.includes(settings.sortBy)
     ?settings.sortBy:'hybrid_rank_uplift';
+  const explainedIds=Array.isArray(settings.explainedIds)
+    ?new Set(settings.explainedIds.filter(recoveryNonBlankString)):null;
+  const evidence=settings.evidence==='explained'&&explainedIds?'explained':'all';
   return cases.filter(item=>recoveryValidCase(item)
       &&(stable==='all'||item.stable_factor_status===stable)
-      &&(relation==='all'||item.relationship_categories.includes(relation)))
+      &&(relation==='all'||item.relationship_categories.includes(relation))
+      &&(evidence==='all'||explainedIds.has(item.case_id)))
     .slice()
     .sort((left,right)=>
-      right[sortBy]-left[sortBy]
+      (explainedIds?Number(explainedIds.has(right.case_id))
+        -Number(explainedIds.has(left.case_id)):0)
+      ||right[sortBy]-left[sortBy]
       ||right.hybrid_rank_uplift-left.hybrid_rank_uplift
       ||recoveryCompareId(left.person_id,right.person_id)
       ||recoveryCompareId(left.case_id,right.case_id));
@@ -373,6 +530,42 @@ function recoverySameIds(values,expected){
     &&values.slice().sort().join('\u0000')===expected.slice().sort().join('\u0000');
 }
 
+function recoveryValidStageRule(stage,nodeIds,edgeIds){
+  if(!recoveryIsRecord(stage.edge_rule)){
+    return recoverySameIds(stage.node_ids,nodeIds)
+      &&recoverySameIds(stage.edge_ids,edgeIds)
+      &&recoveryUniqueStrings(stage.emphasized_edge_ids)
+      &&stage.emphasized_edge_ids.every(id=>edgeIds.includes(id));
+  }
+  if(stage.node_ids!==undefined||stage.edge_ids!==undefined
+      ||stage.emphasized_edge_ids!==undefined) return false;
+  const rule=stage.edge_rule;
+  if(stage.stage_id==='first_hop') return rule.max_message_hop===1;
+  if(stage.stage_id==='second_hop') return rule.max_message_hop===2;
+  if(stage.stage_id==='component_pool') return rule.edge_type==='COTRAVEL'
+    &&rule.both_pooled_members===true;
+  return stage.stage_id==='rank_fusion'&&rule.match_none===true;
+}
+
+function recoveryStageEmphasizes(stage,edge,nodesById){
+  if(Array.isArray(stage.emphasized_edge_ids)){
+    return stage.emphasized_edge_ids.includes(edge.edge_id);
+  }
+  const rule=stage.edge_rule;
+  if(rule.match_none===true) return false;
+  if(Number.isSafeInteger(rule.max_message_hop)){
+    return Number.isSafeInteger(edge.message_hop)
+      &&edge.message_hop<=rule.max_message_hop;
+  }
+  if(rule.edge_type==='COTRAVEL'&&rule.both_pooled_members===true){
+    const left=nodesById.get(edge.u);
+    const right=nodesById.get(edge.v);
+    return String(edge.edge_type||'').toUpperCase()==='COTRAVEL'
+      &&left&&right&&left.pooled_member===true&&right.pooled_member===true;
+  }
+  return false;
+}
+
 function buildCommunityDrawCommands(explanation,options){
   const stageView=buildCommunityStageView(explanation,options);
   if(!stageView.available) return stageView;
@@ -390,10 +583,7 @@ function buildCommunityDrawCommands(explanation,options){
   for(const stage of explanation.flow_stages){
     if(!recoveryIsRecord(stage)||!requiredStages.includes(stage.stage_id)
         ||stagesById.has(stage.stage_id)
-        ||!recoverySameIds(stage.node_ids,stageView.nodeIds)
-        ||!recoverySameIds(stage.edge_ids,stageView.edgeIds)
-        ||!recoveryUniqueStrings(stage.emphasized_edge_ids)
-        ||stage.emphasized_edge_ids.some(id=>!stageView.edgeIds.includes(id))){
+        ||!recoveryValidStageRule(stage,stageView.nodeIds,stageView.edgeIds)){
       return recoveryUnavailable('invalid-flow-stages');
     }
     stagesById.set(stage.stage_id,stage);
@@ -402,7 +592,7 @@ function buildCommunityDrawCommands(explanation,options){
     return recoveryUnavailable('invalid-flow-stages');
   }
   const selectedStage=stagesById.get(stageView.stageId);
-  const emphasized=new Set(selectedStage.emphasized_edge_ids);
+  const nodesById=new Map(community.nodes.map(node=>[node.node_id,node]));
   const query=stageView.query.trim().toLowerCase();
   const nodes=community.nodes.slice().sort((a,b)=>
     recoveryCompareId(a.node_id,b.node_id)).map(node=>({
@@ -423,7 +613,8 @@ function buildCommunityDrawCommands(explanation,options){
       importance:typeof edge.explainer_median==='number'
         &&Number.isFinite(edge.explainer_median)
         ?Math.max(0,Math.min(1,edge.explainer_median)):0,
-      emphasized:stageView.mode==='all'||emphasized.has(edge.edge_id)
+      emphasized:stageView.mode==='all'
+        ||recoveryStageEmphasizes(selectedStage,edge,nodesById)
     }));
 
   const provenanceNodes=[];
@@ -880,6 +1071,7 @@ function buildRecoveryManifestViewModel(artifact){
     },
     caseIndex:artifact.case_index,
     communityIndex:artifact.community_index,
+    catalogIndex:recoveryIsRecord(artifact.catalog_index)?artifact.catalog_index:{},
     sidecarBase,
     defaultCohort,
     defaultCaseId:(cohorts[defaultCohort][0]||{}).case_id||null
@@ -890,6 +1082,8 @@ function recoverySidecarUrl(view,path){
   const base=view.sidecarBase.endsWith('/')?view.sidecarBase:view.sidecarBase+'/';
   return base+String(path).replace(/^\/+/, '');
 }
+
+const recoveryCatalogChunkCache=new Map();
 
 async function recoveryFetchJson(url,expectedHash){
   if(typeof expectedHash!=='string'||!/^[0-9a-f]{64}$/.test(expectedHash)){
@@ -956,6 +1150,25 @@ function recoveryValidateChunkOwner(owner){
     }
     if(countField&&owner[countField]!==expectedOffset)return false;
   }
+  if(owner.day_view!==undefined){
+    if(!recoveryIsRecord(owner.day_view))return false;
+    const daySpecs=[
+      ['node_status_chunks','node_count'],
+      ['edge_membership_chunks','edge_count']
+    ];
+    for(const [field,countField] of daySpecs){
+      const refs=owner.day_view[field];
+      if(!Array.isArray(refs))return false;
+      let expectedOffset=0;
+      for(const ref of refs){
+        if(!recoveryIsRecord(ref)||!recoveryNonBlankString(ref.path)
+            ||!recoveryNonBlankString(ref.sha256)
+            ||ref.offset!==expectedOffset||!recoverySafeInteger(ref.count,false))return false;
+        expectedOffset+=ref.count;
+      }
+      if(owner[countField]!==expectedOffset)return false;
+    }
+  }
   return true;
 }
 
@@ -1013,6 +1226,7 @@ function mountRecoveryExplorerV2(root,artifact,tools){
     const panels=recoveryElement(doc,'div','v9-recovery-v2-panels');
     if(state.cohort==='hybrid_only'){
       const explanation=data.explanation||{};
+      detail.appendChild(renderHighestAttributionPanel(doc,explanation));
       const narrative=explanation.llm_narrative||{};
       const attributions=explanation.attributions||{};
       const ledger=explanation.decision_ledger||{};
@@ -1283,7 +1497,59 @@ function mountRecoveryExplorerV2(root,artifact,tools){
     if(disposed||requestToken!==recoveryRequestToken)return;
     const rows=recoveryValidatedChunkRows(payload,ref,config[2]);
     if(rows===null)throw new Error('Chunk offset or count contract is invalid');
-    cache[index]=rows;
+    let resolvedRows=rows;
+    if(!overlay&&['node','edge','provenance'].includes(normalized)){
+      const kind=normalized==='node'?'nodes':normalized==='edge'?'edges':'provenance';
+      const catalog=view.catalogIndex&&view.catalogIndex[kind];
+      if(!recoveryIsRecord(catalog)||!Array.isArray(catalog.chunks)){
+        throw new Error('Normalized catalog index is missing');
+      }
+      const needed=new Map();
+      for(const row of rows){
+        const catalogId=row&&row.catalog_id;
+        const chunk=catalog.chunks.find(
+          candidate=>candidate.first_id<=catalogId&&catalogId<=candidate.last_id);
+        if(!chunk)throw new Error('Normalized catalog record is not indexed');
+        needed.set(chunk.path,chunk);
+      }
+      const recordsById=new Map();
+      await Promise.all(Array.from(needed.values()).map(async chunk=>{
+        const cacheKey=recoverySidecarUrl(view,chunk.path);
+        let records=recoveryCatalogChunkCache.get(cacheKey);
+        if(!records){
+          const catalogPayload=await recoveryFetchJson(cacheKey,chunk.sha256);
+          records=recoveryValidatedChunkRows(catalogPayload,chunk,'records');
+          if(records===null)throw new Error('Normalized catalog chunk is invalid');
+          recoveryCatalogChunkCache.set(cacheKey,records);
+        }
+        for(const entry of records)recordsById.set(entry.record_id,entry.record);
+      }));
+      resolvedRows=rows.map(row=>{
+        const detached={...row};delete detached.catalog_id;
+        return {...(recordsById.get(row.catalog_id)||{}),...detached};
+      });
+      if(disposed||requestToken!==recoveryRequestToken)return;
+    }
+    if(!overlay&&recoveryIsRecord(owner.day_view)
+        &&(normalized==='node'||normalized==='edge')){
+      const dayConfig=normalized==='node'
+        ?['node_status_chunks','node_statuses','node_id']
+        :['edge_membership_chunks','edge_memberships','edge_id'];
+      const dayRefs=owner.day_view[dayConfig[0]];
+      if(!Array.isArray(dayRefs)||!dayRefs[index]){
+        throw new Error('Normalized day-view chunk is missing');
+      }
+      const dayRef=dayRefs[index];
+      const dayPayload=await recoveryFetchJson(
+        recoverySidecarUrl(view,dayRef.path),dayRef.sha256);
+      if(disposed||requestToken!==recoveryRequestToken)return;
+      const dayRows=recoveryValidatedChunkRows(dayPayload,dayRef,dayConfig[1]);
+      if(dayRows===null)throw new Error('Day-view chunk offset or count contract is invalid');
+      const stateById=new Map(dayRows.map(row=>[row[dayConfig[2]],row]));
+      resolvedRows=resolvedRows.map(
+        row=>({...row,...(stateById.get(row[dayConfig[2]])||{})}));
+    }
+    cache[index]=resolvedRows;
     state.loadedNodeCount=Object.values(state.nodePages).reduce((sum,rows)=>sum+rows.length,0);
     state.loadedEdgeCount=Object.values(state.edgePages).reduce((sum,rows)=>sum+rows.length,0);
     state.loadedProvenanceCount=Object.values(state.provenancePages).reduce((sum,rows)=>sum+rows.length,0);
@@ -1364,6 +1630,7 @@ function mountV9RecoveryExplainer(root,artifact,tools){
     sortBy:'hybrid_rank_uplift',
     stableStatus:'all',
     relationshipCategory:'all',
+    evidence:'all',
     mode:'flow',
     stageId:'first_hop',
     selectedFactorId:null,
@@ -1474,6 +1741,10 @@ function mountV9RecoveryExplainer(root,artifact,tools){
       {value:'all',label:'All relationships'},
       ...relations.map(value=>({value,label:recoveryVisibleText(value)}))
     ],state.relationshipCategory));
+    filters.appendChild(recoverySelect(doc,'Evidence','evidence',[
+      {value:'all',label:'All cases'},
+      {value:'explained',label:'Validated evidence only'}
+    ],state.evidence));
     rail.appendChild(filters);
     rail.appendChild(recoveryElement(
       doc,'div','v9-recovery-case-count',
@@ -1502,6 +1773,11 @@ function mountV9RecoveryExplainer(root,artifact,tools){
         doc,'div','v9-recovery-case-meta',
         item.stable_factor_status+' / '+item.relationship_categories.join(' / ')
       ));
+      if(view.explanations.has(item.case_id)){
+        button.appendChild(recoveryElement(
+          doc,'div','v9-recovery-case-evidence','✓ evidence'
+        ));
+      }
       list.appendChild(button);
     }
     rail.appendChild(list);
@@ -1536,7 +1812,7 @@ function mountV9RecoveryExplainer(root,artifact,tools){
   function renderFactors(column,explanation){
     const panel=recoveryElement(doc,'section','v9-recovery-panel');
     const head=recoveryElement(doc,'div','v9-recovery-panel-head');
-    head.appendChild(recoveryElement(doc,'h5','','Measured factor effects'));
+    head.appendChild(recoveryElement(doc,'h5','','Salient counterfactual factors'));
     head.appendChild(recoveryElement(
       doc,'p','',
       'Signed effect is ablated rank minus original rank. Positive values mean removal worsened rank.'
@@ -1746,6 +2022,7 @@ function mountV9RecoveryExplainer(root,artifact,tools){
     const right=recoveryElement(doc,'div');
     renderFactors(left,explanation);
     renderNarrative(left,explanation);
+    left.appendChild(renderHighestAttributionPanel(doc,explanation));
     renderGraph(right,explanation);
     evidence.appendChild(left);
     evidence.appendChild(right);
@@ -1779,7 +2056,9 @@ function mountV9RecoveryExplainer(root,artifact,tools){
     const filtered=filterAndSortRecoveryCases(view.cases,{
       sortBy:state.sortBy,
       stableStatus:state.stableStatus,
-      relationshipCategory:state.relationshipCategory
+      relationshipCategory:state.relationshipCategory,
+      explainedIds:Array.from(view.explanations.keys()),
+      evidence:state.evidence
     });
     if(!filtered.some(item=>item.case_id===state.caseId)){
       state.caseId=filtered.length?filtered[0].case_id:null;
@@ -1844,6 +2123,7 @@ function mountV9RecoveryExplainer(root,artifact,tools){
     if(action==='sort') state.sortBy=control.value;
     if(action==='stable') state.stableStatus=control.value;
     if(action==='relation') state.relationshipCategory=control.value;
+    if(action==='evidence') state.evidence=control.value;
     if(action==='density') state.labelDensity=control.value;
     if(action){
       render();

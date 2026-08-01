@@ -195,3 +195,287 @@ when relational signal is present.**
 > This is a positive control showing a GNN exploits relational signal when the generative
 > process contains it. It does **not** change the honest V8 finding that in
 > the realistic regime the real signal is thin and the GNN's edge is marginal.
+
+## Unsupervised Anomaly Detection Improvements
+
+The regional Isolation Forest is a one-class anomaly detector: it learns a region-specific
+profile of normal tabular behavior, then flags rows with unusually low decision scores.
+The dashboard presents two tracks:
+
+1. **Strict unsupervised:** the forest fits without target labels and does not exclude
+   rows using the positive label. This is the deployable unsupervised mode.
+2. **Label-assisted benchmark:** known positive training rows are excluded from the fit;
+   training labels are used only for that exclusion. This is a diagnostic benchmark, not
+   a claim of label-free performance.
+
+For either track, the validation split supplies threshold-selection metrics; the selected
+threshold and its source are frozen before the held-out test split is scored. Test
+precision, recall, F1, positive prevalence, and predicted-positive rate therefore describe
+the frozen operating point. F1 is **not** maximized on the test set. Train exclusion counts
+make the assisted-vs-strict fitting difference explicit.
+
+The benchmark uses oracle identity resolution on synthetic data, so it does not measure
+entity-resolution error. That oracle identity is a substrate limitation and must not be
+read as deployable identity quality.
+
+## Caught-supervised deployability comparison (2026-07-16)
+
+The V9 anomaly-ranking comparison now uses three primary arms in artifact order, plus
+one appendix ablation:
+
+| Role | Arm ID | Fit signal | Feature count |
+|---|---|---|---:|
+| Primary A | `tabular_unlabeled` | unlabeled feature distribution | 14 |
+| Primary B | `relational_unlabeled` | unlabeled feature distribution | 18 (14 + 4 relational proxies) |
+| Primary C | `relational_caught_supervised` | as-of caught positives versus unlabeled (naive PU) | 18 (14 + 4 relational proxies) |
+| Appendix | `tabular_caught_supervised` | as-of caught positives versus unlabeled (naive PU) | 14 |
+
+The caught-supervised arms do **not** inherit a SCAR ranking guarantee. Retrospective
+V9 corpus diagnostics show why: among actual carrier events, the observed catch rate is
+**50.9% for organization members versus 27.4% for non-organization members**. Catching
+is feature-dependent, so the score can reflect historical enforcement propensity as well
+as carrier risk. Recovery of missed carriers is therefore an empirical held-out result,
+not a theorem about preserving the true-carrier ranking.
+
+### As-of label maturity
+
+The fit cutoff is January 1, 2024. At that boundary, **229** training outcomes are
+immature and **79** of those events eventually become caught. The operational rule is
+explicit: **immature -> unlabeled**. Across full V9, all **8,013** caught labels mature
+after their crossing, with delays of up to **28 days**. A caught-positive is available to
+fit only when the observed catch and its label-availability timestamp are strictly before
+the fit cutoff; future maturation is never backfilled into an earlier fit.
+
+### Frozen operating point and evaluation strata
+
+Every primary and ablation arm uses a label-free validation-score quantile as its
+**operating point**. This equalizes the alert-volume policy; it is not probability
+calibration and does not put scores on a shared probability scale. Scores and thresholds
+freeze before synthetic oracle truth is joined for retrospective evaluation.
+
+The retrospective target report separates:
+
+- all carrier events;
+- missed-at-this-event carriers;
+- no-prior-catch missed events;
+- lifetime-never-caught person recovery;
+- unique-person first-hit recovery; and
+- observed-catch enrichment precision and lift.
+
+This distinction matters empirically: the V9 test split contains **2,691**
+missed-at-event carrier events, and **213** are tied to people caught somewhere else in
+their lifetime. A missed event is therefore not synonymous with a never-caught person.
+
+The label and threshold semantics are deployable only **conditional on resolved identity**.
+This synthetic study still uses oracle canonical identity and does not measure
+production entity-resolution error. Oracle carrier evaluation is unavailable in
+production; operational monitoring can observe caught enrichment only among adjudicated
+alerts.
+
+The former `assisted` result is quarantined under `legacy_oracle_benchmarks` as a legacy
+oracle-assisted diagnostic. It is nondeployable and **not a ceiling**, because it both
+changes the fit population with oracle labels and selects its threshold with oracle
+validation labels. It never belongs in the primary lineup.
+
+These numbers are **retrospective corpus diagnostics and evaluation, not fit inputs**.
+They document V9 as the **designed positive control** and do not supersede V8: V9 tests
+whether methods exploit deliberately propagable relational signal, while V8 remains the
+honest thin-graph-signal track.
+
+## Part: Full-V9 K=5 release, benchmark, and observability fixes (2026-07-20)
+
+This part records a fresh full-V9 run at the non-negotiable operational depth of
+**5 inspections/day**, a real giant-component benchmark, four correctness fixes
+found by running the observability pipeline end-to-end for the first time on the
+full corpus, and the hardware limit that gates full observability generation.
+
+### Fresh K=5 scoring (measured, not fit inputs)
+
+Config: seeds `[0,1,2]`, 18 epochs, quarterly training buckets, validation
+sample 20,000, `daily_ks=(5,)`, 1,500 bootstraps. Canonical output rewritten to
+`gnn/diagnostics/demo_comparison_v9.json`; durable checkpoint
+`gnn/diagnostics/checkpoints/17d5ee9fe23234ab33b0ba33e36800ab21bd25101b32ff51bb787b259e4f3c52`.
+
+Seed-level unique-person recovery at 5 inspections/day:
+
+| Arm | mean unique recovered | population SD | score-averaged ensemble |
+|---|---:|---:|---:|
+| Baseline | 113 | 0.00 | 113 |
+| Hybrid | 321 | 3.74 | 328 |
+| Net gain | +208 | 3.74 | +215 |
+
+Hybrid recovers ~2.8x the baseline at K=5. pool_size 40,578; hidden_total 2,691;
+validation-tuned fusion weight 0.7. Full affected suite 683 passed / 1 skipped;
+live `gemma4:12b` narrative test passed; V9dev end-to-end completed with complete
+coverage (the tiny dev corpus has hybrid≡baseline, so zero cohort cases there).
+
+### Real giant-component benchmark
+
+From the verified checkpoint: 120,000 nodes / 2,639,472 typed edges; largest
+Hybrid-only community 6,952 nodes (person P00032161, found after scanning 191
+days); three-restart GNNExplainer plus a real gemma narrative on that community
+succeeded. **Peak RSS was bounded at ~5.2 GiB with per-day snapshot release** —
+the earlier giant-benchmark OOM (exit 137) is resolved. The benchmark's
+publication-*sizing* projection remains architecturally fragile on heterogeneous
+real communities and does not finalize; the authoritative published-bundle size
+is to be taken from the real `resume_observability` output instead.
+
+### Four correctness fixes (each TDD-tested)
+
+The observability path had never been run end-to-end on the full corpus, so it
+carried latent bugs that only trigger on real, large, heterogeneous communities:
+
+1. **Truncated-edge source_row_count.** `observability_artifact._community_stream_source`
+   emitted bounded dense edges with `source_row_count = full row total` but a
+   truncated `source_row_ids`, violating the recovery bundle's
+   `source_row_count == len(source_row_ids)` invariant. Fix normalizes to the
+   bounded count and records the true total under `complete_source_row_count`,
+   mirroring the overlay stream. This also fixes the real publication path, not
+   only the benchmark.
+2. **CommunityScope vs dict.** `giant_observability_benchmark._estimate_full_publication`
+   subscripted a lazy `CommunityScope`. Added `_case_community` to materialize the
+   bounded target-local dict view (via `member_subgraph` local indices).
+3. **Per-expansion ring coordinates.** `sage_explainer.build_provenance_expansion`
+   laid outside-community people out by their index within one expansion's set, so
+   a person in two expansions got conflicting `x`/`y`. Both the recovery bundle and
+   the dashboard require identical coordinates per node_id. Fix: deterministic
+   `_outside_ring_position(node_id)`.
+4. **Complementary overlay-node views (primary observability blocker).** A node that
+   is both a ranked attribution node and a structural-provenance node was emitted
+   twice with disjoint fields; `recovery_bundle._stream_overlay_evidence` rejected
+   it as a conflict. Fix buffers the bounded overlay node set and merges
+   complementary views by node_id (union of fields; still fails closed on a genuine
+   shared-field disagreement). Validated on the real cases P00060034 and P00061000,
+   which now write cleanly.
+
+### Hardware limit on full observability generation
+
+`resume_observability` generates 268 Hybrid-only cases, each with a real
+`gemma4:12b` narrative. On the 16 GiB development machine the resident model
+(~8 GiB) plus the engine plus a giant-community explanation exceeds RAM, and the
+process is OS-killed within a few cases regardless of how it is launched. The run
+is checkpoint-resumable but full generation must be completed on a larger machine
+(or with the model offloaded between cases). The K=5 daily-budget observability
+artifact is therefore **not yet regenerated**; the V9 dashboard's main panels use
+the fresh K=5 comparison above, while its recovery-explainer panel still reflects
+the prior observability artifact until this run completes on adequate hardware.
+
+## Part: Demo-tab readability pass — simulated-catch budget sweep, bootstrap explainer, anomaly-ranking charts (2026-07-28)
+
+Presentation-only work on the two demo tabs, plus one evaluation-config change
+that adds budgets to the simulated-catch view without touching any published
+headline number.
+
+### Simulated-catch budgets are now swept independently of `daily_ks`
+
+`gnn/run_demo.py` gained `SIMULATED_DAILY_KS = (5, 10, 25)`, threaded through
+`main(simulated_daily_ks=...)` into `evaluate_daily_simulated_catches` and
+recorded in the artifact as `simulated_catch_daily_ks`. `daily_ks` still drives
+the capacity table, the daily crossing chart, and the daily bootstrap, so the
+K=5 release above is unchanged; only the simulated recovery curve gained
+staffing levels the operator can compare.
+
+The canonical `demo_comparison_v9.json` was updated **from the frozen
+checkpoint** `17d5ee9f…`, not from a re-fit: the stored baseline/GNN test scores
+were re-fused at the recorded `w_gnn=0.7`, and every value the artifact already
+published at `@5` (including all 273 daily series entries and the `initial_pool`
+block) reproduced exactly before anything was written. Only
+`simulated_catch_daily` and `simulated_catch_daily_ks` changed.
+
+| Budget | Baseline unique people | Hybrid unique people | Inspections | Hybrid P / R / F1 |
+|---:|---:|---:|---:|---|
+| 5/day | 113 | 328 | 1,365 | 24.0% / 14.0% / 17.7% |
+| 10/day | 217 | 488 | 2,730 | 17.9% / 20.8% / 19.2% |
+| 25/day | 502 | 818 | 6,825 | 12.0% / 34.8% / 17.8% |
+
+The Hybrid lead is widest at the tightest budget (2.9x at 5/day, 1.6x at
+25/day), which is the operationally relevant direction: relational evidence
+matters most when there is least capacity to spend.
+
+### Dashboard presentation
+
+- **Simulated catches.** Heading cut to `Simulated catches` with a one-line
+  gloss; the budget selector now lists 5/10/25 and defaults to 5, matching the
+  crossing chart and the recovery explorer.
+- **Bootstrap verdicts.** Added a "how to read this" panel defining `mean diff`,
+  `95% CI`, `p(Hybrid<=base)` and the win/wash/loss rule, plus a per-table note
+  recording what each table is scored on. The daily table is whole-pool and does
+  **not** follow the population toggle; the copy now says so.
+- **Daily-operations lens fix.** The lens hardcoded `daily_found@25` and read
+  `0 vs 0` on any run that does not publish a 25/day budget (including the K=5
+  release). It now quotes whichever budget `daily_ks` actually contains.
+- **Anomaly ranking.** The tab was tables-only. It now leads with three charts
+  built from the same frozen artifact — missed-at-event recall by region,
+  observed-catch enrichment lift with a 1x reference, and a
+  precision-against-recall scatter whose per-region connectors trace the
+  progression — plus a shared-scale recall-strata bar strip on every region
+  card and a 2-series ablation chart. Arms are pinned to fixed categorical
+  palette slots (blue / orange / aqua / yellow) validated for CVD separation and
+  contrast against the dashboard's dark surface; every chart ships a legend and
+  a screen-reader table.
+
+Suite after the change: 830 passed, 1 skipped.
+
+## Part: Additive GNN architecture bakeoff dashboard (2026-08-01)
+
+The standalone command `.venv/bin/python -m gnn.gnn_architecture_bakeoff` resolved
+the full-V9 configuration: seeds `0/1/2`, 18 epochs, `train_bucket='Q'`, global
+`K=50/100/200/500/1000/2000/5000`, and daily `K=5/10/25/50`. It wrote
+`gnn/diagnostics/gnn_architecture_comparison_v9.json`; no Baseline or Hybrid arm
+was executed or written by this command.
+
+The full artifact validated five arms: GraphSAGE, full-graph RGCN, GAT attention,
+GIN, and KPI-AA approximation. At global K=500, whole-pool and observable
+found/recall were:
+
+| Arm | Whole found / recall | Observable found / recall |
+|---|---:|---:|
+| sage | 143 / 0.0531 | 114 / 0.1610 |
+| rgcn | 144 / 0.0535 | 111 / 0.1568 |
+| gat | 80 / 0.0297 | 49 / 0.0692 |
+| gin | 23 / 0.0085 | 0 / 0.0000 |
+| kpiaa | 139 / 0.0517 | 106 / 0.1497 |
+
+At daily K=25, whole-pool aggregate found/precision/recall/F1 were:
+
+| Arm | Found | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|
+| sage | 1124 | 0.1647 | 0.4177 | 0.2362 |
+| rgcn | 1129 | 0.1654 | 0.4195 | 0.2373 |
+| gat | 1106 | 0.1621 | 0.4110 | 0.2325 |
+| gin | 1077 | 0.1578 | 0.4002 | 0.2264 |
+| kpiaa | 1104 | 0.1618 | 0.4103 | 0.2320 |
+
+The dashboard independently validates and embeds this artifact under
+`v9GNNArchitectureComparison`, rendering a strictly additive GNN-only section in
+V9 Results; existing sections, navigation, and data remain unchanged. Generated
+outputs were rebuilt at `Documents/Data/v9_dashboard/data_v9.json` and
+`Documents/Data/v9_dashboard/index.html`.
+
+This observed run used a 16GB Mac and about 12 active CPU-hours sequentially;
+sleep/contention made wall time longer. This is an approximate observation, not a
+benchmark guarantee. Future optimization should cache snapshots/checkpoints and
+use at most about two workers.
+
+The affected suite (`tests/test_gnn_architecture_bakeoff.py`,
+`tests/test_run_demo_smoke.py`, `tests/test_df_graphmodel_rgcn.py`, and
+`tests/test_v9_dashboard_builder.py`) completed **203 passed, 327 warnings in
+436.46s (0:07:16)**. Warnings are existing Python 3.14/PyTorch/PyG/timezone/
+joblib warnings. `git diff --check` and `py_compile` for the four affected
+Python modules passed. The dashboard rebuild, generated-JavaScript syntax, and
+desktop/narrow headless-Chrome visual checks passed. The in-app browser was
+unavailable and direct Chrome console capture timed out, so console cleanliness
+is not claimed.
+
+## Part: Live-demo V9 Results order (2026-08-01)
+
+The V9 Results tab now reads as a short live-demo narrative: headline and
+three-lens orientation, operational depth and staffing results, cumulative
+unique-person recoveries, daily crossing context, recovery evidence, bootstrap
+confidence, then model and architecture methods. Model notes render in the
+stable Baseline, Deployable Hybrid, GNN order. No metrics, data contracts, or
+evaluation behavior changed.
+
+The affected dashboard and recovery UI suite completed **307 passed**. The
+rebuilt static dashboard was inspected with headless Chrome at the V9 Results
+hash; the in-app browser backend was unavailable in this session.

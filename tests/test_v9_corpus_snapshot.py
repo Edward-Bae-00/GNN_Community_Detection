@@ -8,6 +8,7 @@ from gnn.graphmodel_rgcn import build_person_graph_typed
 
 
 REPO = Path(__file__).resolve().parents[1]
+V9 = REPO / "Documents" / "Data" / "synthetic_cbp_graph_corpus_v9"
 V9DEV = REPO / "Documents" / "Data" / "synthetic_cbp_graph_corpus_v9dev"
 
 
@@ -98,6 +99,20 @@ def test_v9dev_cotravel_reaches_demo_graph():
     e, node_ids, _ = build_person_graph_typed(V9DEV, substrate="oracle", include_plate=True)
     counts = e["rel"].value_counts().to_dict()
     assert counts.get(0, 0) > 0, f"no COTRAVEL (rel 0) edges in demo graph: {counts}"
+
+
+def test_full_v9_demo_graph_has_complete_person_universe_and_stable_edges():
+    edges, node_ids, _ = build_person_graph_typed(
+        V9, substrate="oracle", include_plate=True
+    )
+
+    assert len(node_ids) == 120_000
+    assert edges["rel"].value_counts().to_dict() == {
+        0: 504_358,
+        1: 2_016_084,
+        2: 107_856,
+        3: 11_174,
+    }
 
 
 def test_v9dev_shared_plates_and_lone_tail():

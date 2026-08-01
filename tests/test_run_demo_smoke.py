@@ -2,6 +2,10 @@
 See tasks/v9_demo_corpus_plan.md (Task 10)."""
 from dataclasses import FrozenInstanceError
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import pathlib
 from types import SimpleNamespace
 
@@ -128,6 +132,7 @@ def test_gnn_score_bundle_retains_seed_models_and_scores(monkeypatch):
 
     monkeypatch.setattr(rd, "_train_caught_rgcn", fake_train)
     monkeypatch.setattr(rd, "_score_pool", fake_score)
+    monkeypatch.setattr(rd, "validate_pool_identities", lambda *args, **kwargs: None)
 
     bundle = rd._gnn_scores(
         [], ["person"], np.zeros((1, 1)), {}, SimpleNamespace(), np.array([1]),
@@ -591,8 +596,18 @@ def test_run_demo_smoke():
     assert initial["hidden_events"] + initial["excluded_hidden_events"] == out["hidden_total"]
     assert initial["hidden_people"] <= initial["hidden_events"]
     assert initial["excluded_hidden_people"] <= initial["excluded_hidden_events"]
+    # Simulated catches and operational capacity share the daily-only budget
+    # contract so every dashboard surface reads K=5, 10, and 25 per day.
+    assert out["daily_ks"] == list(rd.DAILY_KS)
+    assert out["simulated_catch_daily_ks"] == list(rd.SIMULATED_DAILY_KS)
+    assert set(rd.SIMULATED_DAILY_KS) == set(rd.DAILY_KS)
     for arm in simulated["arms"].values():
-        for k in out["daily_ks"]:
+        assert {
+            int(key.split("@")[1])
+            for key in arm
+            if key.startswith("daily_people_found@")
+        } == set(out["simulated_catch_daily_ks"])
+        for k in out["simulated_catch_daily_ks"]:
             found = arm[f"daily_people_found@{k}"]
             budget = arm[f"daily_budget@{k}"]
             series = arm[f"daily_found_by_day@{k}"]
@@ -663,6 +678,96 @@ def test_observability_main_fails_before_work_without_exact_sage_scope(
         )
 
 
+def test_observability_without_narrative_fails_before_training(monkeypatch):
+    monkeypatch.setattr(
+        rd,
+        "_gnn_scores",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("training must not start")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires validated Gemma narratives"):
+        rd.main(
+            corpus_dir=CD,
+            seeds=(0, 1, 2),
+            observability=True,
+            narrative=False,
+        )
+
+
+def test_observability_preflight_failure_precedes_training(monkeypatch):
+    monkeypatch.setattr(
+        rd,
+        "preflight_narrative_contract",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("preflight failed")),
+    )
+    monkeypatch.setattr(
+        rd,
+        "_gnn_scores",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("training must not start")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        rd.main(
+            corpus_dir=CD,
+            seeds=(0, 1, 2),
+            observability=True,
+        )
+
+
+def test_gnn_identity_validation_failure_precedes_seed_zero_training(monkeypatch):
+    monkeypatch.setattr(
+        rd,
+        "validate_pool_identities",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("outside universe")),
+    )
+    monkeypatch.setattr(
+        rd,
+        "_train_caught_rgcn",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("seed-zero training must not start")
+        ),
+    )
+    pool = pd.DataFrame({"primary_obs_id": ["obs-1"]})
+
+    with pytest.raises(ValueError, match="outside universe"):
+        rd._gnn_scores(
+            [], ["P-1"], np.ones((1, 1)), {}, pool, np.array([0]), [pool],
+            {"obs-1": "P-2"}, seeds=(0,), epochs=1, train_bucket="M",
+            train_cutoff=pd.Timestamp("2024-01-01", tz="UTC"),
+            model_cls=object, num_rel=4,
+        )
+
+
+def test_main_identity_validation_failure_precedes_baseline_fitting(monkeypatch):
+    monkeypatch.setattr(
+        rd,
+        "validate_pool_identities",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("outside universe")),
+    )
+    monkeypatch.setattr(
+        rd,
+        "fit_predict",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("baseline fitting must not start")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="outside universe"):
+        rd.main(
+            corpus_dir=CD,
+            seeds=(0,),
+            n_boot=1,
+            epochs=1,
+            ks=(50,),
+            daily_ks=(5,),
+            valid_sample=10,
+        )
+
+
 def test_observability_generation_is_separate_and_comparison_is_byte_identical(
     tmp_path, monkeypatch
 ):
@@ -685,6 +790,7 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
     monkeypatch.setattr(
         rd, "build_observability_bundle", fake_build_observability_bundle
     )
+    monkeypatch.setattr(rd, "preflight_narrative_contract", lambda **kwargs: "gemma4:12b")
     arguments = {
         "corpus_dir": CD,
         "seeds": (0, 1, 2),
@@ -705,7 +811,7 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
         out_name="with.json",
         observability=True,
         observability_out_name="observability.json",
-        narrative=False,
+        narrative=True,
     )
 
     assert without == with_observability
@@ -720,6 +826,8 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
     assert captured["staging_root"] == tmp_path / ".observability.recovery-stage"
     assert captured["final_root"] == tmp_path / "recovery"
     assert captured["corpus_identity"] == str(CD.resolve())
+    assert set(captured["recovery_run_identity"]) == {"checkpoint_id"}
+    assert len(captured["recovery_run_identity"]["checkpoint_id"]) == 64
     assert captured["seed_level_unique_person_recovery"] == with_observability[
         "seed_level_unique_person_recovery"
     ]
@@ -727,4 +835,104 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
     np.testing.assert_array_equal(
         captured["seed0_gnn_raw"], score_bundles[-1].scores_by_seed[0][1]
     )
-    assert captured["narrative_builder"] is rd.render_template
+    assert captured["narrative_builder"] is rd.generate_narrative
+
+
+def test_fresh_process_observability_resume_uses_checkpoint_without_training(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(rd.FC, "RESULTS", tmp_path)
+    result = rd.main(
+        corpus_dir=CD,
+        seeds=(0, 1, 2),
+        n_boot=5,
+        out_name="comparison.json",
+        epochs=1,
+        ks=(50,),
+        daily_ks=(5,),
+        valid_sample=100,
+    )
+    checkpoint_path = next((tmp_path / "checkpoints").iterdir())
+    scores_path = checkpoint_path / "scores.npz"
+    with np.load(scores_path, allow_pickle=False) as persisted:
+        expected_baseline = persisted["baseline_test"].tolist()
+        expected_seed0 = persisted["gnn_test_seed_0"].tolist()
+    script = f"""
+from pathlib import Path
+import gnn.run_demo as rd
+rd.FC.RESULTS = Path({str(tmp_path)!r})
+rd.preflight_narrative_contract = lambda **kwargs: "gemma4:12b"
+def fail_fit(*args, **kwargs):
+    raise AssertionError("resume must not fit any model")
+rd._gnn_scores = fail_fit
+rd._train_caught_rgcn = fail_fit
+rd.fit_predict = fail_fit
+def capture(**kwargs):
+    return {{
+        "schema_version": "2.0",
+        "baseline_raw": kwargs["baseline_raw"].tolist(),
+        "seed0_gnn_raw": kwargs["seed0_gnn_raw"].tolist(),
+        "recovery_run_identity": kwargs["recovery_run_identity"],
+    }}
+rd.build_observability_bundle = capture
+rd.resume_observability(
+    Path({str(checkpoint_path)!r}),
+    corpus_dir=Path({str(CD)!r}),
+    observability_out_name="resumed.json",
+)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])},
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    resumed = json.loads((tmp_path / "resumed.json").read_text())
+    assert resumed == {
+        "schema_version": "2.0",
+        "baseline_raw": expected_baseline,
+        "seed0_gnn_raw": expected_seed0,
+        "recovery_run_identity": {"checkpoint_id": checkpoint_path.name},
+    }
+
+    mismatch_script = f"""
+from pathlib import Path
+import gnn.run_demo as rd
+rd.FC.RESULTS = Path({str(tmp_path)!r})
+rd.preflight_narrative_contract = lambda **kwargs: "gemma4:12b"
+real_load_pool = rd.load_pool
+def reordered(corpus_dir, split="test"):
+    value = real_load_pool(corpus_dir, split=split)
+    if split == "test":
+        return value.iloc[::-1].reset_index(drop=True)
+    return value
+rd.load_pool = reordered
+rd._gnn_scores = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not train"))
+try:
+    rd.resume_observability(
+        Path({str(checkpoint_path)!r}),
+        corpus_dir=Path({str(CD)!r}),
+        observability_out_name="must-not-publish.json",
+    )
+except ValueError as exc:
+    if "test event order is incompatible" not in str(exc):
+        raise
+else:
+    raise AssertionError("reordered events were accepted")
+"""
+    mismatch = subprocess.run(
+        [sys.executable, "-c", mismatch_script],
+        cwd=Path(__file__).parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])},
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert mismatch.returncode == 0, mismatch.stderr
+    assert not (tmp_path / "must-not-publish.json").exists()

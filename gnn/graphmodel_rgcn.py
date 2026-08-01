@@ -171,7 +171,24 @@ def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=
     e = e[e["avail_time"].notna()].copy()
     e["rel"] = e["edge_type"].map(rel_map).astype(int)
     e = _add_edge_provenance(e)
-    node_ids = sorted(set(e["u"]) | set(e["v"]))
+    canonical_people = set()
+    for person_id in obs_to_person.values():
+        if pd.isna(person_id):
+            continue
+        if not isinstance(person_id, str):
+            raise ValueError("oracle canonical person IDs must be strings")
+        if not person_id.strip():
+            continue
+        canonical_people.add(person_id)
+    node_ids = sorted(canonical_people)
+    unknown_endpoints = sorted(
+        (set(e["u"]) | set(e["v"])).difference(canonical_people)
+    )
+    if unknown_endpoints:
+        raise ValueError(
+            "typed edge endpoints are outside the canonical person node universe: "
+            f"{unknown_endpoints}"
+        )
     node_feat = {p: np.array([1.0]) for p in node_ids}
     return e[
         [

@@ -11,6 +11,7 @@ from gnn.explanation_narrative import (
     build_prompt,
     build_selector_catalog,
     generate_narrative,
+    preflight_narrative_contract,
     render_template,
     resolve_narrative_selector,
     validate_candidate,
@@ -611,6 +612,38 @@ def test_successful_model_preflight_is_cached_for_repeated_cohort_generation():
 
     assert runner.commands.count(["ollama", "list"]) == 1
     assert sum(command[:2] == ["ollama", "run"] for command in runner.commands) == 2
+
+
+def test_live_preflight_validates_selector_generation_contract():
+    runner = FakeRunner(
+        list_stdout="NAME ID SIZE MODIFIED\ngemma4:12b abc 7.4 GB now\n",
+        run_stdout=json.dumps(_valid_selector()),
+    )
+
+    result = preflight_narrative_contract(
+        runner=runner,
+        packet=_fact_packet(),
+    )
+
+    assert result == MODEL_TAG
+    assert runner.commands[0] == ["ollama", "list"]
+    assert runner.commands[1][:3] == ["ollama", "run", MODEL_TAG]
+
+
+def test_live_preflight_rejects_selector_that_cannot_resolve():
+    runner = FakeRunner(
+        list_stdout="NAME ID SIZE MODIFIED\ngemma4:12b abc 7.4 GB now\n",
+        run_stdout=json.dumps({
+            "selected_summary_id": "summary:sha256:unknown",
+            "selected_claim_ids": [],
+        }),
+    )
+
+    with pytest.raises(RuntimeError, match="selector-generation contract"):
+        preflight_narrative_contract(
+            runner=runner,
+            packet=_fact_packet(),
+        )
 
 
 @pytest.mark.parametrize(

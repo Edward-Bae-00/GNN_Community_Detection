@@ -24,7 +24,7 @@ from gnn.recovery_observability import (
     representative_attempt_order,
     simulate_recovery_run,
 )
-from gnn.recovery_bundle import RecoveryBundleWriter
+from gnn.recovery_bundle import RecoveryBundleError, RecoveryBundleWriter
 from gnn.run_demo import _rank_fuse
 
 
@@ -1321,7 +1321,12 @@ def test_schema2_cases_resolve_to_deduplicated_top_level_communities() -> None:
 
 
 def test_streaming_bundle_returns_only_compact_prepackaged_manifest(tmp_path) -> None:
-    artifact = build_observability_bundle(**_bundle_fixture(tmp_path))
+    artifact = build_observability_bundle(
+        **_bundle_fixture(
+            tmp_path,
+            recovery_run_identity={"checkpoint_id": "checkpoint-abc"},
+        )
+    )
 
     assert artifact["schema_version"] == "2.0"
     assert artifact["bundle_id"]
@@ -1330,17 +1335,10 @@ def test_streaming_bundle_returns_only_compact_prepackaged_manifest(tmp_path) ->
     assert set(artifact["community_index"])
     assert "communities" not in artifact
     assert "explanations" not in artifact
-    checkpoint = json.loads(
-        next((tmp_path / ".recovery-stage").glob("*/checkpoint.json")).read_text()
-    )
-    fingerprint = checkpoint["run_fingerprint"]
-    assert fingerprint["corpus_identity"] == "fixture-v9"
-    assert set(fingerprint["engine"]) == {
-        "graph_sha256",
-        "model_state_sha256",
-        "rank_reference_fingerprint",
-    }
-    assert fingerprint["policy"] == {
+    assert not (tmp_path / ".recovery-stage").exists()
+    fingerprint = artifact["run_identity"]
+    assert fingerprint == {"checkpoint_id": "checkpoint-abc"}
+    assert artifact["recovery_policy"] == {
         "observability_seed": 0,
         "gnn_arm": "sage",
         "surrounding_seeds": [0, 1, 2],
@@ -1351,6 +1349,57 @@ def test_streaming_bundle_returns_only_compact_prepackaged_manifest(tmp_path) ->
         "narrative_prompt_version": PROMPT_VERSION,
     }
     json.dumps(artifact, sort_keys=True, allow_nan=False)
+
+
+def test_streaming_bundle_defers_case_construction_failure_and_retries_last(
+    tmp_path,
+) -> None:
+    events = []
+
+    class TransientConstructionEngine(FakeExplanationEngine):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def relationship_categories(self, person_id, scoring_day):
+            events.append(("categories", person_id))
+            if person_id == "p6" and not self.failed:
+                self.failed = True
+                raise RuntimeError("transient category lookup")
+            return super().relationship_categories(person_id, scoring_day)
+
+        def community(self, person_id, scoring_day):
+            events.append(("community", person_id))
+            return super().community(person_id, scoring_day)
+
+    artifact = build_observability_bundle(
+        **_bundle_fixture(
+            tmp_path,
+            explanation_engine=TransientConstructionEngine(),
+        )
+    )
+
+    assert artifact["coverage"]["complete"] is True
+    assert events.count(("categories", "p6")) == 2
+    assert events.index(("community", "p1")) < len(events) - 1
+
+
+def test_legacy_materialization_rejects_unbounded_community_evidence() -> None:
+    engine = FakeExplanationEngine()
+
+    def giant_community(person_id, scoring_day):
+        community = FakeExplanationEngine.community(engine, person_id, scoring_day)
+        community["nodes"] = [
+            {"node_id": f"node:{index}"} for index in range(10_001)
+        ]
+        return community
+
+    engine.community = giant_community
+
+    with pytest.raises(ValueError, match="legacy materialization limit"):
+        build_observability_artifact(
+            **_artifact_fixture(explanation_engine=engine)
+        )
 
 
 def test_streaming_resume_skips_completed_explain_and_narrate_work(tmp_path) -> None:
@@ -1377,12 +1426,6 @@ def test_streaming_resume_skips_completed_explain_and_narrate_work(tmp_path) -> 
         explanation_engine=engine,
         narrative_builder=recording_narrative,
     )
-    with pytest.raises(RuntimeError, match="planned interruption"):
-        build_observability_bundle(**kwargs)
-
-    assert [case.person_id for case in engine.explained_cases] == ["p6"]
-    assert len(narrative_calls) == 1
-
     artifact = build_observability_bundle(**kwargs)
 
     assert artifact["coverage"]["complete"] is True
@@ -1486,7 +1529,7 @@ def test_failed_new_streaming_run_preserves_prior_published_bundle(tmp_path) -> 
     def fail_narrative(packet):
         raise RuntimeError("planned narrative failure")
 
-    with pytest.raises(RuntimeError, match="planned narrative failure"):
+    with pytest.raises(RecoveryBundleError, match="failures prevent publication"):
         build_observability_bundle(
             **_bundle_fixture(
                 tmp_path,

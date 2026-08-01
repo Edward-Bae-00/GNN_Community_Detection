@@ -21,6 +21,7 @@ Thumbs.db
 
 # Local agent/tooling state
 .agents/
+.superpowers/
 
 # Logs and local scratch outputs
 *.log

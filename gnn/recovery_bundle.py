@@ -5,9 +5,12 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
+
+from gnn.recovery_evidence_store import RecoveryCatalogStore, RecoveryEvidenceStore
 
 
 class RecoveryBundleError(ValueError):
@@ -123,6 +126,9 @@ class RecoveryBundleWriter:
         )
         self.run_fingerprint_sha256 = _sha256(fingerprint_bytes)
         self.staging_root.mkdir(parents=True, exist_ok=True)
+        self.catalog_store = RecoveryCatalogStore(
+            self.staging_root / ".recovery_catalog.sqlite3"
+        )
         self._state = {
             "schema_version": "1.0",
             "run_fingerprint": self.run_fingerprint,
@@ -132,6 +138,9 @@ class RecoveryBundleWriter:
             "communities": {},
             "cases": {},
             "failures": [],
+            "case_attempts": {},
+            "catalog_db": self.catalog_store.path.name,
+            "catalog_counts": {"nodes": 0, "edges": 0, "provenance": 0},
         }
         checkpoint_path = self.staging_root / self._STATE_FILE
         if checkpoint_path.exists():
@@ -159,6 +168,13 @@ class RecoveryBundleWriter:
             destination.resolve().relative_to(self.staging_root.resolve())
         except ValueError as exc:
             raise RecoveryBundleError("sidecar reference escapes staging root") from exc
+        if destination.is_file():
+            return destination
+        published_root = getattr(self, "_published_bundle_root", None)
+        if published_root is not None:
+            published = published_root / relative
+            if published.is_file():
+                return published
         return destination
 
     def _read_verified_ref(self, ref):
@@ -172,7 +188,14 @@ class RecoveryBundleWriter:
             or ref.get("bytes") != len(content)
             or destination.name != f"{digest}.json"
         ):
-            raise RecoveryBundleError(f"corrupt cached object {ref.get('path')!r}")
+            if self.staging_root.exists():
+                raise RecoveryBundleError(
+                    f"corrupt cached object {ref.get('path')!r}"
+                )
+            raise RecoveryBundleError(
+                "published recovery bundle contains a corrupt object "
+                f"{ref.get('path')!r}"
+            )
         try:
             return json.loads(content)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -182,13 +205,53 @@ class RecoveryBundleWriter:
         manifest = self._read_verified_ref(ref)
         if not isinstance(manifest, Mapping) or manifest.get("complete") is not True:
             raise RecoveryBundleError("cached community manifest is incomplete")
-        for field in (
-            "node_chunks",
-            "edge_chunks",
-            "provenance_chunks",
-            "provenance_expansion_membership_chunks",
+        for field, row_field, kind in (
+            ("node_chunks", "nodes", "nodes"),
+            ("edge_chunks", "edges", "edges"),
+            ("provenance_chunks", "observations", "provenance"),
+            ("provenance_expansion_membership_chunks", "memberships", None),
         ):
             refs = manifest.get(field)
+            if not isinstance(refs, list):
+                raise RecoveryBundleError(f"cached community lacks {field}")
+            for chunk_ref in refs:
+                payload = self._read_verified_ref(chunk_ref)
+                rows = payload.get(row_field) if isinstance(payload, Mapping) else None
+                if not isinstance(rows, list):
+                    raise RecoveryBundleError(
+                        f"cached community {field} payload is invalid"
+                    )
+                if kind is not None:
+                    for row in rows:
+                        catalog_id = row.get("catalog_id") if isinstance(row, Mapping) else None
+                        if not isinstance(catalog_id, str) or not catalog_id:
+                            raise RecoveryBundleError(
+                                f"cached community {field} catalog reference is invalid"
+                            )
+                        if (
+                            not self.catalog_store.closed
+                            and not self.catalog_store.has_community_record(
+                                manifest["community_key"], kind, catalog_id
+                            )
+                        ):
+                            raise RecoveryBundleError(
+                                f"cached community {field} catalog reference is missing"
+                            )
+        catalogs = manifest.get("catalogs")
+        if (
+            not isinstance(catalogs, Mapping)
+            or catalogs.get("scope") != "run_global"
+            or any(
+                type(catalogs.get(field)) is not int or catalogs[field] < 0
+                for field in ("node_count", "edge_count", "provenance_count")
+            )
+        ):
+            raise RecoveryBundleError("cached community catalogs are invalid")
+        day_view = manifest.get("day_view")
+        if not isinstance(day_view, Mapping):
+            raise RecoveryBundleError("cached community day_view is invalid")
+        for field in ("node_status_chunks", "edge_membership_chunks"):
+            refs = day_view.get(field)
             if not isinstance(refs, list):
                 raise RecoveryBundleError(f"cached community lacks {field}")
             for chunk_ref in refs:
@@ -301,12 +364,24 @@ class RecoveryBundleWriter:
         communities = state.get("communities")
         cases = state.get("cases")
         failures = state.get("failures")
+        case_attempts = state.get("case_attempts", {})
+        catalog_counts = state.get("catalog_counts")
         if (
             not isinstance(communities, Mapping)
             or not isinstance(cases, Mapping)
             or not isinstance(failures, list)
+            or not isinstance(case_attempts, Mapping)
+            or state.get("catalog_db") != self.catalog_store.path.name
+            or not isinstance(catalog_counts, Mapping)
+            or any(
+                type(catalog_counts.get(kind)) is not int
+                or catalog_counts[kind] < 0
+                for kind in ("nodes", "edges", "provenance")
+            )
         ):
             raise RecoveryBundleError("recovery checkpoint indexes are invalid")
+        state["case_attempts"] = dict(case_attempts)
+        self._state = json.loads(_canonical_bytes(state))
         for key, ref in communities.items():
             manifest = self._verify_community_ref(ref)
             if manifest.get("community_key") != key:
@@ -398,6 +473,13 @@ class RecoveryBundleWriter:
             return self.refs
 
     def write_community(self, community):
+        try:
+            return self._write_community(community)
+        except Exception:
+            self.catalog_store.rollback_pending()
+            raise
+
+    def _write_community(self, community):
         if not isinstance(community, Mapping) or community.get("complete") is not True:
             raise RecoveryBundleError("community must be a complete object")
         key = community.get("community_key")
@@ -417,30 +499,52 @@ class RecoveryBundleWriter:
         )
 
         node_sink = self._ChunkSink(self, "nodes")
+        node_status_sink = self._ChunkSink(self, "node_statuses")
         edge_sink = self._ChunkSink(self, "edges")
+        edge_membership_sink = self._ChunkSink(self, "edge_memberships")
         provenance_sink = self._ChunkSink(self, "observations")
         membership_sink = self._ChunkSink(self, "memberships")
-        node_hashes = {}
-        edge_hashes = {}
-        expected_provenance_counts = {}
-        observed_provenance_counts = {}
-        expected_source_rows = {}
-        observed_source_rows = {}
         expansion_index = []
+        self.catalog_store.begin_community(key)
+        validation_db = self.catalog_store._connection
+        validation_db.execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS streamed_edge_membership (
+                edge_id TEXT NOT NULL,
+                membership_json TEXT NOT NULL,
+                source_row_id TEXT NOT NULL,
+                PRIMARY KEY (edge_id, source_row_id)
+            )
+            """
+        )
+        validation_db.execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS streamed_provenance (
+                edge_id TEXT NOT NULL,
+                source_row_id TEXT NOT NULL,
+                PRIMARY KEY (edge_id, source_row_id)
+            )
+            """
+        )
+        validation_db.execute("DELETE FROM streamed_edge_membership")
+        validation_db.execute("DELETE FROM streamed_provenance")
 
         def add_node(node):
             if not isinstance(node, Mapping) or not isinstance(node.get("node_id"), str):
                 raise RecoveryBundleError("community node requires node_id")
-            detached = json.loads(_canonical_bytes(node))
+            try:
+                detached, status = RecoveryEvidenceStore.split_node(node)
+            except ValueError as exc:
+                raise RecoveryBundleError(str(exc)) from exc
             node_id = detached["node_id"]
-            digest = _sha256(_canonical_bytes(detached))
-            prior_digest = node_hashes.get(node_id)
-            if prior_digest is not None:
-                if prior_digest != digest:
-                    raise RecoveryBundleError(f"conflicting node {node_id!r}")
+            try:
+                linked = self.catalog_store.register("nodes", node_id, detached)
+            except ValueError as exc:
+                raise RecoveryBundleError(str(exc)) from exc
+            if not linked:
                 return
-            node_hashes[node_id] = digest
-            node_sink.add(detached)
+            node_sink.add({"node_id": node_id, "catalog_id": node_id})
+            node_status_sink.add(status)
 
         def add_provenance(observation, edge_id):
             if not isinstance(observation, Mapping):
@@ -453,13 +557,27 @@ class RecoveryBundleWriter:
             if not isinstance(source_row_id, str) or not source_row_id:
                 raise RecoveryBundleError("edge observation requires source_row_id")
             row["edge_id"] = edge_id
-            provenance_sink.add(row)
-            observed_provenance_counts[edge_id] = (
-                observed_provenance_counts.get(edge_id, 0) + 1
+            try:
+                self.catalog_store.register("provenance", source_row_id, row)
+            except ValueError as exc:
+                raise RecoveryBundleError(str(exc)) from exc
+            provenance_sink.add(
+                {
+                    "edge_id": edge_id,
+                    "source_row_id": source_row_id,
+                    "catalog_id": source_row_id,
+                }
             )
-            observed_source_rows[edge_id] = _source_row_accumulate(
-                observed_source_rows.get(edge_id, (0, 0, 0)), source_row_id
-            )
+            try:
+                validation_db.execute(
+                    "INSERT INTO streamed_provenance (edge_id, source_row_id) "
+                    "VALUES (?, ?)",
+                    (edge_id, source_row_id),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RecoveryBundleError(
+                    "duplicate streamed provenance observation"
+                ) from exc
             return source_row_id
 
         def add_edge(edge):
@@ -467,12 +585,17 @@ class RecoveryBundleWriter:
                 raise RecoveryBundleError("community edge requires edge_id")
             edge_without_observations = dict(edge)
             inline_observations = edge_without_observations.pop("observations", None)
-            detached = json.loads(_canonical_bytes(edge_without_observations))
+            try:
+                detached, day_membership = RecoveryEvidenceStore.split_edge(
+                    edge_without_observations
+                )
+            except ValueError as exc:
+                raise RecoveryBundleError(str(exc)) from exc
             if external_provenance is not None and inline_observations is not None:
                 raise RecoveryBundleError(
                     "streamed provenance cannot be combined with inline observations"
                 )
-            source_row_ids = detached.get("source_row_ids")
+            source_row_ids = day_membership.get("source_row_ids")
             if not isinstance(source_row_ids, list) or not source_row_ids:
                 raise RecoveryBundleError("community edge requires source_row_ids")
             if (
@@ -480,23 +603,39 @@ class RecoveryBundleWriter:
                 or len(set(source_row_ids)) != len(source_row_ids)
             ):
                 raise RecoveryBundleError("edge source_row_ids must be unique strings")
-            source_row_count = detached.get("source_row_count", len(source_row_ids))
+            source_row_count = day_membership.get(
+                "source_row_count", len(source_row_ids)
+            )
             if source_row_count != len(source_row_ids):
                 raise RecoveryBundleError("edge source_row_count is inconsistent")
-            detached["source_row_count"] = source_row_count
+            day_membership["source_row_count"] = source_row_count
             edge_id = detached["edge_id"]
-            digest = _sha256(_canonical_bytes(detached))
-            prior_digest = edge_hashes.get(edge_id)
-            if prior_digest is not None:
-                if prior_digest != digest:
+            membership_json = _canonical_bytes(day_membership).decode("utf-8")
+            existing_membership = validation_db.execute(
+                "SELECT DISTINCT membership_json FROM streamed_edge_membership "
+                "WHERE edge_id = ?",
+                (edge_id,),
+            ).fetchone()
+            if existing_membership is not None:
+                if existing_membership[0] != membership_json:
                     raise RecoveryBundleError(f"conflicting edge {edge_id!r}")
                 return edge_id
-            edge_hashes[edge_id] = digest
-            expected_provenance_counts[edge_id] = source_row_count
-            observed_provenance_counts[edge_id] = 0
-            expected_source_rows[edge_id] = _source_row_fingerprint(source_row_ids)
-            observed_source_rows[edge_id] = (0, 0, 0)
-            edge_sink.add(detached)
+            try:
+                linked = self.catalog_store.register("edges", edge_id, detached)
+            except ValueError as exc:
+                raise RecoveryBundleError(str(exc)) from exc
+            if not linked:
+                return edge_id
+            validation_db.executemany(
+                "INSERT INTO streamed_edge_membership "
+                "(edge_id, membership_json, source_row_id) VALUES (?, ?, ?)",
+                (
+                    (edge_id, membership_json, source_row_id)
+                    for source_row_id in source_row_ids
+                ),
+            )
+            edge_sink.add({"edge_id": edge_id, "catalog_id": edge_id})
+            edge_membership_sink.add(day_membership)
             if external_provenance is None:
                 if inline_observations is None:
                     raise RecoveryBundleError(
@@ -572,19 +711,50 @@ class RecoveryBundleWriter:
                 if not isinstance(observation, Mapping):
                     raise RecoveryBundleError("edge observation must be an object")
                 edge_id = observation.get("edge_id")
-                if not isinstance(edge_id, str) or edge_id not in edge_hashes:
+                known_edge = (
+                    isinstance(edge_id, str)
+                    and validation_db.execute(
+                        "SELECT 1 FROM streamed_edge_membership WHERE edge_id = ? LIMIT 1",
+                        (edge_id,),
+                    ).fetchone()
+                    is not None
+                )
+                if not known_edge:
                     raise RecoveryBundleError(
                         "streamed provenance references an unknown edge"
                     )
                 add_provenance(observation, edge_id)
-        if (
-            observed_provenance_counts != expected_provenance_counts
-            or observed_source_rows != expected_source_rows
-        ):
+        missing_provenance = validation_db.execute(
+            """
+            SELECT expected.edge_id, expected.source_row_id
+            FROM streamed_edge_membership AS expected
+            LEFT JOIN streamed_provenance AS observed
+              ON observed.edge_id = expected.edge_id
+             AND observed.source_row_id = expected.source_row_id
+            WHERE observed.edge_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        unexpected_provenance = validation_db.execute(
+            """
+            SELECT observed.edge_id, observed.source_row_id
+            FROM streamed_provenance AS observed
+            LEFT JOIN streamed_edge_membership AS expected
+              ON expected.edge_id = observed.edge_id
+             AND expected.source_row_id = observed.source_row_id
+            WHERE expected.edge_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if missing_provenance is not None or unexpected_provenance is not None:
             raise RecoveryBundleError(
                 "provenance observations disagree with canonical edge source_row_ids"
             )
 
+        node_chunks = node_sink.finish()
+        edge_chunks = edge_sink.finish()
+        provenance_chunks = provenance_sink.finish()
+        catalog_counts = self.catalog_store.community_counts(key)
         manifest = {
             "schema_version": "1.0",
             "community_key": key,
@@ -594,19 +764,41 @@ class RecoveryBundleWriter:
             "node_count": node_sink.count,
             "edge_count": edge_sink.count,
             "provenance_observation_count": provenance_sink.count,
-            "node_chunks": node_sink.finish(),
-            "edge_chunks": edge_sink.finish(),
-            "provenance_chunks": provenance_sink.finish(),
+            "chunk_size": self.chunk_size,
+            "chunking_policy": "bounded-page-records",
+            "node_chunks": node_chunks,
+            "edge_chunks": edge_chunks,
+            "provenance_chunks": provenance_chunks,
             "provenance_expansion_membership_chunks": membership_sink.finish(),
             "provenance_expansions": sorted(
                 expansion_index, key=lambda item: item["expansion_id"]
             ),
+            "catalogs": {
+                "scope": "run_global",
+                "node_count": catalog_counts["nodes"],
+                "edge_count": catalog_counts["edges"],
+                "provenance_count": catalog_counts["provenance"],
+            },
+            "day_view": {
+                "node_status_chunks": node_status_sink.finish(),
+                "edge_membership_chunks": edge_membership_sink.finish(),
+            },
         }
         ref = self._put_object(manifest)
         prior = self._state["communities"].get(key)
         if prior is not None and prior != ref:
             raise RecoveryBundleError(f"community key {key!r} has conflicting content")
+        self.catalog_store.commit_community()
         self._state["communities"][key] = ref
+        self._state["catalog_counts"] = {
+            kind: sum(
+                1
+                for _ in self.catalog_store.iter_active_records(
+                    kind, self._state["communities"], fetch_size=self.chunk_size
+                )
+            )
+            for kind in ("nodes", "edges", "provenance")
+        }
         self.checkpoint()
         return ref
 
@@ -629,7 +821,7 @@ class RecoveryBundleWriter:
         edge_sink = self._ChunkSink(self, "edges")
         provenance_sink = self._ChunkSink(self, "observations")
         membership_sink = self._ChunkSink(self, "memberships")
-        node_hashes = {}
+        overlay_nodes = {}
         edge_hashes = {}
         expected_counts = {}
         observed_counts = {}
@@ -642,14 +834,20 @@ class RecoveryBundleWriter:
                 raise RecoveryBundleError("overlay node requires node_id")
             detached = json.loads(_canonical_bytes(node))
             node_id = detached["node_id"]
-            digest = _sha256(_canonical_bytes(detached))
-            prior = node_hashes.get(node_id)
-            if prior is not None:
-                if prior != digest:
-                    raise RecoveryBundleError(f"conflicting overlay node {node_id!r}")
+            # The same node can be emitted from more than one bounded overlay
+            # view (a ranked attribution record and a structural-provenance
+            # record carry disjoint fields). Merge complementary views into one
+            # canonical node rather than reject them; only a genuine
+            # disagreement on a shared field is a conflict. The overlay set is
+            # target-local and bounded, so buffering it in memory is safe.
+            existing = overlay_nodes.get(node_id)
+            if existing is None:
+                overlay_nodes[node_id] = detached
                 return
-            node_hashes[node_id] = digest
-            node_sink.add(detached)
+            for key, value in detached.items():
+                if key in existing and existing[key] != value:
+                    raise RecoveryBundleError(f"conflicting overlay node {node_id!r}")
+                existing[key] = value
 
         def add_observation(observation, edge_id):
             if not isinstance(observation, Mapping):
@@ -771,6 +969,8 @@ class RecoveryBundleWriter:
                     "edge_count": edge_count,
                 }
             )
+        for merged_node in overlay_nodes.values():
+            node_sink.add(merged_node)
         if external is not None:
             for observation in external:
                 if not isinstance(observation, Mapping):
@@ -998,6 +1198,35 @@ class RecoveryBundleWriter:
         self.checkpoint()
         return ref
 
+    def case_attempt_state(self, case_id):
+        if not isinstance(case_id, str) or not case_id:
+            raise RecoveryBundleError("case_id must be a non-blank string")
+        state = self._state["case_attempts"].get(case_id, {})
+        return {
+            "first_pass": state.get("first_pass", "pending"),
+            "deferred_retry": state.get("deferred_retry", "pending"),
+        }
+
+    def begin_case_attempt(self, case_id, phase):
+        if phase not in {"first_pass", "deferred_retry"}:
+            raise RecoveryBundleError("case attempt phase is invalid")
+        state = self.case_attempt_state(case_id)
+        if state[phase] != "pending":
+            raise RecoveryBundleError(
+                f"case attempt {phase!r} already started for {case_id!r}"
+            )
+        state[phase] = "started"
+        self._state["case_attempts"][case_id] = state
+        interrupted = {
+            "case_id": case_id,
+            "reason_code": "InterruptedAttempt",
+            "message": f"{phase} started but has not completed",
+        }
+        if interrupted not in self._state["failures"]:
+            self._state["failures"].append(interrupted)
+            self._state["failures"].sort(key=lambda value: _canonical_bytes(value))
+        self.checkpoint()
+
     def record_failure(self, failure):
         detached = json.loads(_canonical_bytes(failure))
         if not isinstance(detached, dict):
@@ -1019,7 +1248,55 @@ class RecoveryBundleWriter:
             raise RecoveryBundleError(f"{field_name} contains duplicates")
         return set(items)
 
-    def _all_referenced_objects(self):
+    def _write_catalog_index(self):
+        published = getattr(self, "_published_manifest", None)
+        if published is not None:
+            return published["catalog_index"]
+        catalog_index = {}
+        for kind in ("nodes", "edges", "provenance"):
+            chunk_refs = []
+            offset = 0
+            rows = []
+
+            def flush():
+                nonlocal offset, rows
+                if not rows:
+                    return
+                payload = {
+                    "schema_version": "1.0",
+                    "catalog_kind": kind,
+                    "offset": offset,
+                    "count": len(rows),
+                    "records": rows,
+                }
+                ref = self._put_object(payload)
+                chunk_refs.append(
+                    {
+                        **ref,
+                        "offset": offset,
+                        "count": len(rows),
+                        "first_id": rows[0]["record_id"],
+                        "last_id": rows[-1]["record_id"],
+                    }
+                )
+                offset += len(rows)
+                rows = []
+
+            for record_id, record in self.catalog_store.iter_active_records(
+                kind, self._state["communities"], fetch_size=self.chunk_size
+            ):
+                rows.append({"record_id": record_id, "record": record})
+                if len(rows) == self.chunk_size:
+                    flush()
+            flush()
+            catalog_index[kind] = {
+                "record_count": offset,
+                "chunk_size": self.chunk_size,
+                "chunks": chunk_refs,
+            }
+        return catalog_index
+
+    def _all_referenced_objects(self, catalog_index):
         refs = {}
 
         def add(ref):
@@ -1040,6 +1317,12 @@ class RecoveryBundleWriter:
             ):
                 for chunk_ref in manifest[field]:
                     add(chunk_ref)
+            for field in ("node_status_chunks", "edge_membership_chunks"):
+                for chunk_ref in manifest.get("day_view", {}).get(field, ()):
+                    add(chunk_ref)
+        for catalog in catalog_index.values():
+            for chunk_ref in catalog["chunks"]:
+                add(chunk_ref)
         for case_id, record in self._state["cases"].items():
             payload = self._verify_case_record(case_id, record)
             add(record["ref"])
@@ -1055,16 +1338,6 @@ class RecoveryBundleWriter:
                         add(ref)
         return [refs[path] for path in sorted(refs)]
 
-    def _copy_bundle_objects(self, destination, refs):
-        for ref in refs:
-            source = self._object_path(ref)
-            target = destination / ref["path"]
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            content = target.read_bytes()
-            if len(content) != ref["bytes"] or _sha256(content) != ref["sha256"]:
-                raise RecoveryBundleError("published sidecar verification failed")
-
     def finalize(
         self,
         *,
@@ -1073,6 +1346,7 @@ class RecoveryBundleWriter:
         policy,
         summary,
     ):
+        self.catalog_store.rollback_pending()
         hybrid_expected = self._expected_ids(
             expected_hybrid_case_ids, "expected_hybrid_case_ids"
         )
@@ -1140,6 +1414,11 @@ class RecoveryBundleWriter:
             "failed_count": 0,
             "complete": True,
         }
+        run_fingerprint = self._state["run_fingerprint"]
+        fingerprint_metadata = (
+            run_fingerprint if isinstance(run_fingerprint, Mapping) else {}
+        )
+        catalog_index = self._write_catalog_index()
         core = {
             "schema_version": "2.0",
             "run_fingerprint_sha256": self.run_fingerprint_sha256,
@@ -1150,6 +1429,9 @@ class RecoveryBundleWriter:
             "cohorts": cohorts,
             "case_index": case_index,
             "community_index": community_index,
+            "catalog_index": catalog_index,
+            "run_identity": fingerprint_metadata.get("run_identity"),
+            "recovery_policy": fingerprint_metadata.get("policy"),
         }
         bundle_id = _sha256(_canonical_bytes(core))[:24]
         bundle_path = Path("bundles") / bundle_id
@@ -1164,19 +1446,12 @@ class RecoveryBundleWriter:
             ),
         }
         manifest_content = _canonical_bytes(manifest)
-        refs = self._all_referenced_objects()
+        refs = self._all_referenced_objects(catalog_index)
 
         bundles_root = self.final_root / "bundles"
         bundles_root.mkdir(parents=True, exist_ok=True)
-        stage = Path(tempfile.mkdtemp(prefix=".publish-", dir=bundles_root))
         final_bundle = self.final_root / bundle_path
         try:
-            self._copy_bundle_objects(stage, refs)
-            _atomic_write(stage / "manifest.json", manifest_content)
-            for ref in refs:
-                content = (stage / ref["path"]).read_bytes()
-                if _sha256(content) != ref["sha256"] or len(content) != ref["bytes"]:
-                    raise RecoveryBundleError("staged publication verification failed")
             if final_bundle.exists():
                 existing_manifest = final_bundle / "manifest.json"
                 if (
@@ -1198,17 +1473,52 @@ class RecoveryBundleWriter:
                         raise RecoveryBundleError(
                             "published recovery bundle contains a corrupt object"
                         )
-                shutil.rmtree(stage)
             else:
-                os.replace(stage, final_bundle)
+                if self.staging_root.stat().st_dev != bundles_root.stat().st_dev:
+                    raise RecoveryBundleError(
+                        "recovery staging and publication must share a filesystem"
+                    )
+                closure = {ref["path"] for ref in refs}
+                objects_root = self.staging_root / "objects"
+                if objects_root.exists():
+                    for object_path in objects_root.rglob("*.json"):
+                        relative = object_path.relative_to(
+                            self.staging_root
+                        ).as_posix()
+                        if relative not in closure:
+                            object_path.unlink()
+                    for directory in sorted(
+                        (path for path in objects_root.rglob("*") if path.is_dir()),
+                        key=lambda path: len(path.parts),
+                        reverse=True,
+                    ):
+                        try:
+                            directory.rmdir()
+                        except OSError:
+                            pass
+                _atomic_write(self.staging_root / "manifest.json", manifest_content)
+                for ref in refs:
+                    content = (self.staging_root / ref["path"]).read_bytes()
+                    if _sha256(content) != ref["sha256"] or len(content) != ref["bytes"]:
+                        raise RecoveryBundleError("staged publication verification failed")
+                (self.staging_root / self._STATE_FILE).unlink(missing_ok=True)
+                self.catalog_store.remove_files()
+                os.replace(self.staging_root, final_bundle)
+            self._published_bundle_root = final_bundle
+            self._published_manifest = manifest
             pointer = {
                 "bundle_id": bundle_id,
                 "bundle_path": bundle_path.as_posix(),
                 "manifest_sha256": _sha256(manifest_content),
             }
             _atomic_write(self.final_root / "current.json", _canonical_bytes(pointer))
+            if self.staging_root.exists():
+                shutil.rmtree(self.staging_root)
+            self.catalog_store.close()
+            try:
+                self.staging_root.parent.rmdir()
+            except OSError:
+                pass
             return manifest
         except Exception:
-            if stage.exists():
-                shutil.rmtree(stage)
             raise

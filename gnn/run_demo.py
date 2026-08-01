@@ -10,6 +10,7 @@ significance. Run against V9:
 from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 import json
 from pathlib import Path
 import re
@@ -379,6 +380,8 @@ from gnn.graphmodel_rgcn import (
     build_person_graph_typed,
     NUM_REL_PLATE,
     _RGCN,
+    REL_PLATE,
+    caught_feature_names,
 )
 from gnn.graphmodel_alt import _SAGE, _GAT, _GIN, _KPIAA
 from gnn.learned_cell import (
@@ -386,16 +389,32 @@ from gnn.learned_cell import (
     _eligible_training_supervision,
     _train_caught_rgcn,
     _score_pool,
+    validate_pool_identities,
 )
 from scipy.stats import rankdata
 from gnn.detector import fit_predict
 from gnn.demo_baseline import build_baseline_features, FEATURE_NAMES
-from gnn.explanation_narrative import generate_narrative, render_template
+from gnn.explanation_narrative import (
+    generate_narrative,
+    preflight_narrative_contract,
+)
+from gnn.demo_checkpoint import (
+    checkpoint_node_universe_hash,
+    corpus_fingerprints,
+    load_demo_checkpoint,
+    read_demo_checkpoint_metadata,
+    write_demo_checkpoint,
+)
 from gnn.observability_artifact import build_observability_bundle
 from gnn.sage_explainer import Seed0ExplanationEngine
 
 KS = (50, 100, 200, 500, 1000, 2000, 5000)
-DAILY_KS = (5, 10, 25, 50)   # per-day inspection budgets for the capacity-aware view
+DAILY_KS = (5, 10, 25)   # per-day inspection budgets for the capacity-aware view
+# The simulated-catch view sweeps its own budgets so the operational recovery
+# curve can be read at several staffing levels without changing the capacity
+# table, the daily crossing chart, or the daily bootstrap, which stay on the
+# budgets the run publishes in DAILY_KS.
+SIMULATED_DAILY_KS = (5, 10, 25)
 SUBSTRATE = "oracle"   # detection demo: perfect ER, shared by both arms (fair)
 
 
@@ -730,6 +749,16 @@ def _gnn_scores(edges_typed, node_ids, node_feat, caught_time, train_pool,
 
     pools = tuple(pools)
     index = {p: i for i, p in enumerate(node_ids)}
+    validate_pool_identities(
+        train_pool, obs2id, index, pool_name="training pool"
+    )
+    for pool_index, pool in enumerate(pools):
+        validate_pool_identities(
+            pool,
+            obs2id,
+            index,
+            pool_name=f"scoring pool {pool_index}",
+        )
     models_by_seed = {}
     for seed in seed_order:
         models_by_seed[seed] = _train_caught_rgcn(
@@ -794,16 +823,27 @@ def _train_pool_and_labels(corpus_dir, train_cutoff):
 
 
 def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_comparison_v9.json",
-         epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS, gnn_arm="sage",
+         epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS,
+         simulated_daily_ks=SIMULATED_DAILY_KS, gnn_arm="sage",
          valid_sample=20000, observability=False,
          observability_out_name="hybrid_recovery_explanations_v9.json",
-         explanation_limit=None, narrative=True):
+         explanation_limit=None, narrative=True, narrative_runner=None,
+         checkpoint_root=None):
     if observability and (
         gnn_arm != "sage" or tuple(seeds) != (0, 1, 2)
     ):
         raise ValueError(
             "observability requires the surrounding three-seed GraphSAGE run"
         )
+    if observability and not narrative:
+        raise ValueError(
+            "production observability requires validated Gemma narratives"
+        )
+    if observability:
+        preflight_kwargs = {}
+        if narrative_runner is not None:
+            preflight_kwargs["runner"] = narrative_runner
+        preflight_narrative_contract(**preflight_kwargs)
     comparison_path = _result_path(out_name)
     observability_path = _result_path(observability_out_name)
     if observability and comparison_path.absolute() == observability_path.absolute():
@@ -830,6 +870,23 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     obs_mask = (strata == "observable").values
     train_pool, train_labels = _train_pool_and_labels(cd, train_cutoff)
 
+    # Establish and validate the complete graph identity universe before either
+    # tabular or graph model fitting begins.
+    spec = GNN_ARMS[gnn_arm]
+    edges_typed, node_ids, node_feat = build_person_graph_typed(
+        cd, substrate=SUBSTRATE, include_plate=True)
+    caught_time = build_caught_times(cd, obs2id)
+    node_index = {person_id: index for index, person_id in enumerate(node_ids)}
+    validate_pool_identities(
+        train_pool, obs2id, node_index, pool_name="training pool"
+    )
+    validate_pool_identities(
+        valid_pool, obs2id, node_index, pool_name="validation pool"
+    )
+    validate_pool_identities(
+        pool, obs2id, node_index, pool_name="test pool"
+    )
+
     # --- baseline (realistic tabular, NO graph) ---
     Xtr, names = build_baseline_features(
         train_pool[["event_id", "primary_obs_id", "t"]], cd, obs2id)
@@ -844,10 +901,6 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     # --- GNN: one caught-propagation arm (default GraphSAGE), the best/
     # representative architecture from the archived bake-off and the one the
     # hybrid fuses. Train once per seed; score validation (for tuning) + test. ---
-    spec = GNN_ARMS[gnn_arm]
-    edges_typed, node_ids, node_feat = build_person_graph_typed(
-        cd, substrate=SUBSTRATE, include_plate=True)
-    caught_time = build_caught_times(cd, obs2id)
     score_bundle = _gnn_scores(
         edges_typed, node_ids, node_feat, caught_time, train_pool, train_labels,
         [valid_pool, pool], obs2id, seeds=seeds, epochs=epochs,
@@ -881,6 +934,46 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     )
     hybrid_oracle = add_tiebreak(_rank_fuse(base_raw, gnn_test_raw, w_gnn_oracle), pool)
 
+    checkpoint = write_demo_checkpoint(
+        checkpoints_root=(
+            Path(checkpoint_root)
+            if checkpoint_root is not None
+            else FC.RESULTS / "checkpoints"
+        ),
+        corpus_dir=cd,
+        seeds=score_bundle.seed_order,
+        epochs=epochs,
+        train_bucket=train_bucket,
+        valid_sample=valid_sample,
+        gnn_arm=gnn_arm,
+        substrate=SUBSTRATE,
+        feature_schema={
+            "baseline": names,
+            "gnn": caught_feature_names(spec["num_rel"]),
+        },
+        node_ids=node_ids,
+        relation_schema=REL_PLATE,
+        fusion_weights={"deployable": w_gnn, "oracle": w_gnn_oracle},
+        model_name=gnn_arm,
+        model_kwargs={
+            "in_dim": len(caught_feature_names(spec["num_rel"])),
+            "num_relations": spec["num_rel"],
+        },
+        models_by_seed=score_bundle.models_by_seed,
+        baseline_valid=base_valid,
+        baseline_test=base_raw,
+        gnn_valid_by_seed={
+            seed: score_bundle.scores_by_seed[seed][0]
+            for seed in score_bundle.seed_order
+        },
+        gnn_test_by_seed={
+            seed: score_bundle.scores_by_seed[seed][1]
+            for seed in score_bundle.seed_order
+        },
+        validation_event_ids=valid_pool["event_id"].astype(str).tolist(),
+        test_event_ids=pool["event_id"].astype(str).tolist(),
+    )
+
     arms = {
         "baseline": base,
         "hybrid": hybrid,
@@ -898,7 +991,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     simulated_catch_daily = evaluate_daily_simulated_catches(
         pool,
         {"baseline": base, "hybrid": hybrid},
-        daily_ks,
+        simulated_daily_ks,
         caught_time,
     )
     seed_level_unique_person_recovery = _seed_level_unique_person_recovery(
@@ -932,6 +1025,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
            "hybrid_fusion_w_gnn": round(float(w_gnn), 3),
            "hybrid_fusion_w_gnn_oracle": round(float(w_gnn_oracle), 3),
            "daily_ks": list(daily_ks),
+           "simulated_catch_daily_ks": list(simulated_daily_ks),
            "stratum_hidden": {st: strat["baseline"][st]["hidden"] for st in STRATA},
            "overall": overall, "overall_daily": overall_daily, "stratified": strat,
            "simulated_catch_daily": simulated_catch_daily,
@@ -940,6 +1034,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
            "win_hybrid_whole_pool": win_hybrid, "win_hybrid_observable": win_hybrid_obs,
            "win_hybrid_daily": win_hybrid_daily}
     _atomic_json_write(comparison_path, out)
+    print(f"scoring checkpoint = {checkpoint.path}")
 
     if observability:
         def build_artifact():
@@ -971,8 +1066,11 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
                 ),
                 final_root=observability_path.parent / "recovery",
                 corpus_identity=str(Path(cd).resolve()),
+                recovery_run_identity={"checkpoint_id": checkpoint.checkpoint_id},
                 narrative_builder=(
-                    generate_narrative if narrative else render_template
+                    generate_narrative
+                    if narrative_runner is None
+                    else partial(generate_narrative, runner=narrative_runner)
                 ),
             )
 
@@ -1002,6 +1100,128 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     for name, w in {**win, **win_obs, **win_hybrid, **win_hybrid_obs}.items():
         print(name, "diff", w["mean_diff"], "ci", w["ci"], "p", w["p_enh_le_base"])
     return out
+
+
+def resume_observability(
+    checkpoint_path,
+    *,
+    corpus_dir=None,
+    observability_out_name="hybrid_recovery_explanations_v9.json",
+    explanation_limit=None,
+    narrative=True,
+    narrative_runner=None,
+):
+    """Generate observability from a verified scoring checkpoint without fitting."""
+    if not narrative:
+        raise ValueError(
+            "production observability requires validated Gemma narratives"
+        )
+    preflight_kwargs = {}
+    if narrative_runner is not None:
+        preflight_kwargs["runner"] = narrative_runner
+    preflight_narrative_contract(**preflight_kwargs)
+
+    metadata = read_demo_checkpoint_metadata(checkpoint_path)
+    cd = Path(corpus_dir or metadata["corpus"]["identity"])
+    run = metadata["run"]
+    if run["gnn_arm"] != "sage" or tuple(run["seeds"]) != (0, 1, 2):
+        raise ValueError(
+            "observability requires the surrounding three-seed GraphSAGE run"
+        )
+    pool = load_pool(cd)
+    valid_pool = load_pool(cd, split="validation")
+    valid_sample = run["valid_sample"]
+    if valid_sample and len(valid_pool) > valid_sample:
+        valid_pool = valid_pool.sample(
+            valid_sample, random_state=FC.SEED
+        ).reset_index(drop=True)
+    obs2id = _build_oracle(cd)
+    edges_typed, node_ids, node_feat = build_person_graph_typed(
+        cd, substrate=run["substrate"], include_plate=True
+    )
+    spec = GNN_ARMS[run["gnn_arm"]]
+    loaded = load_demo_checkpoint(
+        checkpoint_path,
+        model_registry={name: arm["cls"] for name, arm in GNN_ARMS.items()},
+        expected={
+            "seeds": run["seeds"],
+            "epochs": run["epochs"],
+            "train_bucket": run["train_bucket"],
+            "valid_sample": valid_sample,
+            "gnn_arm": run["gnn_arm"],
+            "substrate": run["substrate"],
+            "corpus_identity": str(cd.resolve()),
+            "corpus_fingerprints": corpus_fingerprints(cd),
+            "feature_schema": {
+                "baseline": list(FEATURE_NAMES),
+                "gnn": list(caught_feature_names(spec["num_rel"])),
+            },
+            "node_universe_hash": checkpoint_node_universe_hash(node_ids),
+            "relation_schema": {
+                key: int(value) for key, value in sorted(REL_PLATE.items())
+            },
+        },
+    )
+    expected_valid_ids = valid_pool["event_id"].astype(str).to_numpy()
+    expected_test_ids = pool["event_id"].astype(str).to_numpy()
+    if not np.array_equal(loaded.validation_event_ids, expected_valid_ids):
+        raise ValueError("checkpoint validation event order is incompatible")
+    if not np.array_equal(loaded.test_event_ids, expected_test_ids):
+        raise ValueError("checkpoint test event order is incompatible")
+
+    caught_time = build_caught_times(cd, obs2id)
+    blend_weight = loaded.metadata["fusion_weights"]["deployable"]
+    seed_level = _seed_level_unique_person_recovery(
+        pool,
+        loaded.baseline_test,
+        loaded.gnn_test_by_seed,
+        blend_weight=blend_weight,
+        official_caught_times=caught_time,
+        inspections_per_day=5,
+    )
+    engine = Seed0ExplanationEngine(
+        model=loaded.models_by_seed[0],
+        edges_typed=edges_typed,
+        node_ids=node_ids,
+        node_feat=node_feat,
+        caught_time=caught_time,
+        num_rel=spec["num_rel"],
+    )
+    observability_path = _result_path(observability_out_name)
+    narrative_builder = (
+        generate_narrative
+        if narrative_runner is None
+        else partial(generate_narrative, runner=narrative_runner)
+    )
+    artifact_holder = {}
+
+    def build_artifact():
+        artifact = build_observability_bundle(
+            pool=pool,
+            baseline_raw=loaded.baseline_test,
+            seed0_gnn_raw=loaded.gnn_test_by_seed[0],
+            blend_weight=blend_weight,
+            caught_times=caught_time,
+            gnn_arm=run["gnn_arm"],
+            surrounding_seeds=tuple(run["seeds"]),
+            explanation_engine=engine,
+            seed_level_unique_person_recovery=seed_level,
+            explanation_limit=explanation_limit,
+            inspections_per_day=5,
+            staging_root=(
+                observability_path.parent
+                / f".{observability_path.stem}.recovery-stage"
+            ),
+            final_root=observability_path.parent / "recovery",
+            corpus_identity=str(cd.resolve()),
+            recovery_run_identity={"checkpoint_id": loaded.checkpoint_id},
+            narrative_builder=narrative_builder,
+        )
+        artifact_holder["artifact"] = artifact
+        return artifact
+
+    _write_observability_output(observability_path, build_artifact)
+    return artifact_holder["artifact"]
 
 
 if __name__ == "__main__":
