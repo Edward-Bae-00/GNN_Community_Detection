@@ -14,6 +14,7 @@ from gnn.sage_explainer import validate_explanation_payload
 MODEL_TAG = "gemma4:12b"
 PROMPT_VERSION = "v4"
 _PREFLIGHT_CACHE = set()
+_CONTRACT_PREFLIGHT_CACHE = set()
 
 APPROVED_CAVEATS = (
     "This is seed-0 observability, not the three-seed headline result.",
@@ -462,6 +463,78 @@ def preflight_local_model(*, runner=subprocess.run, timeout_seconds=180):
         raise RuntimeError(f"local {MODEL_TAG} is unavailable")
     _PREFLIGHT_CACHE.add(cache_key)
     return MODEL_TAG
+
+
+def _selector_preflight_packet():
+    return {
+        "scope": {"observability_seed": 0, "gnn_arm": "sage"},
+        "snapshot": "2025-01-01T00:00:00Z",
+        "ranks": {"baseline": 10, "seed0_gnn": 2, "seed0_hybrid": 4},
+        "attributions": {
+            "top_local_nodes": [],
+            "top_edges": [],
+            "top_features": [],
+            "unsigned_masks": True,
+        },
+        "component_pooling": {"top_members_by_absolute_contribution": []},
+        "rank_fusion": {
+            "daily_budget": 5,
+            "blend_weight": 0.75,
+            "baseline_percentile": 0.8,
+            "seed0_gnn_percentile": 0.6,
+            "baseline_weighted_term": 0.2,
+            "seed0_gnn_weighted_term": 0.45,
+            "hybrid_score": 0.65,
+        },
+        "factors_by_id": {},
+        "visible_paths": [],
+        "community_summary": {
+            "complete": True,
+            "community_key": "community:sha256:preflight",
+            "component_id": "component:sha256:preflight",
+            "scoring_day": "2025-01-01T00:00:00Z",
+            "node_count": 1,
+            "edge_count": 0,
+            "target_person_id": "P-PREFLIGHT",
+        },
+        "caveats": list(APPROVED_CAVEATS),
+    }
+
+
+def preflight_narrative_contract(
+    *, runner=subprocess.run, timeout_seconds=180, packet=None
+):
+    """Verify Ollama, the exact model tag, and selector resolution live."""
+    packet = _validated_fact_packet(
+        _selector_preflight_packet() if packet is None else packet
+    )
+    prompt = build_prompt(packet)
+    cache_key = (MODEL_TAG, PROMPT_VERSION, hashlib.sha256(prompt.encode()).hexdigest(), runner)
+    if cache_key in _CONTRACT_PREFLIGHT_CACHE:
+        return MODEL_TAG
+    preflight_local_model(runner=runner, timeout_seconds=timeout_seconds)
+    last_error = None
+    for _attempt in range(4):
+        try:
+            selector = _run_local_gemma(
+                prompt,
+                runner=runner,
+                timeout_seconds=timeout_seconds,
+                preflight=False,
+            )
+            resolve_narrative_selector(packet, selector)
+            _CONTRACT_PREFLIGHT_CACHE.add(cache_key)
+            return MODEL_TAG
+        except (
+            OSError,
+            RuntimeError,
+            TimeoutError,
+            subprocess.TimeoutExpired,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            last_error = exc
+    raise RuntimeError("local Gemma selector-generation contract failed") from last_error
 
 
 def _run_local_gemma(prompt, *, runner, timeout_seconds, preflight=True):

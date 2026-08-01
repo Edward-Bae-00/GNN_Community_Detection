@@ -1,268 +1,289 @@
 # Synthetic CBP Graph Corpus - Data Guide
 
-> Current-status note (2026-07-08): this guide was originally written for the
-> V7-era corpus/dashboard stack and still contains historical V6/V7 sections.
-> The active checkout now contains V8, V9, and V9dev corpora. For current
-> V9-positive-control design/results, use `Documents/Data/changes_3.md`; for
-> repository onboarding, use the root `README.md`, `AGENTS.md`, and `CLAUDE.md`.
-> Treat older dashboard-stack and V7-latest wording as legacy context unless
-> refreshed in a later data-guide rewrite.
+> Current-status note (2026-07-09): This guide describes the checked-in
+> synthetic corpus snapshots and the active `gnn/` baseline-vs-GNN research
+> track. The current track is V8/V9: V8 is the realistic honest-track corpus,
+> V9 is the designed positive control, and V9dev is the small test corpus.
+> Detailed V9 design and result claims live in `Documents/Data/changes_3.md`.
 
 ## What This Dataset Is
 
-A fully synthetic, privacy-safe graph corpus that models **U.S. Customs and Border Protection (CBP) crossing events** and the social/logistic networks around them. It is designed for research in **graph neural network (GNN) community detection**, entity resolution, and anomaly scoring — not for operational use.
+This is a fully synthetic, privacy-safe graph corpus that models CBP-style
+border crossing events and observable social/logistic structure around those
+events. It is for research on graph learning, entity resolution, and anomaly
+scoring. It is not operational data.
 
-The active corpus snapshots in this checkout are **v8**, **v9**, and **v9dev**.
-V8 is the honest thin-relational-signal track; V9 is the designed
-positive-control corpus used by `gnn/`; V9dev is the small test
-profile. Historical V7 details below are retained for context.
+No row represents a real person, vehicle, document, officer, case, event,
+seizure, arrest, address, phone number, email, license plate, or name. Aggregate
+CSV files under `Documents/Data/RealWorld_Data/` are calibration/context inputs
+only.
 
----
+The active corpus snapshots in this checkout are:
 
-## Data Realism & Interdiction Rates
+| Corpus | Path | Role |
+| --- | --- | --- |
+| V8 | `Documents/Data/synthetic_cbp_graph_corpus_v8/` | Realistic honest-track corpus with thin relational signal |
+| V9 | `Documents/Data/synthetic_cbp_graph_corpus_v9/` | Designed positive-control corpus with propagable relational signal |
+| V9dev | `Documents/Data/synthetic_cbp_graph_corpus_v9dev/` | Small V9-profile corpus used by tests and smoke runs |
 
-A key design choice: **most smuggling goes undetected.** This matches real-world evidence.
+`gnn/config.py` defaults to V8. The V9 demonstration is selected explicitly:
 
-### Current dataset rates
+```bash
+CBP_CORPUS_DIR=$PWD/Documents/Data/synthetic_cbp_graph_corpus_v9 \
+  PYTHONPATH=. python -m gnn.run_demo
+```
 
-| Metric | Value |
-|--------|-------|
-| True-contraband events | 3,736 |
-| Caught true-contraband events (seizures) | 327 |
-| Got through undetected | 3,409 |
-| **Event interdiction rate** | **~8.8%** |
+## Current Research Track
 
-### Real-world evidence supporting these rates
+The active `gnn/` track compares a strong leak-free tabular baseline, an
+as-of caught-propagation RGCN, and a hybrid method that combines them.
 
-**CBP's own estimate (cocaine):** CBP estimated it seized only **~3%** of cocaine trafficked through U.S. ports of entry — the only drug for which the agency published an internal flow estimate.
-> Cited in Cato Institute analysis of DHS data ([source](https://www.cato.org/blog/fentanyl-smuggled-us-citizens-us-citizens-not-asylum-seekers))
+| File | Current role |
+| --- | --- |
+| `gnn/config.py` | Repository paths, default corpus, diagnostics path |
+| `gnn/run_demo.py` | Main baseline-vs-GNN evaluation harness |
+| `gnn/demo_baseline.py` | 14-feature leak-safe tabular baseline |
+| `gnn/graphmodel_rgcn.py` | Typed graph construction and RGCN model |
+| `gnn/learned_cell.py` | As-of caught-propagation scoring |
+| `gnn/detector.py` | sklearn model fitting helper |
+| `gnn/unsupervised_ad.py` | Unsupervised anomaly detection per border (region) |
 
-**Congressional Research Service (CRS R45812, July 2019):** *"[O]f the total amount of illicit drugs that reach the U.S. border by land, air, or sea… an unknown portion is successfully smuggled into the country."* CRS explicitly notes the total flow is **not known with precision**, making exact interdiction rates impossible to calculate — but acknowledges the seized fraction is small relative to estimated supply.
-> [CRS Report R45812 — Illicit Drug Flows and Seizures in the United States](https://www.congress.gov/crs-product/R45812)
+The comparison is intentionally narrow:
 
-**Senator Angus King / JIATF-South (maritime):** In Senate Armed Services hearings, Sen. King cited intelligence showing the military interdicts only **~25% of *known* maritime drug shipments** — and that figure only counts shipments already identified by intelligence, not the unknown ones.
-> [Sen. King press release](https://www.king.senate.gov/newsroom/press-releases/king-its-inexcusable-that-military-halts-only-25-percent-of-known-drug-shipments)
+- Train labels are `detected_flag`: observed catches available to the model.
+- Evaluation targets are `false_negative_flag`: hidden carriers in the test
+  pool.
+- The baseline uses own prior history, observed demographics, and current event
+  context.
+- The baseline does not use graph edges, neighbor labels, future outcomes,
+  lifetime catches, hidden org labels, or outcome aggregates.
+- The GNN uses as-of graph structure and caught propagation over
+  `COTRAVEL`, `RESIDENCE`, `SHARED_PLATE`, and `SHARED_PLATE_HOT`.
+- Edges and caught labels are only used when available strictly before the
+  scoring time.
+- The hybrid arm combines tabular baseline features with leak-free out-of-fold 
+  GNN scores to train a gradient boosting model (HGB).
 
-**RAND Corporation (1994, "Controlling Cocaine"):** RAND's simulation model for ONDCP concluded that even large increases in interdiction spending would produce only marginal reductions in domestic cocaine consumption, implying that the baseline seizure rate is a small fraction of total flow.
-> [RAND MR-331](https://www.rand.org/pubs/monograph_reports/MR331.html)
+The current 14 baseline features are:
 
-**DHS / CBP FY2024 seizure volumes:** In FY2024, CBP seized ~18,900 lbs of fentanyl at the Southwest border (down 22% from the prior year) and ~55,000 lbs total of all drugs in August 2025 alone. While these are large absolute numbers, the DEA estimates U.S. annual consumption vastly exceeds what is seized.
-> [CBP December 2024 Monthly Update](https://www.cbp.gov/newsroom/national-media-release/cbp-releases-december-2024-monthly-update) · [DHS August 2025 Drug Seizure Report](https://www.dhs.gov/news/2025/09/30/cbp-reports-drug-seizures-surge-again-august)
+```text
+prior_crossings, prior_secondary, prior_seizure, prior_arrests,
+hour, age_bucket, sex, citizenship_country, residence_country,
+region, mode_of_transportation, travel_category,
+declared_trip_purpose, day_of_week
+```
 
-### Bottom line
+## V8 And V9
 
-Expert consensus places the overall narcotics interdiction rate somewhere in the **5–15% range** depending on drug type and smuggling vector. The dataset's ~7% rate sits squarely within that range.
+V8 and V9 answer different questions.
 
----
+### V8: Honest Track
+
+V8 is the realistic thin-graph-signal regime. Smuggling communities include many
+lone actors and dark members who leave little or no observable enforcement
+trail. In this setting, the working result is that the GNN edge over a strong
+per-person tabular baseline is bounded and marginal.
+
+V8 remains important because it is the honest, realistic track. V9 does not
+replace it.
+
+### V9: Positive Control
+
+V9 is deliberately engineered so that hidden-carrier risk is propagable through
+observable relational structure. It asks a method-validation question: when the
+generative process contains relational signal, does a GNN exploit it better than
+a per-person tabular model?
+
+Key V9 design points:
+
+- Dense co-offender co-travel: 3-5 anchors-first cell-mates per org event.
+- Larger and more observable cells: `org_size` 4-12, dark rate reduced from
+  0.30 to 0.10, observability increased.
+- Role split: anchors are caught with high probability and seed the graph;
+  clean carriers carry but are forced to leave no enforcement trail and become
+  hidden evaluation targets.
+- Shared plates: cells reuse a small plate pool, creating `SHARED_PLATE` and
+  `SHARED_PLATE_HOT` rails.
+- Lone-smuggler tail preserved: many hidden carriers remain outside any cell,
+  bounding the GNN's possible win.
+
+The intended mechanism is as-of guilt-by-association: a caught anchor before
+time `T` illuminates still-uncaught connected cell-mates after `T`. The GNN is
+not allowed to see future catches, hidden org labels, or lifetime outcomes.
+
+## Current Results
+
+The canonical V9 result log is `Documents/Data/changes_3.md`. The main checked-in
+result artifact is `gnn/diagnostics/demo_comparison_v9.json`; the small smoke
+artifact is `gnn/diagnostics/demo_smoke.json`. Additionally, an unsupervised 
+anomaly detection evaluation (`gnn/diagnostics/unsupervised_ad_results.json`) 
+uses Isolation Forest to model each border region's definition of "normal", 
+and is displayed in the V9 dashboard.
+
+Full-scale V9 result summary from `changes_3.md`:
+
+- Corpus: 120K persons / 200K events.
+- Test pool: 38,948 events.
+- Hidden carriers: 2,691 total, including 708 observable, 234 dark, and 1,749
+  lone.
+- Demo graph relations: 113,293 `COTRAVEL`, 169,315 `RESIDENCE`, 14,385
+  `SHARED_PLATE`, and 5,355 `SHARED_PLATE_HOT`.
+- At operational depth, the GNN recovers about 2.3-2.9x more hidden carriers
+  than the strong tabular baseline on whole-pool recall, with decisive paired
+  bootstrap results for K >= 500.
+- On the observable/findable slice, the GNN recovers nearly all findable hidden
+  carriers by K=5000 in the logged full run.
+
+Important caveats:
+
+- Top-K is a wash at K <= 100; the baseline can pick off obvious repeat
+  offenders using own-history features.
+- The GNN win is concentrated in the connected subpopulation. Lone and dark
+  carriers have little or no relational signal.
+- Co-travel is the load-bearing rail. Tests now assert that co-travel reaches
+  the built demo graph, not just `edges.csv`.
+- V9 is a designed positive control. It does not change the V8 honest-track
+  finding.
+
+## Data Realism And Interdiction Rates
+
+The corpora model a setting where most smuggling is undetected. `event_ground_truth.csv`
+contains latent ground truth such as true contraband presence and false negatives;
+the model-facing labels use observed detections.
+
+In V9, the catch rate is deliberately around 4% rather than the initially
+targeted ~10%. Catches are concentrated in co-offender cells, which creates a
+clean as-of caught-propagation signal without spreading risk to benign
+co-travelers. V8 interdiction remains in the approximate 7-8% range.
+
+The low observed catch-rate assumption is consistent with the project rationale:
+real-world total flow is uncertain, seizure rates vary by drug and vector, and
+observed seizures are only a partial view of latent trafficking.
+
+## Evaluation Splits
+
+The corpora use strict temporal splits combined with group-level leakage prevention, recorded in `train_valid_test_splits.csv`. In the full V9 corpus (200,000 events), the temporal breakdown is:
+
+- **Train:** Events before `2024-01-01` (103,917 events).
+- **Validation:** Events between `2024-01-01` and `2024-12-31` (55,505 events).
+- **Test:** Events on or after `2025-01-01` (40,578 events).
+
+- **Family/Community Group Leakage Prevention:** Simply splitting by time can lead to "data leakage" if a tight-knit group (like a family or cell) has events crossing the time boundary. If the model learns a hidden trait from one family member in the training set, it might unfairly recognize another family member in the test set. To prevent this, the split strategy uses a `group_leakage_prevention_id` (like a family or community ID) to ensure that strongly-linked individuals are kept together in the same split rather than bleeding across train/test boundaries.
 
 ## Snapshot Methodology
 
 The active V8, V9, and V9dev corpora are checked-in synthetic snapshots. The
-generator entrypoint has been retired from this checkout, so historical sections
-below may still use older generator language. Key design principles:
+active code path for evaluation is `gnn/`, not corpus generation. Each corpus
+directory still includes a snapshot-local copy of
+`generate_synthetic_cbp_graph_corpus_v3.py` and `GENERATION_CONFIG.json` as
+provenance artifacts, but generator maintenance is not the current research
+track in this checkout.
 
-1. **Connectivity = what the government observes.** No synthetic social-media or phone-call graphs. Person-to-person edges come only from co-travel, shared addresses, shared vehicles, shared employers, and repeated routes.
+Foundational design principles inherited from earlier versions include:
 
-2. **Families ≠ addresses.** Kinship uses a hidden `family_id` that can span multiple households. Some relatives live apart but co-travel — a realistic entity-resolution challenge.
+1. Observable connectivity only: no synthetic phone-call or social-media graph.
+   Person-to-person signal comes from co-travel, shared residences, shared
+   vehicles, shared employers, and repeated routes.
+2. Families are not addresses: kinship uses hidden family structure that can
+   span households.
+3. Undetected smuggling: latent contraband and observed detection are distinct,
+   producing realistic false negatives.
+4. Demographics are not the smuggling mechanism: demographics-only behavior is
+   a fairness negative-control concern, not the intended signal.
+5. Hidden co-offender cells: `org_id` captures smuggling cells, including dark
+   members who may leave no observable trail.
+6. Entity-resolution artifacts exist for context, but the current V9 demo uses
+   an oracle identity substrate shared by both arms so ER is not the variable.
 
-3. **Undetected smuggling.** Each event has a latent `true_contraband_present` flag generated *independently* of enforcement. Detection probability is < 1 at every stage, producing realistic false negatives. Ground truth is quarantined in `event_ground_truth.csv`.
+## Dashboard And Explorer Artifacts
 
-4. **Demographics are independent of smuggling propensity.** A demographics-only model stays at chance (negative control for fairness auditing).
+Dashboard artifacts exist for corpus inspection, not as the source of current
+model claims.
 
-5. **Hidden co-offender cells with an unfindable fraction (V6/V7).** A second hidden grouping, `org_id`, separate from the family community label and spanning **at least two families per cell**, models smuggling cells. Like family, it is never an edge or a feature — it surfaces only through observable records (cross-family co-travel, a shared vehicle, a shared small carrier/broker). A deliberate fraction of members are **dark**: truly in the cell but leaving *no* observable trail (operational security — burner phones, recruiting strangers, never co-travelling). The gap between true and observable cell connectivity is the structural analog of undetected smuggling — some genuine co-offenders are simply unrecoverable from the data. See the V6/V7 sections below.
+- V8 and V9 corpus directories include `dashboard_data.json` and
+  `dashboard_standalone.html`.
+- `Documents/Data/v9_dashboard/` contains a packaged V9 dashboard shell:
+  `index.html` plus `data_v9.json`.
+- V9dev intentionally does not include dashboard payloads; it is for tests and
+  smoke runs.
 
-6. **Entity-resolution recoverability (V7).** V7 adds a downstream ER layer on top of the V6-style corpus. It summarizes observed identity fragments, deterministic same-document/same-event ER clusters, oracle clusters, and weak-link pairs that are recoverable only by combining multiple observable signals. Truth columns remain evaluation labels and are not operational features.
+Dashboard tabs summarize corpus structure: overview, temporal/geographic
+patterns, communities, outcomes, seizures, graph metrics, entity-resolution
+context, and an interactive explorer. Treat ER dashboard material as historical
+and diagnostic context for the current demo, not as a changing variable in the
+V9 baseline-vs-GNN comparison.
 
----
+## Current Regression Coverage
 
-## V6: Non-Family Co-Offender Structure
+The focused test suite covers the active V9 demo stack:
 
-V5 capped the graph approach: all person-to-person structure was family-derived, so only **29 / 735 (3.95%)** hidden false-negative test smugglers could ever reach a prior caught anchor through leak-safe connectivity. V6 adds non-family co-offender cells to lift this without changing the base task.
+| Test file | Coverage |
+| --- | --- |
+| `tests/test_df_detector.py` | sklearn detector helper behavior |
+| `tests/test_df_graphmodel_rgcn.py` | graph/RGCN dataframe behavior |
+| `tests/test_demo_baseline.py` | baseline feature construction and leak-safety expectations |
+| `tests/test_run_demo_smoke.py` | V9dev demo smoke output |
+| `tests/test_v9_corpus_snapshot.py` | V9dev corpus properties and graph-regression guards |
 
-- **Generation history:** the V6 snapshot was produced by the historical generator with the org layer enabled; v3/v4/v5 were byte-identical to before. Cells are drawn from existing elevated-propensity persons and every cell spans **≥2 families** — no propensity is changed, so corpus-wide contraband/seizure prevalence stays within noise of V5 (seizures 339 vs 358; FN slip-through 90.5% vs 90.3%).
-- **Channels by mode affinity** (`passenger_vehicle`/`pedestrian`/`air`/`truck`): cross-family co-travel → `PERSON_ASSOCIATED_WITH_PERSON` (still co-travel-derived, validator-safe); passenger-vehicle cells also share one vehicle; air cells share a carrier; truck cells share a truck + small broker. Co-travel is time-correlated by construction (same event).
-- **Golden ground truth:** `org_membership_ground_truth.csv` holds the *full* membership incl. `is_dark` members. `is_observable=true` means the member actually surfaced through same-org co-travel, shared vehicle, or shared carrier/broker records. `org_id` never appears on `persons.csv` / `node_features.csv` / `event_features.csv` / `crossing_events.csv` (enforced by `validate_corpus.py`, including JSON/string payload scans).
-- **Result (`border_anomaly.graph_ceiling` with `CBP_CORPUS=synthetic_cbp_graph_corpus_v6`):** observable reachability `A_direct_only` rises **3.95% → 7.74%** (51/659). `graph_ceiling.json` reports full vs actually observable cell reachability; their difference is the truly-linked-but-unfindable fraction.
-
----
-
-## V7: Entity-Resolution Recoverability Layer
-
-V7 keeps the V6-style hidden co-offender structure and adds ER artifacts to test the thesis pathway: whether learned ER models, including possible GNN variants, can recover identity links that deterministic ER misses and whether better identity clusters improve downstream graph detection.
-
-- **Generation history:** V7 uses the same 200K-event / 120K-person scale as V6 and adds ER artifacts before generated schema/docs are scanned.
-- **ER outputs:** `identity_fragmentation_profile.csv`, `record_link_evidence.csv`, `baseline_er_clusters.csv`, `oracle_er_clusters.csv`, and `v7_er_recoverability_summary.json`.
-- **Feature/label contract:** `record_link_evidence.csv` includes labels and canonical IDs for training/evaluation metadata, but model features should use only observable evidence fields such as same document, DOB bucket, sex marker, source system, vehicle, carrier, and residence. It deliberately excludes hidden family/org truth as model evidence.
-- **V7 ER summary:** the summary now reports deterministic coverage plus **oracle weak-link coverage** using observable evidence only: 116,148 deterministic true pairs, 818 weak-link positive true pairs, deterministic recall 0.906, and deterministic + weak-link oracle coverage 0.912. It does **not** report a measured learned ER-GNN recall; learned ER training and downstream comparison remain future work.
-- **Dashboard:** the unified dashboard includes V7 in the corpus switcher and adds an **Entity Resolution** tab when a corpus has `entity_resolution` data. That tab explicitly states that no learned ER-GNN result has been produced yet.
-
----
-
-## Dashboard Tabs & What They Show
-
-The unified dashboard (`index.html`) loads `data_v*.json` files for V2-V7 and organizes each corpus into several tabs:
-
-| Tab | Contents |
-|-----|----------|
-| **Overview** | High-level counts: nodes by type (person, event, document, vehicle, etc.), edge types, outcome rates (secondary, search, seizure, arrest), and train/validation/test split sizes |
-| **Temporal** | Monthly crossing volume over ~4 fiscal years (FY2022–FY2025), day-of-week and hour-of-day heatmaps, volume by region over time |
-| **Geographic** | Crossings by region, field office, and port of entry; route flows (origin → port → destination); state-level choropleth maps |
-| **Communities** | Community-type distribution (11 types), community map visualization showing geographic clustering, community size distribution |
-| **Outcomes** | Outcome funnels (secondary → search → seizure → arrest → prosecution) broken down by traveler segment, mode, citizenship, and direction |
-| **Seizures** | Drug seizure details: drug types, detection methods, conveyance types, monthly seizure/arrest trends, quantity statistics |
-| **Graph** | Graph structure metrics: degree distribution, node/edge type counts, edge categories (structural vs. social vs. outcome), connectivity patterns |
-| **Entity Resolution** | V7 ER summary: observed identity records, candidate links, deterministic coverage, oracle weak-link coverage, fragmentation tiers, and a note that no learned ER-GNN result exists yet |
-| **Explorer** | Interactive force-directed graph of the person-to-person subgraph (~9,686 nodes, ~16,202 links) with full filtering and community drill-down |
-
----
-
-## Explorer Tab — Filters Explained
-
-The Explorer tab is the interactive network visualization. Here is what every filter does:
-
-### Role Chips (top row)
-
-These filter **people by their enforcement outcome**. They are additive — turning on multiple chips shows people matching *any* of the selected roles.
-
-| Chip | Meaning |
-|------|---------|
-| **Carried** | Person carried contraband on at least one crossing (flag `r & 1`). Includes both caught and uncaught carriers. |
-| **Interdiction** | Person is a member of an interdiction-linked community — i.e., belongs to a community type specifically flagged as smuggling-associated (flag `r & 2`). |
-| **Seized** | At least one crossing by this person resulted in a drug seizure (flag `r & 4`). |
-| **Arrested** | Person was arrested during at least one crossing (flag `r & 8`). |
-| **Near smuggler** | Person was *not* flagged with any of the above roles, but is a direct graph neighbor of someone who carried contraband (`ns` flag). |
-| **Near arrest** | Person is a direct graph neighbor of someone who was arrested (`na` flag). |
-
-### Community Type Chips
-
-Filter by the **type of community** the person belongs to. There are 11 types:
-
-| Type | Description |
-|------|-------------|
-| **Low-frequency / one-time** | People who crossed only once or very rarely. Largest group (~15K). |
-| **Family travel** | Family clusters who travel together. Linked by kinship and co-travel edges. |
-| **Routine commuter** | Daily or near-daily border commuters (work, school, shopping). |
-| **Airport passenger** | Air-mode travelers processed at airport CBP facilities. |
-| **Interdiction-linked** | Communities with elevated smuggling involvement. Key target for GNN detection. |
-| **High-frequency benign** | Frequent crossers with no enforcement flags. |
-| **Seasonal worker** | Agricultural or seasonal employment-driven crossers. |
-| **Commercial trucking** | Commercial drivers and fleet-associated persons. |
-| **Rental-reliant** | People who primarily use rental vehicles for crossings. |
-| **Prior stops, no seizures** | People who have been referred to secondary inspection before but never had a seizure. |
-| **Admin document issue** | People flagged for document irregularities (expired, mismatched, etc.). |
-
-### Attribute Dropdowns
-
-| Filter | What it controls |
-|--------|-----------------|
-| **Region** | The CBP geographic region of the person's crossings: Southern Border, Northern Border, Coastal/Interior, or Preclearance (pre-clearance facilities in Canada/Caribbean). |
-| **Traveler segment** | Behavioral classification of the traveler (e.g., `routine_commuter`, `airport_traveler`, `family_traveler`, `commercial_driver`, `seasonal_worker`, etc.). |
-| **Citizenship** | Country of citizenship on the person's travel document. Top values: US, Mexico, Canada, plus ~13 other countries. |
-| **Age** | Age bucket: 0–17, 18–24, 25–34, 35–44, 45–54, 55–64, 65+. |
-
-### Jump to Community
-
-Select a specific community ID from the dropdown to **drill into** that community. This filters the graph to show only members of that community plus their immediate neighbors, switches to Focus mode, and zooms the camera to frame them.
-
-### Connection Types
-
-Toggle which **edge types** are displayed:
-
-| Type | What it represents |
-|------|--------------------|
-| **Associated** | General association — co-travel, co-appearance in the same crossing event. |
-| **Family** | Kinship link (same `family_id` in the generator). |
-| **Co-address** | Shared residential address on file. |
-| **Co-vehicle** | Used the same vehicle across different crossings. |
-| **Co-business** | Linked to the same employer or business entity. |
-| **Co-travel** | Traveled together in the same crossing event (same party). |
-
-Links can have **multiple types simultaneously** (stored as a bitmask). For example, two family members who also share an address and traveled together would have a link with `family | co_address | co_event` flags set.
-
-### Colour By
-
-- **Community** — nodes colored by their community type (11 colors).
-- **Role** — nodes colored by enforcement role: orange = carrier, rose = interdiction, red = arrested, amber = seizure, dark gray = no role.
-
-### Filter Mode
-
-- **Highlight** — all nodes remain visible; non-matching nodes are dimmed to 16% opacity.
-- **Focus** — non-matching nodes are completely hidden (`display: none`). Used automatically when drilling into a community.
-
-### Node Details (sidebar)
-
-Clicking any node shows:
-- Person ID, community, community type
-- Region, segment, citizenship, age
-- Number of border crossings
-- Total graph connections (degree)
-- Whether they are linked to a smuggler or arrest
-- Breakdown of visible connections by tie type
-- "Drill into community" button
-
----
+`tests/test_v9_corpus_snapshot.py` is the main corpus guard. It checks core
+files, org-layer presence, dense co-travel, as-of co-travel edge timestamps,
+the expected low catch-rate band, the hidden-carrier pool, shared-plate reuse,
+the preserved lone-carrier tail, and that `COTRAVEL` reaches the graph built by
+`gnn.graphmodel_rgcn.build_person_graph_typed`.
 
 ## File Layout
 
-```
+```text
 Documents/Data/
+  DATA_GUIDE.md
+  changes_3.md                     # canonical V9 design/results log
+
   synthetic_cbp_graph_corpus_v8/
-    *.csv                         — V8 honest-track corpus tables
-    README.md                     — generated corpus inventory
-    DATA_DICTIONARY.md            — table/column descriptions
-    VALIDATION_REPORT.md          — generated validation report
+    *.csv                          # V8 honest-track corpus tables
+    README.md
+    DATA_DICTIONARY.md
+    SCHEMA.json
+    GENERATION_CONFIG.json
+    VALIDATION_REPORT.md
+    generate_synthetic_cbp_graph_corpus_v3.py
+    dashboard_data.json
+    dashboard_standalone.html
 
   synthetic_cbp_graph_corpus_v9/
-    *.csv                         — full V9 positive-control corpus tables
-    dashboard_data.json           — dashboard payload from build_dashboard.py
-    dashboard_standalone.html     — standalone corpus dashboard shell
-    README.md                     — generated corpus inventory
+    *.csv                          # full V9 positive-control corpus tables
+    README.md
+    DATA_DICTIONARY.md
+    SCHEMA.json
+    GENERATION_CONFIG.json
+    VALIDATION_REPORT.md
+    generate_synthetic_cbp_graph_corpus_v3.py
+    dashboard_data.json
+    dashboard_standalone.html
 
   synthetic_cbp_graph_corpus_v9dev/
-    *.csv                         — small V9 dev/test corpus
-    README.md                     — generated corpus inventory
+    *.csv                          # small V9-profile test corpus
+    README.md
+    DATA_DICTIONARY.md
+    SCHEMA.json
+    GENERATION_CONFIG.json
+    VALIDATION_REPORT.md
+    generate_synthetic_cbp_graph_corpus_v3.py
 
   scripts/
-    validate_corpus.py            — validation harness
-    build_dashboard.py            — corpus dashboard data/shell builder
-    build_v9_dashboard.py         — V9 dashboard packager
+    validate_corpus.py
+    build_dashboard.py
+    build_v9_dashboard.py
+    explorer_ui.py
+    v9_dashboard_ui.py
 
   v9_dashboard/
-    index.html                    — V9 dashboard shell
-    data_v9.json                  — V9 dashboard data payload
+    index.html
+    data_v9.json
 
   RealWorld_Data/
-    *.csv                         — aggregate calibration/reference inputs
+    *.csv                          # aggregate calibration/reference inputs
+
+  CAVIAR/
+    phase*.csv                     # external benchmark/reference data
 ```
 
----
-
-## Key Node Properties (Explorer JSON)
-
-| Field | Type | Meaning |
-|-------|------|---------|
-| `id` | string | Person ID (e.g., `P00001504`) |
-| `ct` | int | Community type index (into `community_types` array) |
-| `rg` | int | Region index (into `regions` array) |
-| `sg` | int | Traveler segment index |
-| `ci` | int | Citizenship index |
-| `ag` | int | Age bucket index |
-| `cr` | int | Number of border crossings |
-| `r` | int | Role bitmask: bit 0 = carried, bit 1 = interdiction, bit 2 = seized, bit 3 = arrested |
-| `ns` | 0/1 | Neighbor of a smuggler |
-| `na` | 0/1 | Neighbor of an arrested person |
-| `cm` | string | Community ID (e.g., `C0000625`) |
-| `d` | int | Degree (number of graph connections) |
-
-## Key Link Properties
-
-Links are stored as `[source_idx, target_idx, tie_bitmask, weight]`:
-
-| Bit | Tie type |
-|-----|----------|
-| 0 (1) | associated |
-| 1 (2) | family |
-| 2 (4) | co_address |
-| 3 (8) | co_vehicle |
-| 4 (16) | co_business |
-| 5 (32) | co_event (co-travel) |

@@ -236,6 +236,35 @@ def _valid_recovery_artifact(*, baseline_only=0):
     }
 
 
+def _case(
+    case_id,
+    person_id,
+    *,
+    event_id=None,
+    scoring_day="2025-01-02T00:00:00Z",
+    baseline_rank=40,
+    seed0_gnn_rank=3,
+    seed0_hybrid_rank=8,
+    hybrid_rank_uplift=32,
+    gnn_percentile_uplift=0.5,
+    relationship_categories=None,
+    stable_factor_status="stable",
+):
+    return {
+        "case_id": case_id,
+        "person_id": person_id,
+        "event_id": event_id or "event:" + person_id,
+        "scoring_day": scoring_day,
+        "baseline_rank": baseline_rank,
+        "seed0_gnn_rank": seed0_gnn_rank,
+        "seed0_hybrid_rank": seed0_hybrid_rank,
+        "hybrid_rank_uplift": hybrid_rank_uplift,
+        "gnn_percentile_uplift": gnn_percentile_uplift,
+        "relationship_categories": relationship_categories or ["COTRAVEL"],
+        "stable_factor_status": stable_factor_status,
+    }
+
+
 def test_schema_v2_ui_contract_lazy_loads_both_complete_cohorts():
     js = UI.V9_RECOVERY_EXPLAINER_JS
 
@@ -289,6 +318,22 @@ def test_schema_v2_ui_fetches_only_requested_sidecar_pages():
     assert "state.loadedProvenanceCount" in js
     assert "state.loadedNodeCount" in js
     assert "state.membershipPages" in js
+
+
+def test_schema_v2_ui_lazily_merges_normalized_day_view_state():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    for token in (
+        "node_status_chunks",
+        "edge_membership_chunks",
+        "node_statuses",
+        "edge_memberships",
+        "resolvedRows",
+        "catalogIndex",
+        "recoveryCatalogChunkCache",
+    ):
+        assert token in js
+    assert "Salient counterfactual factors" in js
 
 
 def test_schema_v2_ui_lazily_pages_case_overlay_evidence_separately():
@@ -631,6 +676,372 @@ def _run_ui(function_name, value, options=None):
         ["node", "-e", script], check=True, capture_output=True, text=True
     )
     return json.loads(completed.stdout)
+
+
+def _run_ui_with_input_snapshot(function_name, value):
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nconst input="
+        + json.dumps(value)
+        + ";const before=JSON.stringify(input);"
+        + "const result="
+        + function_name
+        + "(input);process.stdout.write(JSON.stringify({result,input,before}));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    return json.loads(completed.stdout)
+
+
+def test_highest_attribution_view_model_ranks_top3_without_mutating_input():
+    explanation = {
+        "attributions": {
+            "top_local_nodes": [
+                {"rank": 3, "node_id": "n3", "explainer_median": 0.4},
+                {"rank": 1, "node_id": "n1", "explainer_median": 0.8},
+                {"rank": 2, "node_id": "n2", "explainer_median": 0.6},
+                {"rank": 4, "node_id": "n4", "explainer_median": 0.99},
+            ],
+            "top_edges": [
+                {
+                    "rank": 2,
+                    "edge_id": "e2",
+                    "u": "n2",
+                    "v": "n3",
+                    "edge_type": "SHARED_PLATE",
+                    "explainer_median": 0.7,
+                },
+                {
+                    "rank": 1,
+                    "edge_id": "e1",
+                    "u": "n1",
+                    "v": "n2",
+                    "edge_type": "COTRAVEL",
+                    "explainer_median": 0.9,
+                },
+                {
+                    "rank": 3,
+                    "edge_id": "e3",
+                    "u": "n1",
+                    "v": "n3",
+                    "edge_type": "RESIDENCE",
+                    "explainer_median": 0.5,
+                },
+            ],
+        }
+    }
+    snapshot = _run_ui_with_input_snapshot(
+        "buildHighestAttributionViewModel", explanation
+    )
+    view = snapshot["result"]
+
+    assert view == {
+        "available": True,
+        "nodes": [
+            {"rank": 1, "nodeId": "n1", "weight": 0.8},
+            {"rank": 2, "nodeId": "n2", "weight": 0.6},
+            {"rank": 3, "nodeId": "n3", "weight": 0.4},
+        ],
+        "connections": [
+            {
+                "rank": 1,
+                "edgeId": "e1",
+                "u": "n1",
+                "v": "n2",
+                "relation": "COTRAVEL",
+                "weight": 0.9,
+            },
+            {
+                "rank": 2,
+                "edgeId": "e2",
+                "u": "n2",
+                "v": "n3",
+                "relation": "SHARED_PLATE",
+                "weight": 0.7,
+            },
+            {
+                "rank": 3,
+                "edgeId": "e3",
+                "u": "n1",
+                "v": "n3",
+                "relation": "RESIDENCE",
+                "weight": 0.5,
+            },
+        ],
+    }
+    assert snapshot["input"] == explanation
+    assert snapshot["before"] == json.dumps(explanation, separators=(",", ":"))
+
+
+def test_highest_attribution_view_model_preserves_fewer_than_three_valid_entries():
+    view = _run_ui(
+        "buildHighestAttributionViewModel",
+        {
+            "attributions": {
+                "top_local_nodes": [
+                    {"rank": 1, "node_id": "n1", "explainer_median": 0.8}
+                ],
+                "top_edges": [
+                    {
+                        "rank": 2,
+                        "edge_id": "e2",
+                        "u": "n2",
+                        "v": "n3",
+                        "edge_type": "SHARED_PLATE",
+                        "explainer_median": 0.4,
+                    },
+                    {
+                        "rank": 1,
+                        "edge_id": "e1",
+                        "u": "n1",
+                        "v": "n2",
+                        "edge_type": "COTRAVEL",
+                        "explainer_median": 0.7,
+                    },
+                ],
+            }
+        },
+    )
+
+    assert view == {
+        "available": True,
+        "nodes": [{"rank": 1, "nodeId": "n1", "weight": 0.8}],
+        "connections": [
+            {
+                "rank": 1,
+                "edgeId": "e1",
+                "u": "n1",
+                "v": "n2",
+                "relation": "COTRAVEL",
+                "weight": 0.7,
+            },
+            {
+                "rank": 2,
+                "edgeId": "e2",
+                "u": "n2",
+                "v": "n3",
+                "relation": "SHARED_PLATE",
+                "weight": 0.4,
+            },
+        ],
+    }
+
+
+def test_highest_attribution_falls_back_to_median_and_id_tie_break():
+    view = _run_ui(
+        "buildHighestAttributionViewModel",
+        {
+            "attributions": {
+                "top_local_nodes": [
+                    {"node_id": "b", "explainer_median": 0.8},
+                    {"node_id": "a", "explainer_median": 0.8},
+                    {"node_id": "c", "explainer_median": 0.2},
+                    {"node_id": "z", "rank": 0, "explainer_median": 0.99},
+                ],
+                "top_edges": [],
+            }
+        },
+    )
+
+    assert [row["nodeId"] for row in view["nodes"]] == ["z", "a", "b"]
+    assert [row["rank"] for row in view["nodes"]] == [1, 2, 3]
+
+
+def test_highest_attribution_mixed_ranks_fall_back_for_entire_collection():
+    view = _run_ui(
+        "buildHighestAttributionViewModel",
+        {
+            "attributions": {
+                "top_local_nodes": [
+                    {"rank": 2, "node_id": "n2", "explainer_median": 0.6},
+                    {"node_id": "n1", "explainer_median": 0.9},
+                    {"rank": 1, "node_id": "n3", "explainer_median": 0.8},
+                ],
+                "top_edges": [],
+            }
+        },
+    )
+
+    assert [row["nodeId"] for row in view["nodes"]] == ["n1", "n3", "n2"]
+    assert [row["rank"] for row in view["nodes"]] == [1, 2, 3]
+
+
+def test_highest_attribution_duplicate_ranks_fall_back_to_unique_display_ranks():
+    view = _run_ui(
+        "buildHighestAttributionViewModel",
+        {
+            "attributions": {
+                "top_local_nodes": [
+                    {"rank": 1, "node_id": "n2", "explainer_median": 0.9},
+                    {"rank": 1, "node_id": "n1", "explainer_median": 0.8},
+                    {"rank": 2, "node_id": "n3", "explainer_median": 0.7},
+                ],
+                "top_edges": [],
+            }
+        },
+    )
+
+    assert [row["nodeId"] for row in view["nodes"]] == ["n2", "n1", "n3"]
+    assert [row["rank"] for row in view["nodes"]] == [1, 2, 3]
+    assert len({row["rank"] for row in view["nodes"]}) == len(view["nodes"])
+
+
+@pytest.mark.parametrize(
+    "attributions",
+    [
+        None,
+        {},
+        {"top_local_nodes": "bad", "top_edges": []},
+        {
+            "top_local_nodes": [{"node_id": "", "explainer_median": 0.5}],
+            "top_edges": [],
+        },
+        {
+            "top_local_nodes": [],
+            "top_edges": [
+                {
+                    "edge_id": "e1",
+                    "u": "n1",
+                    "v": "n2",
+                    "edge_type": "COTRAVEL",
+                    "explainer_median": float("nan"),
+                }
+            ],
+        },
+    ],
+)
+def test_highest_attribution_returns_unavailable_for_empty_or_malformed_data(attributions):
+    view = _run_ui("buildHighestAttributionViewModel", {"attributions": attributions})
+
+    assert view["available"] is False
+    assert view["reason"] == "no-valid-attribution-ranking"
+
+
+def test_highest_attribution_renderer_contract_is_shared_by_schema_paths():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    css = UI.V9_RECOVERY_EXPLAINER_CSS
+
+    assert "function buildHighestAttributionViewModel" in js
+    assert "function renderHighestAttributionPanel" in js
+    v2_detail = js.split("function renderV2Detail", 1)[1].split(
+        "function renderV2()", 1
+    )[0]
+    hybrid_branch = v2_detail.split("if(state.cohort==='hybrid_only')", 1)[1].split(
+        "}else{", 1
+    )[0]
+    assert "renderHighestAttributionPanel(doc" not in v2_detail.split(
+        "if(state.cohort==='hybrid_only')", 1
+    )[0]
+    assert hybrid_branch.index("renderHighestAttributionPanel(doc") < hybrid_branch.index(
+        "panels.appendChild(recoveryV2Panel(doc,'Validated local Gemma narrative'"
+    )
+    legacy_detail = js.split("function renderDetail", 1)[1].split(
+        "function render(){", 1
+    )[0]
+    assert legacy_detail.index("renderNarrative(left,explanation)") < legacy_detail.index(
+        "renderHighestAttributionPanel(doc"
+    ) < legacy_detail.index("renderGraph(right,explanation)")
+    assert "Highest-attribution evidence" in js
+    assert "Unsigned median attribution weights show salience across deterministic explainer restarts, not causal direction." in js
+    assert "Attribution ranking unavailable in this artifact." in js
+    assert "Nodes" in js and "Connections" in js
+    assert ".v9-attribution-grid" in css
+    assert "grid-template-columns: repeat(2" in css
+    assert ".v9-attribution-bar-fill { display: block;" in css
+    assert "@media(max-width:700px)" in css
+    assert "grid-template-columns: 1fr" in css
+
+
+def test_highest_attribution_renderer_dom_contract_and_accessible_connection_labels():
+    explanation = {
+        "attributions": {
+            "top_local_nodes": [
+                {"rank": 1, "node_id": "n1", "explainer_median": 0.8},
+                {"rank": 2, "node_id": "n2", "explainer_median": 0.6},
+                {"rank": 3, "node_id": "n3", "explainer_median": 0.4},
+            ],
+            "top_edges": [
+                {
+                    "rank": 1,
+                    "edge_id": "e1",
+                    "u": "n1",
+                    "v": "n2",
+                    "edge_type": "COTRAVEL",
+                    "explainer_median": 0.9,
+                },
+                {
+                    "rank": 2,
+                    "edge_id": "e2",
+                    "u": "n2",
+                    "v": "n3",
+                    "edge_type": "SHARED_PLATE",
+                    "explainer_median": 0.7,
+                },
+                {
+                    "rank": 3,
+                    "edge_id": "e3",
+                    "u": "n1",
+                    "v": "n3",
+                    "edge_type": "RESIDENCE",
+                    "explainer_median": 0.5,
+                },
+            ],
+        }
+    }
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nconst explanation="
+        + json.dumps(explanation)
+        + r""";
+function fakeElement(tag){
+  return {
+    tag,children:[],textContent:'',className:'',attrs:{},style:{},id:'',
+    appendChild(child){this.children.push(child);return child;},
+    setAttribute(name,value){this.attrs[name]=String(value);}
+  };
+}
+const doc={createElement:fakeElement};
+const root=renderHighestAttributionPanel(doc,explanation);
+function all(node){return [node,...node.children.flatMap(all)];}
+const nodes=all(root);
+const bars=nodes.filter(node=>node.attrs.role==='progressbar');
+process.stdout.write(JSON.stringify({
+  rootAttrs:root.attrs,
+  ids:nodes.filter(node=>node.id).map(node=>node.id),
+  text:nodes.map(node=>node.textContent).filter(Boolean),
+  bars:bars.map(node=>node.attrs),
+  widths:bars.map(node=>node.children[0].style.width)
+}));"""
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["rootAttrs"]["aria-label"] == "Highest-attribution evidence"
+    assert result["ids"] == []
+    assert "Highest-attribution evidence" in result["text"]
+    assert "Nodes" in result["text"]
+    assert "Connections" in result["text"]
+    assert len(result["bars"]) == 6
+    labels = [bar["aria-label"] for bar in result["bars"]]
+    assert len(set(labels)) == 6
+    assert all(bar["aria-valuemin"] == "0" for bar in result["bars"])
+    assert all(bar["aria-valuemax"] == "1" for bar in result["bars"])
+    assert result["widths"] == ["80%", "60%", "40%", "90%", "70%", "50%"]
+    for endpoint, relation, edge_id in (
+        ("n1 ↔ n2", "COTRAVEL", "e1"),
+        ("n2 ↔ n3", "SHARED_PLATE", "e2"),
+        ("n1 ↔ n3", "RESIDENCE", "e3"),
+    ):
+        connection_labels = [
+            label for label in labels if label.startswith("Connections")
+        ]
+        assert any(
+            endpoint in label and relation in label and edge_id in label
+            for label in connection_labels
+        )
 
 
 def _run_filter_with_input_snapshot(cases, options):
@@ -1441,3 +1852,30 @@ def test_graph_point_is_deterministic_and_does_not_mutate_inputs():
 
     assert first == second == {"x": 13, "y": 38}
     assert [point, viewport] == original
+
+
+def test_filter_sorts_explained_cases_first_when_ids_supplied():
+    low_uplift_explained = _case("case:p1", "p1", hybrid_rank_uplift=10)
+    high_uplift_unexplained = _case("case:p2", "p2", hybrid_rank_uplift=90)
+    result = _run_ui(
+        "filterAndSortRecoveryCases",
+        [high_uplift_unexplained, low_uplift_explained],
+        {"explainedIds": ["case:p1"]},
+    )
+    assert [item["case_id"] for item in result] == ["case:p1", "case:p2"]
+
+
+def test_filter_evidence_only_drops_unexplained_cases():
+    result = _run_ui(
+        "filterAndSortRecoveryCases",
+        [_case("case:p1", "p1"), _case("case:p2", "p2")],
+        {"explainedIds": ["case:p1"], "evidence": "explained"},
+    )
+    assert [item["case_id"] for item in result] == ["case:p1"]
+
+
+def test_filter_without_new_options_keeps_legacy_order():
+    low = _case("case:p1", "p1", hybrid_rank_uplift=10)
+    high = _case("case:p2", "p2", hybrid_rank_uplift=90)
+    result = _run_ui("filterAndSortRecoveryCases", [high, low], {})
+    assert [item["case_id"] for item in result] == ["case:p2", "case:p1"]
