@@ -596,8 +596,18 @@ def test_run_demo_smoke():
     assert initial["hidden_events"] + initial["excluded_hidden_events"] == out["hidden_total"]
     assert initial["hidden_people"] <= initial["hidden_events"]
     assert initial["excluded_hidden_people"] <= initial["excluded_hidden_events"]
+    # Simulated catches and operational capacity share the daily-only budget
+    # contract so every dashboard surface reads K=5, 10, and 25 per day.
+    assert out["daily_ks"] == list(rd.DAILY_KS)
+    assert out["simulated_catch_daily_ks"] == list(rd.SIMULATED_DAILY_KS)
+    assert set(rd.SIMULATED_DAILY_KS) == set(rd.DAILY_KS)
     for arm in simulated["arms"].values():
-        for k in out["daily_ks"]:
+        assert {
+            int(key.split("@")[1])
+            for key in arm
+            if key.startswith("daily_people_found@")
+        } == set(out["simulated_catch_daily_ks"])
+        for k in out["simulated_catch_daily_ks"]:
             found = arm[f"daily_people_found@{k}"]
             budget = arm[f"daily_budget@{k}"]
             series = arm[f"daily_found_by_day@{k}"]

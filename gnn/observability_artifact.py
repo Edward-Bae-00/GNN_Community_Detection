@@ -28,6 +28,7 @@ from gnn.recovery_observability import (
 )
 from gnn.recovery_bundle import RecoveryBundleWriter
 from gnn.sage_explainer import (
+    CommunityScope,
     compose_case_explanation,
     json_safe,
     validate_explanation_payload,
@@ -386,6 +387,66 @@ def _community_evidence(community):
 
 
 def _validate_complete_community(community, snapshot):
+    if isinstance(community, CommunityScope):
+        if community.complete is not True:
+            raise ValueError("incomplete explanation community")
+        if community.scoring_day != snapshot:
+            raise ValueError("community scoring day does not match its case")
+        for value, field_name in (
+            (community.component_id, "component_id"),
+            (community.community_key, "community_key"),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"complete community requires {field_name}")
+        for node in community.iter_nodes():
+            caught_before = node.get("caught_before_snapshot", False)
+            if not isinstance(caught_before, bool):
+                raise ValueError("caught-before-snapshot evidence must be boolean")
+            caught_time = node.get("caught_label_available_time")
+            if caught_before:
+                if not _as_utc_timestamp(
+                    caught_time, field_name="caught label available time"
+                ) < snapshot:
+                    raise ValueError("caught evidence is not strictly as-of")
+            elif caught_time is not None:
+                raise ValueError(
+                    "caught label time is exposed without strictly as-of caught evidence"
+                )
+        provenance = iter(community.iter_provenance())
+        for edge in community.iter_edges():
+            source_row_ids = edge.get("source_row_ids")
+            if (
+                not isinstance(source_row_ids, list)
+                or not source_row_ids
+                or len(set(source_row_ids)) != len(source_row_ids)
+            ):
+                raise ValueError(
+                    "edge strictly as-of provenance requires unique source_row_ids"
+                )
+            for source_row_id in source_row_ids:
+                try:
+                    observation = next(provenance)
+                except StopIteration as exc:
+                    raise ValueError(
+                        "edge evidence lacks strictly as-of provenance"
+                    ) from exc
+                if (
+                    observation.get("edge_id") != edge["edge_id"]
+                    or observation.get("source_row_id") != source_row_id
+                ):
+                    raise ValueError(
+                        "edge strictly as-of observations disagree with source_row_ids"
+                    )
+                if not _as_utc_timestamp(
+                    observation.get("available_time"),
+                    field_name="edge available_time",
+                ) < snapshot:
+                    raise ValueError("edge evidence is not strictly as-of")
+        try:
+            next(provenance)
+        except StopIteration:
+            return community
+        raise ValueError("provenance observations reference an unknown edge")
     if not isinstance(community, Mapping) or community.get("complete") is not True:
         raise ValueError("incomplete explanation community")
     community_snapshot = _as_utc_timestamp(
@@ -626,8 +687,10 @@ def explain_representatives(
 
 
 def _explain_case_with_narrative(case, explanation_engine, narrative_builder):
+    raw_explanation = explain_case(explanation_engine, case)
+    community_scope = getattr(raw_explanation, "community_scope", None)
     explanation = _detached_json_object(
-        explain_case(explanation_engine, case),
+        raw_explanation,
         field_name="explanation",
     )
     if (
@@ -655,6 +718,8 @@ def _explain_case_with_narrative(case, explanation_engine, narrative_builder):
     _validate_grounded_narrative(fact_packet, narrative)
     explanation["llm_narrative"] = narrative
     _validate_complete_explanation(explanation)
+    if community_scope is not None:
+        explanation["_community_scope"] = community_scope
     return explanation
 
 
@@ -1062,6 +1127,17 @@ def _bundle_case_record(case, cohort, community_key, explanation=None):
 
 def _community_stream_source(community):
     """Split canonical records from raw observations using one-shot iterators."""
+    if isinstance(community, CommunityScope):
+        return {
+            "complete": True,
+            "scoring_day": community.scoring_day.isoformat(),
+            "component_id": community.component_id,
+            "community_key": community.community_key,
+            "nodes": community.iter_nodes(),
+            "edges": community.iter_edges(),
+            "provenance_observations": community.iter_provenance(),
+            "provenance_expansions": iter(()),
+        }
     key = community["community_key"]
 
     def nodes():
@@ -1074,6 +1150,23 @@ def _community_stream_source(community):
         for edge in community.get("edges", ()):
             record = dict(edge)
             record.pop("observations", None)
+            source_row_ids = record.get("source_row_ids")
+            if isinstance(source_row_ids, list):
+                # A giant/dense community edge may be bounded to
+                # MAX_LOCAL_SOURCE_ROWS_PER_EDGE, leaving source_row_count as the
+                # full untruncated total while source_row_ids (and the matching
+                # observations) hold only the bounded subset. The recovery bundle
+                # requires day-membership source_row_count == len(source_row_ids),
+                # so normalize to the bounded count here and preserve the true
+                # total under complete_source_row_count, exactly as the overlay
+                # stream does for attribution edges.
+                record["complete_source_row_count"] = int(
+                    record.get(
+                        "complete_source_row_count",
+                        record.get("source_row_count", len(source_row_ids)),
+                    )
+                )
+                record["source_row_count"] = len(source_row_ids)
             yield record
 
     def provenance():
@@ -1109,9 +1202,26 @@ def _overlay_stream_source(explanation, community, expansions):
                 raise ValueError(
                     f"attribution edge {edge_id!r} is absent from its community"
                 )
+            projected_source_row_ids = list(canonical["source_row_ids"])
             yield {
                 **dict(attribution),
-                "source_row_ids": list(canonical["source_row_ids"]),
+                "source_row_ids": projected_source_row_ids,
+                "source_row_count": len(projected_source_row_ids),
+                "complete_source_row_count": int(
+                    attribution.get(
+                        "complete_source_row_count",
+                        canonical.get(
+                            "source_row_count", len(projected_source_row_ids)
+                        ),
+                    )
+                ),
+                "source_rows_truncated": (
+                    attribution.get(
+                        "source_rows_truncated",
+                        canonical.get("source_rows_truncated", False),
+                    )
+                    is True
+                ),
                 "observations": [
                     dict(observation)
                     for observation in canonical.get("observations", ())
@@ -1303,10 +1413,15 @@ def build_observability_bundle(
                 explanation = _explain_case_with_narrative(
                     case, explanation_engine, narrative_builder
                 )
-                community = explanation.pop("community")
+                local_community = explanation.pop("community")
+                community = explanation.pop("_community_scope", local_community)
                 expansions = explanation.pop("provenance_expansions", [])
                 _validate_complete_community(community, case.anchor.scoring_day)
-                community_key = community["community_key"]
+                community_key = (
+                    community.community_key
+                    if isinstance(community, CommunityScope)
+                    else community["community_key"]
+                )
                 if community_key not in writer.community_index:
                     writer.write_community(_community_stream_source(community))
                 explanation["community_key"] = community_key
@@ -1319,7 +1434,7 @@ def build_observability_bundle(
                     explanation=explanation,
                     validation_metadata=explanation["llm_narrative"],
                     overlay_evidence=_overlay_stream_source(
-                        explanation, community, expansions
+                        explanation, local_community, expansions
                     ),
                 )
             else:
@@ -1327,7 +1442,11 @@ def build_observability_bundle(
                     case.person_id, case.anchor.scoring_day
                 )
                 _validate_complete_community(community, case.anchor.scoring_day)
-                community_key = community["community_key"]
+                community_key = (
+                    community.community_key
+                    if isinstance(community, CommunityScope)
+                    else community["community_key"]
+                )
                 if community_key not in writer.community_index:
                     writer.write_community(_community_stream_source(community))
                 writer.write_case(

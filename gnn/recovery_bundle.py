@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -472,6 +473,13 @@ class RecoveryBundleWriter:
             return self.refs
 
     def write_community(self, community):
+        try:
+            return self._write_community(community)
+        except Exception:
+            self.catalog_store.rollback_pending()
+            raise
+
+    def _write_community(self, community):
         if not isinstance(community, Mapping) or community.get("complete") is not True:
             raise RecoveryBundleError("community must be a complete object")
         key = community.get("community_key")
@@ -496,17 +504,30 @@ class RecoveryBundleWriter:
         edge_membership_sink = self._ChunkSink(self, "edge_memberships")
         provenance_sink = self._ChunkSink(self, "observations")
         membership_sink = self._ChunkSink(self, "memberships")
-        node_hashes = {}
-        edge_hashes = {}
-        node_catalog = {}
-        edge_catalog = {}
-        provenance_catalog = {}
-        expected_provenance_counts = {}
-        observed_provenance_counts = {}
-        expected_source_rows = {}
-        observed_source_rows = {}
         expansion_index = []
         self.catalog_store.begin_community(key)
+        validation_db = self.catalog_store._connection
+        validation_db.execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS streamed_edge_membership (
+                edge_id TEXT NOT NULL,
+                membership_json TEXT NOT NULL,
+                source_row_id TEXT NOT NULL,
+                PRIMARY KEY (edge_id, source_row_id)
+            )
+            """
+        )
+        validation_db.execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS streamed_provenance (
+                edge_id TEXT NOT NULL,
+                source_row_id TEXT NOT NULL,
+                PRIMARY KEY (edge_id, source_row_id)
+            )
+            """
+        )
+        validation_db.execute("DELETE FROM streamed_edge_membership")
+        validation_db.execute("DELETE FROM streamed_provenance")
 
         def add_node(node):
             if not isinstance(node, Mapping) or not isinstance(node.get("node_id"), str):
@@ -547,12 +568,16 @@ class RecoveryBundleWriter:
                     "catalog_id": source_row_id,
                 }
             )
-            observed_provenance_counts[edge_id] = (
-                observed_provenance_counts.get(edge_id, 0) + 1
-            )
-            observed_source_rows[edge_id] = _source_row_accumulate(
-                observed_source_rows.get(edge_id, (0, 0, 0)), source_row_id
-            )
+            try:
+                validation_db.execute(
+                    "INSERT INTO streamed_provenance (edge_id, source_row_id) "
+                    "VALUES (?, ?)",
+                    (edge_id, source_row_id),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RecoveryBundleError(
+                    "duplicate streamed provenance observation"
+                ) from exc
             return source_row_id
 
         def add_edge(edge):
@@ -585,23 +610,30 @@ class RecoveryBundleWriter:
                 raise RecoveryBundleError("edge source_row_count is inconsistent")
             day_membership["source_row_count"] = source_row_count
             edge_id = detached["edge_id"]
-            digest = _sha256(_canonical_bytes(detached))
-            prior_digest = edge_hashes.get(edge_id)
-            if prior_digest is not None:
-                if prior_digest != digest:
+            membership_json = _canonical_bytes(day_membership).decode("utf-8")
+            existing_membership = validation_db.execute(
+                "SELECT DISTINCT membership_json FROM streamed_edge_membership "
+                "WHERE edge_id = ?",
+                (edge_id,),
+            ).fetchone()
+            if existing_membership is not None:
+                if existing_membership[0] != membership_json:
                     raise RecoveryBundleError(f"conflicting edge {edge_id!r}")
                 return edge_id
-            edge_hashes[edge_id] = digest
             try:
                 linked = self.catalog_store.register("edges", edge_id, detached)
             except ValueError as exc:
                 raise RecoveryBundleError(str(exc)) from exc
             if not linked:
                 return edge_id
-            expected_provenance_counts[edge_id] = source_row_count
-            observed_provenance_counts[edge_id] = 0
-            expected_source_rows[edge_id] = _source_row_fingerprint(source_row_ids)
-            observed_source_rows[edge_id] = (0, 0, 0)
+            validation_db.executemany(
+                "INSERT INTO streamed_edge_membership "
+                "(edge_id, membership_json, source_row_id) VALUES (?, ?, ?)",
+                (
+                    (edge_id, membership_json, source_row_id)
+                    for source_row_id in source_row_ids
+                ),
+            )
             edge_sink.add({"edge_id": edge_id, "catalog_id": edge_id})
             edge_membership_sink.add(day_membership)
             if external_provenance is None:
@@ -679,15 +711,42 @@ class RecoveryBundleWriter:
                 if not isinstance(observation, Mapping):
                     raise RecoveryBundleError("edge observation must be an object")
                 edge_id = observation.get("edge_id")
-                if not isinstance(edge_id, str) or edge_id not in edge_hashes:
+                known_edge = (
+                    isinstance(edge_id, str)
+                    and validation_db.execute(
+                        "SELECT 1 FROM streamed_edge_membership WHERE edge_id = ? LIMIT 1",
+                        (edge_id,),
+                    ).fetchone()
+                    is not None
+                )
+                if not known_edge:
                     raise RecoveryBundleError(
                         "streamed provenance references an unknown edge"
                     )
                 add_provenance(observation, edge_id)
-        if (
-            observed_provenance_counts != expected_provenance_counts
-            or observed_source_rows != expected_source_rows
-        ):
+        missing_provenance = validation_db.execute(
+            """
+            SELECT expected.edge_id, expected.source_row_id
+            FROM streamed_edge_membership AS expected
+            LEFT JOIN streamed_provenance AS observed
+              ON observed.edge_id = expected.edge_id
+             AND observed.source_row_id = expected.source_row_id
+            WHERE observed.edge_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        unexpected_provenance = validation_db.execute(
+            """
+            SELECT observed.edge_id, observed.source_row_id
+            FROM streamed_provenance AS observed
+            LEFT JOIN streamed_edge_membership AS expected
+              ON expected.edge_id = observed.edge_id
+             AND expected.source_row_id = observed.source_row_id
+            WHERE expected.edge_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if missing_provenance is not None or unexpected_provenance is not None:
             raise RecoveryBundleError(
                 "provenance observations disagree with canonical edge source_row_ids"
             )
@@ -762,7 +821,7 @@ class RecoveryBundleWriter:
         edge_sink = self._ChunkSink(self, "edges")
         provenance_sink = self._ChunkSink(self, "observations")
         membership_sink = self._ChunkSink(self, "memberships")
-        node_hashes = {}
+        overlay_nodes = {}
         edge_hashes = {}
         expected_counts = {}
         observed_counts = {}
@@ -775,14 +834,20 @@ class RecoveryBundleWriter:
                 raise RecoveryBundleError("overlay node requires node_id")
             detached = json.loads(_canonical_bytes(node))
             node_id = detached["node_id"]
-            digest = _sha256(_canonical_bytes(detached))
-            prior = node_hashes.get(node_id)
-            if prior is not None:
-                if prior != digest:
-                    raise RecoveryBundleError(f"conflicting overlay node {node_id!r}")
+            # The same node can be emitted from more than one bounded overlay
+            # view (a ranked attribution record and a structural-provenance
+            # record carry disjoint fields). Merge complementary views into one
+            # canonical node rather than reject them; only a genuine
+            # disagreement on a shared field is a conflict. The overlay set is
+            # target-local and bounded, so buffering it in memory is safe.
+            existing = overlay_nodes.get(node_id)
+            if existing is None:
+                overlay_nodes[node_id] = detached
                 return
-            node_hashes[node_id] = digest
-            node_sink.add(detached)
+            for key, value in detached.items():
+                if key in existing and existing[key] != value:
+                    raise RecoveryBundleError(f"conflicting overlay node {node_id!r}")
+                existing[key] = value
 
         def add_observation(observation, edge_id):
             if not isinstance(observation, Mapping):
@@ -904,6 +969,8 @@ class RecoveryBundleWriter:
                     "edge_count": edge_count,
                 }
             )
+        for merged_node in overlay_nodes.values():
+            node_sink.add(merged_node)
         if external is not None:
             for observation in external:
                 if not isinstance(observation, Mapping):

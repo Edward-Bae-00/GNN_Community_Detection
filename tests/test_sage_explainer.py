@@ -1,4 +1,10 @@
 import json
+import hashlib
+import multiprocessing
+import resource
+import sys
+import tracemalloc
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 
 import numpy as np
@@ -8,7 +14,9 @@ import torch
 
 from gnn import graphmodel_rgcn as gm
 from gnn import learned_cell
+from gnn import observability_artifact as oa
 from gnn import sage_explainer as se
+from gnn.explanation_narrative import MODEL_TAG, render_template
 from gnn.graphmodel_alt import _SAGE
 from gnn.graphmodel_rgcn import _RGCN
 from gnn.learned_cell import _asof_x_caught, _score_pool
@@ -18,6 +26,7 @@ from gnn.recovery_observability import (
     build_decision_trace,
     build_rank_reference,
 )
+from gnn.recovery_bundle import RecoveryBundleWriter
 from gnn.sage_explainer import (
     AblationSpec,
     CounterfactualContext,
@@ -372,46 +381,53 @@ def test_community_contains_complete_pool_and_two_hop_provenance():
     engine, _ = _explanation_fixture()
 
     community = engine.community("target", SCORING_DAY)
+    nodes = list(community.iter_nodes())
+    edges = list(community.iter_edges())
+    provenance = list(community.iter_provenance())
+    nodes_by_id = {node["node_id"]: node for node in nodes}
 
-    assert community["complete"] is True
-    assert community["scoring_day"] == "2025-01-02T00:00:00+00:00"
-    assert community["component_id"].startswith("component:sha256:")
-    assert community["community_key"].startswith("community:sha256:")
+    assert community.complete is True
+    assert community.scoring_day.isoformat() == "2025-01-02T00:00:00+00:00"
+    assert community.component_id.startswith("component:sha256:")
+    assert community.community_key.startswith("community:sha256:")
     poolmate_view = engine.community("poolmate", SCORING_DAY)
-    assert poolmate_view["component_id"] == community["component_id"]
-    assert poolmate_view["community_key"] == community["community_key"]
-    assert poolmate_view == community
-    assert set(community["nodes_by_id"]) == {
+    assert poolmate_view.component_id == community.component_id
+    assert poolmate_view.community_key == community.community_key
+    assert poolmate_view is community
+    assert set(nodes_by_id) == {
         "target",
         "poolmate",
         "hop1",
         "hop2",
         "future",
     }
-    assert set(community["base_source_row_ids"]) == {
+    assert {row["source_row_id"] for row in provenance} == {
         "before",
         "cot",
         "cot-duplicate",
         "res",
         "plate",
     }
-    assert "at-boundary" not in community["base_source_row_ids"]
-    assert "after-boundary" not in community["base_source_row_ids"]
-    assert community["provenance_expansions"] == []
+    assert "at-boundary" not in {row["source_row_id"] for row in provenance}
+    assert "after-boundary" not in {row["source_row_id"] for row in provenance}
 
     pooled = {
-        node["node_id"] for node in community["nodes"] if node["pooled_member"]
+        node["node_id"] for node in nodes if node["pooled_member"]
     }
     assert pooled == {"target", "poolmate"}
-    assert all("target" not in node for node in community["nodes"])
-    assert community["nodes_by_id"]["hop1"]["caught_label_available_time"] == (
+    assert all("target" not in node for node in nodes)
+    assert nodes_by_id["hop1"]["caught_label_available_time"] == (
         "2025-01-01T23:59:59+00:00"
     )
-    assert community["nodes_by_id"]["future"]["caught_label_available_time"] is None
+    assert nodes_by_id["future"]["caught_label_available_time"] is None
 
-    duplicate_edge = next(edge for edge in community["edges"] if edge["edge_id"].startswith("g1:"))
+    duplicate_edge = next(edge for edge in edges if edge["edge_id"].startswith("g1:"))
     assert duplicate_edge["source_row_ids"] == ["cot", "cot-duplicate"]
-    assert duplicate_edge["observations"] == [
+    assert [
+        {key: row[key] for key in ("source_row_id", "available_time")}
+        for row in provenance
+        if row["edge_id"] == duplicate_edge["edge_id"]
+    ] == [
         {
             "source_row_id": "cot",
             "available_time": "2025-01-01T01:00:00+00:00",
@@ -431,10 +447,10 @@ def test_community_layout_is_deterministic_and_normalized():
     second = engine.community("target", SCORING_DAY)
 
     first_positions = {
-        node["node_id"]: (node["x"], node["y"]) for node in first["nodes"]
+        node["node_id"]: (node["x"], node["y"]) for node in first.iter_nodes()
     }
     second_positions = {
-        node["node_id"]: (node["x"], node["y"]) for node in second["nodes"]
+        node["node_id"]: (node["x"], node["y"]) for node in second.iter_nodes()
     }
     assert first_positions == second_positions
     assert all(
@@ -458,17 +474,25 @@ def test_same_component_reuses_one_immutable_cached_base_until_day_release(
     monkeypatch.setattr(se, "build_complete_community", counted_builder)
 
     target = engine.community("target", SCORING_DAY)
-    before = json.dumps(target, sort_keys=True)
+    before = (
+        list(target.iter_nodes()),
+        list(target.iter_edges()),
+        list(target.iter_provenance()),
+    )
     poolmate = engine.community("poolmate", SCORING_DAY)
 
     assert target is poolmate
-    assert json.dumps(poolmate, sort_keys=True) == before
+    assert poolmate is target
     assert len(calls) == 1
 
     assert engine.release_snapshot(SCORING_DAY) is True
     rebuilt = engine.community("target", SCORING_DAY)
     assert rebuilt is not target
-    assert rebuilt == target
+    assert (
+        list(rebuilt.iter_nodes()),
+        list(rebuilt.iter_edges()),
+        list(rebuilt.iter_provenance()),
+    ) == before
     assert len(calls) == 2
 
 
@@ -485,7 +509,7 @@ def test_community_layout_never_uses_networkx_spring_layout(monkeypatch):
 
     community = engine.community("target", SCORING_DAY)
 
-    assert community["nodes"]
+    assert list(community.iter_nodes())
 
 
 def test_release_snapshot_evicts_day_bound_heavy_caches():
@@ -516,12 +540,631 @@ def test_observability_fingerprint_material_is_compact_and_deterministic():
     assert all(value for value in first.values())
 
 
-def test_community_is_json_serializable():
+def test_community_scope_does_not_materialize_as_nested_json():
     engine, _ = _explanation_fixture()
 
-    serialized = json.dumps(engine.community("target", SCORING_DAY))
+    with pytest.raises(TypeError, match="CommunityScope"):
+        json.dumps(engine.community("target", SCORING_DAY))
 
-    assert '"complete": true' in serialized
+
+def test_community_scope_replays_fresh_deterministic_streams():
+    engine, _ = _explanation_fixture()
+
+    scope = engine.community("target", SCORING_DAY)
+    first_nodes = list(scope.iter_nodes())
+    second_nodes = list(scope.iter_nodes())
+    first_edges = list(scope.iter_edges())
+    second_edges = list(scope.iter_edges())
+    first_provenance = list(scope.iter_provenance())
+    second_provenance = list(scope.iter_provenance())
+
+    assert isinstance(scope, se.CommunityScope)
+    assert first_nodes == second_nodes
+    assert first_edges == second_edges
+    assert first_provenance == second_provenance
+    assert scope.iter_nodes() is not scope.iter_nodes()
+    assert scope.iter_edges() is not scope.iter_edges()
+    assert scope.iter_provenance() is not scope.iter_provenance()
+    assert [node["node_id"] for node in first_nodes] == sorted(
+        node["node_id"] for node in first_nodes
+    )
+    assert [edge["edge_id"] for edge in first_edges] == sorted(
+        edge["edge_id"] for edge in first_edges
+    )
+    assert {row["source_row_id"] for row in first_provenance} == {
+        source_row_id
+        for edge in first_edges
+        for source_row_id in edge["source_row_ids"]
+    }
+
+
+def test_community_scope_retains_compact_state_for_more_than_100k_display_edges():
+    edge_count = 100_001
+    active_edges = pd.DataFrame(
+        {
+            "source_row_id": [f"row:{index:06d}" for index in range(edge_count)],
+            "u": ["p1"] * edge_count,
+            "v": ["p2"] * edge_count,
+            "rel": np.zeros(edge_count, dtype=np.int8),
+            "edge_type": ["COTRAVEL"] * edge_count,
+            "canonical_pair_group_id": [
+                f"group:{index:06d}" for index in range(edge_count)
+            ],
+            "avail_time": pd.Timestamp("2025-01-01T00:00:00Z"),
+        }
+    )
+    snapshot = SimpleNamespace(
+        active_edges=active_edges,
+        caught_before_snapshot=frozenset(),
+    )
+    engine = SimpleNamespace(
+        person_index={"p1": 0, "p2": 1},
+        community_snapshot=lambda scoring_day: snapshot,
+        caught_available_time=lambda person_id: None,
+    )
+    scope = se.CommunityScope(
+        engine=engine,
+        scoring_day=pd.Timestamp("2025-01-02T00:00:00Z"),
+        component_id="component:large",
+        community_key="community:large",
+        node_ids=("p1", "p2"),
+        node_indices=np.array([0, 1], dtype=np.int64),
+        message_distances=np.array([0, 0], dtype=np.int8),
+        pooled_members=np.array([True, True]),
+        edge_row_indices=np.arange(edge_count, dtype=np.int64),
+        edge_group_starts=np.arange(edge_count, dtype=np.int64),
+    )
+
+    retained_arrays = (
+        scope.node_indices,
+        scope.message_distances,
+        scope.pooled_members,
+        scope.edge_row_indices,
+        scope.edge_group_starts,
+    )
+    assert sum(array.nbytes for array in retained_arrays) < 2_000_000
+    assert not any(isinstance(value, (dict, list, set)) for value in vars(scope).values())
+    assert sum(1 for _ in scope.iter_edges()) == edge_count
+    assert sum(1 for _ in scope.iter_edges()) == edge_count
+    assert sys.getsizeof(scope) < 1_024
+
+    local = scope.materialize_local(
+        ("p1", "p2"), (), target_person_id="p1"
+    )
+    assert len(local["nodes"]) <= se.MAX_LOCAL_EXPLANATION_NODES
+    assert len(local["edges"]) == se.MAX_LOCAL_EXPLANATION_EDGES
+    assert all(
+        len(edge["source_row_ids"]) <= se.MAX_LOCAL_SOURCE_ROWS_PER_EDGE
+        for edge in local["edges"]
+    )
+    assert local["projection_policy"] == {
+        "max_nodes": se.MAX_LOCAL_EXPLANATION_NODES,
+        "max_edges": se.MAX_LOCAL_EXPLANATION_EDGES,
+        "max_source_rows_per_edge": se.MAX_LOCAL_SOURCE_ROWS_PER_EDGE,
+        "node_order": "target_then_pooled_caught_salience_then_hop_then_id",
+        "edge_order": "target_incident_then_hop_then_id",
+    }
+
+
+def test_flow_stages_use_compact_rules_instead_of_membership_copies():
+    community = {
+        "nodes_by_id": {
+            "target": {"pooled_member": True},
+            "neighbor": {"pooled_member": True},
+        },
+        "edges": [
+            {
+                "edge_id": "edge:1",
+                "u": "target",
+                "v": "neighbor",
+                "edge_type": "COTRAVEL",
+                "message_hop": 1,
+            }
+        ],
+    }
+
+    stages = se.build_flow_stages(community)
+
+    assert [stage["stage_id"] for stage in stages] == [
+        "first_hop",
+        "second_hop",
+        "component_pool",
+        "rank_fusion",
+    ]
+    assert all("node_ids" not in stage and "edge_ids" not in stage for stage in stages)
+    assert stages[0]["edge_rule"] == {"max_message_hop": 1}
+    assert stages[2]["edge_rule"] == {
+        "edge_type": "COTRAVEL",
+        "both_pooled_members": True,
+    }
+
+
+def _legacy_production_giant_scope_explanation_and_bundle_are_bounded_and_complete(
+    tmp_path, monkeypatch
+):
+    edge_count = 100_001
+    scoring_day = pd.Timestamp("2025-01-02T00:00:00Z")
+    edges = pd.DataFrame(
+        {
+            "source_row_id": [f"row:{index:06d}" for index in range(edge_count)],
+            "canonical_pair_group_id": [
+                f"group:{index:06d}" for index in range(edge_count)
+            ],
+            "u": ["target"] * edge_count,
+            "v": ["poolmate"] * edge_count,
+            "avail_time": scoring_day - pd.Timedelta(hours=1),
+            "rel": np.zeros(edge_count, dtype=np.int8),
+            "edge_type": ["COTRAVEL"] * edge_count,
+        }
+    )
+    engine = se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=edges,
+        node_ids=["target", "poolmate"],
+        node_feat={
+            "target": np.array([1.0]),
+            "poolmate": np.array([0.5]),
+        },
+        caught_time={"poolmate": scoring_day - pd.Timedelta(hours=2)},
+        num_rel=4,
+    )
+    snapshot = engine.snapshot(scoring_day)
+    probability = float(snapshot.probabilities[engine.person_index["target"]])
+    reference = _counterfactual_reference(target_probability=probability)
+    engine.bind_rank_reference(reference, _counterfactual_row_bindings())
+    trace = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        daily_budget=5,
+    )
+    case = HybridOnlyCase(
+        person_id="target",
+        anchor=RecoveryAnchor(
+            person_id="target",
+            event_id="target-a",
+            row_index=0,
+            scoring_day=scoring_day,
+            inspected_rank=1,
+        ),
+        baseline_rank=trace["baseline_rank"],
+        gnn_rank=trace["seed0_gnn_rank"],
+        hybrid_rank=trace["seed0_hybrid_rank"],
+        baseline_percentile=trace["baseline_percentile"],
+        gnn_percentile=trace["seed0_gnn_percentile"],
+        relationship_categories=("COTRAVEL",),
+        scoring_period="2025-01",
+        same_day_person_row_indices=(0, 1),
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        decision_trace=trace,
+    )
+
+    def bounded_member_explainer(
+        bound_engine, person_id, day, *, restart_seeds, epochs
+    ):
+        local = se.member_subgraph(bound_engine, person_id, day)
+        logit = float(
+            bound_engine.snapshot(day).prepool_logits[
+                bound_engine.person_index[person_id]
+            ]
+        )
+        return {
+            "edge_masks": tuple(
+                np.zeros(len(local.tensor_edge_source_row_ids), dtype=float)
+                for _ in restart_seeds
+            ),
+            "node_feature_masks": tuple(
+                np.ones(tuple(local.x.shape), dtype=float) for _ in restart_seeds
+            ),
+            "restart_seeds": tuple(restart_seeds),
+            "local_prepool_logit": logit,
+            "full_prepool_logit": logit,
+            "status": "ok",
+        }
+
+    monkeypatch.setattr(
+        se,
+        "diagnostic_edge_source_set_probability",
+        lambda *args, **kwargs: probability,
+    )
+    monkeypatch.setattr(
+        engine,
+        "score_counterfactual",
+        lambda context, factor: {
+            "factor_id": factor.factor_id,
+            "kind": factor.kind,
+            "original_hybrid_rank": context.original_hybrid_rank,
+            "ablated_hybrid_rank": context.original_hybrid_rank,
+            "hybrid_rank_delta": 0,
+        },
+    )
+
+    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    tracemalloc.start()
+    scope = engine.community("target", scoring_day)
+    explanation = se.compose_case_explanation(
+        engine, case, member_explainer=bounded_member_explainer
+    )
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage",
+        tmp_path / "published",
+        run_fingerprint="giant-streaming-e2e",
+        chunk_size=1_000,
+    )
+    community_ref = writer.write_community(
+        {
+            "complete": True,
+            "scoring_day": scope.scoring_day.isoformat(),
+            "component_id": scope.component_id,
+            "community_key": scope.community_key,
+            "nodes": scope.iter_nodes(),
+            "edges": scope.iter_edges(),
+            "provenance_observations": scope.iter_provenance(),
+            "provenance_expansions": iter(()),
+        }
+    )
+    writer.write_case(
+        "baseline_only",
+        {
+            "case_id": "case:target",
+            "person_id": "target",
+            "event_id": "target-a",
+            "scoring_day": scoring_day.isoformat(),
+            "community_key": scope.community_key,
+        },
+    )
+    manifest = writer.finalize(
+        expected_hybrid_case_ids=set(),
+        expected_baseline_case_ids={"case:target"},
+        policy={"inspections_per_day": 5},
+        summary={},
+    )
+    _, peak_tracemalloc = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+    bundle_root = tmp_path / "published" / manifest["bundle_path"]
+    files = [path for path in bundle_root.rglob("*") if path.is_file()]
+    physical_bytes = sum(path.stat().st_size for path in files)
+    community_manifest = json.loads(
+        (bundle_root / community_ref["path"]).read_text(encoding="utf-8")
+    )
+
+    assert isinstance(scope, se.CommunityScope)
+    assert len(explanation["community"]["nodes"]) <= se.MAX_LOCAL_EXPLANATION_NODES
+    assert len(explanation["community"]["edges"]) <= se.MAX_LOCAL_EXPLANATION_EDGES
+    assert len(explanation["attributions"]["node_feature_mask_stats"]) <= (
+        se.MAX_NODE_FEATURE_MASK_STATS
+    )
+    assert len(explanation["stability"]["edge_restart_aggregate"]["median"]) <= (
+        se.MAX_LOCAL_EXPLANATION_EDGES
+    )
+    assert community_manifest["node_count"] == 2
+    assert community_manifest["edge_count"] == edge_count
+    assert community_manifest["provenance_observation_count"] == edge_count
+    assert manifest["coverage"]["complete"] is True
+    assert peak_tracemalloc < 512 * 1024 * 1024
+    assert physical_bytes < 512 * 1024 * 1024
+    assert len(files) < 2_000
+    assert rss_after >= rss_before
+    assert {
+        "peak_tracemalloc_bytes": peak_tracemalloc,
+        "peak_rss_before": rss_before,
+        "peak_rss_after": rss_after,
+        "physical_bytes": physical_bytes,
+        "file_count": len(files),
+    }
+
+
+def _rss_bytes():
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform == "darwin" else value * 1024
+
+
+def _walk_reference_closure(pointer_path, bundle_root):
+    pointer_path = Path(pointer_path)
+    bundle_root = Path(bundle_root)
+    published_root = pointer_path.parent
+    visited = set()
+    verified_references = 0
+
+    def load(path, expected=None):
+        nonlocal verified_references
+        path = path.resolve()
+        content = path.read_bytes()
+        if expected is not None:
+            assert len(content) == expected["bytes"]
+            assert hashlib.sha256(content).hexdigest() == expected["sha256"]
+            verified_references += 1
+        if path in visited:
+            return None
+        visited.add(path)
+        if path.suffix != ".json":
+            return None
+        payload = json.loads(content)
+        return payload
+
+    def resolve(reference):
+        relative = Path(reference["path"])
+        for base in (bundle_root, published_root, pointer_path.parent):
+            candidate = base / relative
+            if candidate.is_file():
+                return candidate
+        raise AssertionError(f"unresolved reference {relative}")
+
+    def walk(value):
+        if isinstance(value, dict):
+            if {
+                "path",
+                "sha256",
+                "bytes",
+            }.issubset(value) and isinstance(value["path"], str):
+                payload = load(resolve(value), value)
+                if payload is not None:
+                    walk(payload)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    pointer = load(pointer_path)
+    manifest_path = bundle_root / "manifest.json"
+    manifest = load(manifest_path)
+    manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert pointer["manifest_sha256"] == manifest_digest
+    walk(pointer)
+    walk(manifest)
+    bundle_json = {
+        path.resolve() for path in bundle_root.rglob("*.json") if path.is_file()
+    }
+    assert bundle_json.issubset(visited)
+    assert verified_references > 0
+    return {
+        "verified_reference_count": verified_references,
+        "verified_file_count": len(visited),
+        "pointer_sha256": hashlib.sha256(pointer_path.read_bytes()).hexdigest(),
+        "manifest_sha256": manifest_digest,
+    }
+
+
+def _giant_hybrid_measurement_worker(root_value, metrics_path_value):
+    root = Path(root_value)
+    metrics_path = Path(metrics_path_value)
+    tracemalloc.start()
+    rss_before = _rss_bytes()
+    scoring_day = pd.Timestamp("2025-01-02T00:00:00Z")
+    display_edge_count = 100_001
+    duplicate_observations = 20
+    group_ids = ["group:000000"] * duplicate_observations + [
+        f"group:{index:06d}" for index in range(1, display_edge_count)
+    ]
+    raw_row_count = len(group_ids)
+    edges = pd.DataFrame(
+        {
+            "source_row_id": [f"row:{index:06d}" for index in range(raw_row_count)],
+            "canonical_pair_group_id": group_ids,
+            "u": ["target"] * raw_row_count,
+            "v": ["poolmate"] * raw_row_count,
+            "avail_time": scoring_day - pd.Timedelta(hours=1),
+            "rel": np.zeros(raw_row_count, dtype=np.int8),
+            "edge_type": ["COTRAVEL"] * raw_row_count,
+        }
+    )
+    engine = se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=edges,
+        node_ids=["target", "poolmate"],
+        node_feat={"target": np.array([1.0]), "poolmate": np.array([0.5])},
+        caught_time={"poolmate": scoring_day - pd.Timedelta(hours=2)},
+        num_rel=4,
+    )
+    snapshot = engine.snapshot(scoring_day)
+    probability = float(snapshot.probabilities[engine.person_index["target"]])
+    reference = _counterfactual_reference(target_probability=probability)
+    engine.bind_rank_reference(reference, _counterfactual_row_bindings())
+    trace = build_decision_trace(
+        reference,
+        row_index=0,
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        daily_budget=5,
+    )
+    case = HybridOnlyCase(
+        person_id="target",
+        anchor=RecoveryAnchor(
+            person_id="target",
+            event_id="target-a",
+            row_index=0,
+            scoring_day=scoring_day,
+            inspected_rank=1,
+        ),
+        baseline_rank=trace["baseline_rank"],
+        gnn_rank=trace["seed0_gnn_rank"],
+        hybrid_rank=trace["seed0_hybrid_rank"],
+        baseline_percentile=trace["baseline_percentile"],
+        gnn_percentile=trace["seed0_gnn_percentile"],
+        relationship_categories=("COTRAVEL",),
+        scoring_period="2025-01",
+        same_day_person_row_indices=(0, 1),
+        baseline_candidate_row_indices=(0, 1, 2, 3),
+        hybrid_candidate_row_indices=(0, 1, 2, 3),
+        decision_trace=trace,
+    )
+
+    def bounded_member_explainer(
+        bound_engine, person_id, day, *, restart_seeds, epochs
+    ):
+        local = se.member_subgraph(bound_engine, person_id, day)
+        logit = float(
+            bound_engine.snapshot(day).prepool_logits[
+                bound_engine.person_index[person_id]
+            ]
+        )
+        return {
+            "edge_masks": tuple(
+                np.zeros(len(local.tensor_edge_source_row_ids), dtype=float)
+                for _ in restart_seeds
+            ),
+            "node_feature_masks": tuple(
+                np.ones(tuple(local.x.shape), dtype=float) for _ in restart_seeds
+            ),
+            "restart_seeds": tuple(restart_seeds),
+            "local_prepool_logit": logit,
+            "full_prepool_logit": logit,
+            "status": "ok",
+        }
+
+    se.diagnostic_edge_source_set_probability = lambda *args, **kwargs: probability
+    engine.score_counterfactual = lambda context, factor: {
+        "factor_id": factor.factor_id,
+        "kind": factor.kind,
+        "original_hybrid_rank": context.original_hybrid_rank,
+        "ablated_hybrid_rank": context.original_hybrid_rank,
+        "hybrid_rank_delta": 0,
+    }
+    engine.explain_case = lambda selected_case: se.compose_case_explanation(
+        engine, selected_case, member_explainer=bounded_member_explainer
+    )
+
+    def fake_gemma(packet):
+        narrative = render_template(packet)
+        narrative["source"] = "llm"
+        narrative["model"] = MODEL_TAG
+        return narrative
+
+    scope = engine.community("target", scoring_day)
+    explanation = oa._explain_case_with_narrative(case, engine, fake_gemma)
+    assert any(
+        edge.get("source_rows_truncated") is True
+        and edge.get("source_row_count") == se.MAX_LOCAL_SOURCE_ROWS_PER_EDGE
+        and edge.get("complete_source_row_count") == duplicate_observations
+        for edge in explanation["attributions"]["top_edges"]
+    )
+    local_community = explanation.pop("community")
+    streamed_scope = explanation.pop("_community_scope")
+    expansions = explanation.pop("provenance_expansions", [])
+    writer = RecoveryBundleWriter(
+        root / "stage",
+        root / "published",
+        run_fingerprint="giant-streaming-hybrid-e2e",
+        chunk_size=1_000,
+    )
+    writer.write_community(oa._community_stream_source(streamed_scope))
+    explanation["community_key"] = scope.community_key
+    explanation["provenance_expansion_ids"] = [
+        expansion["expansion_id"] for expansion in expansions
+    ]
+    writer.write_case(
+        "hybrid_only",
+        oa._bundle_case_record(
+            case, "hybrid_only", scope.community_key, explanation
+        ),
+        explanation=explanation,
+        validation_metadata=explanation["llm_narrative"],
+        overlay_evidence=oa._overlay_stream_source(
+            explanation, local_community, expansions
+        ),
+    )
+    manifest = writer.finalize(
+        expected_hybrid_case_ids={"case:target"},
+        expected_baseline_case_ids=set(),
+        policy={"inspections_per_day": 5},
+        summary={},
+    )
+    bundle_root = root / "published" / manifest["bundle_path"]
+    pointer_path = root / "published" / "current.json"
+    closure = _walk_reference_closure(pointer_path, bundle_root)
+    files = [path for path in bundle_root.rglob("*") if path.is_file()]
+    physical_bytes = sum(path.stat().st_size for path in files)
+    community_ref = manifest["community_index"][scope.community_key]
+    community_manifest = json.loads(
+        (bundle_root / community_ref["path"]).read_text(encoding="utf-8")
+    )
+
+    case_ref = manifest["case_index"]["case:target"]
+    case_content = (bundle_root / case_ref["path"]).read_bytes()
+    assert len(case_content) == case_ref["bytes"]
+    assert hashlib.sha256(case_content).hexdigest() == case_ref["sha256"]
+    finalized_case = json.loads(case_content)
+    overlay_edge_records = []
+    for reference_value in finalized_case["overlay_evidence"]["edge_chunks"]:
+        content = (bundle_root / reference_value["path"]).read_bytes()
+        assert len(content) == reference_value["bytes"]
+        assert hashlib.sha256(content).hexdigest() == reference_value["sha256"]
+        overlay_edge_records.extend(json.loads(content)["edges"])
+    truncation_records = [
+        record
+        for record in overlay_edge_records
+        if record.get("source_rows_truncated") is True
+    ]
+    assert truncation_records
+    assert any(
+        record.get("source_row_count") == se.MAX_LOCAL_SOURCE_ROWS_PER_EDGE
+        and record.get("complete_source_row_count") == duplicate_observations
+        for record in truncation_records
+    )
+    assert community_manifest["node_count"] == 2
+    assert community_manifest["edge_count"] == display_edge_count
+    assert community_manifest["provenance_observation_count"] == raw_row_count
+    assert manifest["coverage"]["complete"] is True
+    assert len(explanation["attributions"]["node_feature_mask_stats"]) <= (
+        se.MAX_NODE_FEATURE_MASK_STATS
+    )
+    assert len(explanation["stability"]["edge_restart_aggregate"]["median"]) <= (
+        se.MAX_LOCAL_EXPLANATION_EDGES
+    )
+    current_tracemalloc, peak_tracemalloc = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    metrics = {
+        "display_node_count": 2,
+        "display_edge_count": display_edge_count,
+        "provenance_observation_count": raw_row_count,
+        "bounded_explanation_node_count": len(local_community["nodes"]),
+        "bounded_explanation_edge_count": len(local_community["edges"]),
+        "peak_rss_bytes": _rss_bytes(),
+        "rss_before_bytes": rss_before,
+        "current_tracemalloc_bytes": current_tracemalloc,
+        "peak_tracemalloc_bytes": peak_tracemalloc,
+        "physical_bytes": physical_bytes,
+        "file_count": len(files),
+        "truncated_overlay_record_count": len(truncation_records),
+        **closure,
+    }
+    assert metrics["peak_rss_bytes"] < 2 * 1024 * 1024 * 1024
+    assert metrics["peak_tracemalloc_bytes"] < 768 * 1024 * 1024
+    assert metrics["physical_bytes"] < 512 * 1024 * 1024
+    assert metrics["file_count"] < 2_000
+    metrics_path.write_text(json.dumps(metrics, sort_keys=True), encoding="utf-8")
+
+
+def test_production_giant_hybrid_chain_is_bounded_complete_and_hash_closed(tmp_path):
+    metrics_path = tmp_path / "giant-metrics.json"
+    process = multiprocessing.get_context("spawn").Process(
+        target=_giant_hybrid_measurement_worker,
+        args=(str(tmp_path / "child"), str(metrics_path)),
+    )
+    process.start()
+    process.join(timeout=240)
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        pytest.fail("giant Hybrid-only measurement exceeded 240 seconds")
+    assert process.exitcode == 0
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    print("GIANT_STREAMING_METRICS=" + json.dumps(metrics, sort_keys=True))
+    assert metrics["display_edge_count"] == 100_001
+    assert metrics["provenance_observation_count"] == 100_020
+    assert metrics["bounded_explanation_node_count"] <= (
+        se.MAX_LOCAL_EXPLANATION_NODES
+    )
+    assert metrics["bounded_explanation_edge_count"] <= (
+        se.MAX_LOCAL_EXPLANATION_EDGES
+    )
+    assert metrics["verified_reference_count"] > 0
+    assert metrics["truncated_overlay_record_count"] > 0
 
 
 def test_engine_exposes_counterfactual_scoring_without_mutable_source_state():
@@ -986,7 +1629,7 @@ def test_structural_provenance_expands_components_without_dropping_observations(
     assert len(rows.loc[(rows["u"] == "a") & (rows["v"] == "b")]) == 2
 
 
-def test_structural_provenance_scans_each_relation_graph_once(monkeypatch):
+def test_structural_provenance_never_materializes_networkx_components(monkeypatch):
     active_edges = pd.DataFrame(
         {
             "source_row_id": ["cot-a", "cot-b", "res-a", "res-b"],
@@ -1006,7 +1649,45 @@ def test_structural_provenance_scans_each_relation_graph_once(monkeypatch):
 
     structural_provenance_rows(active_edges, {"a", "b", "c"})
 
-    assert calls == {"connected_components": 2}
+    assert calls == {"connected_components": 0}
+
+
+def test_structural_provenance_revisits_both_relations_to_fixed_point():
+    active_edges = pd.DataFrame(
+        {
+            "source_row_id": ["res-a-b", "cot-b-c"],
+            "u": ["a", "b"],
+            "v": ["b", "c"],
+            "edge_type": ["RESIDENCE", "COTRAVEL"],
+        }
+    )
+
+    rows = structural_provenance_rows(active_edges, {"a"})
+
+    assert rows["source_row_id"].tolist() == ["cot-b-c", "res-a-b"]
+
+
+def test_structural_provenance_cap_is_deterministic_across_input_order():
+    count = se.MAX_STRUCTURAL_PROVENANCE_ROWS + 44
+    records = pd.DataFrame(
+        {
+            "source_row_id": [f"row:{index:04d}" for index in range(count)],
+            "u": ["target"] * count,
+            "v": [f"person:{index:04d}" for index in range(count)],
+            "edge_type": ["COTRAVEL"] * count,
+        }
+    )
+
+    forward = structural_provenance_rows(records, {"target"})
+    reverse = structural_provenance_rows(
+        records.iloc[::-1].reset_index(drop=True), {"target"}
+    )
+
+    expected = [
+        f"row:{index:04d}" for index in range(se.MAX_STRUCTURAL_PROVENANCE_ROWS)
+    ]
+    assert forward["source_row_id"].tolist() == expected
+    assert reverse["source_row_id"].tolist() == expected
 
 
 def test_ablation_specs_are_deterministic_complete_and_relation_qualified():
@@ -1750,7 +2431,7 @@ def test_identical_counterfactual_cache_skips_all_expensive_work(monkeypatch):
     second = engine.score_counterfactual(_counterfactual_context(), factor)
 
     assert after_first == {
-        "snapshot": 2,
+        "snapshot": 3,
         "community": 1,
         "specs": 1,
         "prepare": 1,
@@ -2244,25 +2925,25 @@ def test_member_and_case_entrypoints_reject_noncanonical_restarts():
         )
 
 
-def test_flow_stages_preserve_complete_membership_and_only_change_emphasis():
+def test_flow_stages_use_constant_size_rules_without_membership_copies():
     community = _sage_explanation_fixture().community("target", SCORING_DAY)
 
     stages = se.build_flow_stages(community)
 
-    node_ids = tuple(sorted(community["nodes_by_id"]))
-    edge_ids = tuple(sorted(edge["edge_id"] for edge in community["edges"]))
     assert [stage["stage_id"] for stage in stages] == [
         "first_hop",
         "second_hop",
         "component_pool",
         "rank_fusion",
     ]
-    assert all(tuple(stage["node_ids"]) == node_ids for stage in stages)
-    assert all(tuple(stage["edge_ids"]) == edge_ids for stage in stages)
-    assert stages[0]["emphasized_edge_ids"] == ["g-cot:rel:0", "g-res:rel:1"]
-    assert stages[1]["emphasized_edge_ids"] == list(edge_ids)
-    assert stages[2]["emphasized_edge_ids"] == ["g-cot:rel:0"]
-    assert stages[3]["emphasized_edge_ids"] == []
+    assert all(set(stage) == {"stage_id", "edge_rule"} for stage in stages)
+    assert stages[0]["edge_rule"] == {"max_message_hop": 1}
+    assert stages[1]["edge_rule"] == {"max_message_hop": 2}
+    assert stages[2]["edge_rule"] == {
+        "edge_type": "COTRAVEL",
+        "both_pooled_members": True,
+    }
+    assert stages[3]["edge_rule"] == {"match_none": True}
 
 
 def test_edge_removal_faithfulness_uses_exact_fractions_and_matched_controls():
@@ -2555,6 +3236,24 @@ def test_provenance_expansion_is_strict_asof_and_uses_source_row_ids():
     json.dumps(se.json_safe(expansion), allow_nan=False, sort_keys=True)
 
 
+def test_outside_ring_position_is_stable_per_node_id_and_independent_of_cohort():
+    """An outside person's layout coordinate must depend only on its node_id, not
+    on which other outside people share the expansion. Both the recovery bundle
+    (add_node conflict guard) and the dashboard reconcile outside nodes by
+    node_id and reject the same node recurring with different x/y, so a node that
+    appears in two provenance expansions must land on identical coordinates."""
+    a = se._outside_ring_position("P00008628")
+    again = se._outside_ring_position("P00008628")
+    assert a == again  # pure function of node_id
+    x, y = a
+    assert 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0
+    # A different node generally maps elsewhere on the ring.
+    assert se._outside_ring_position("P00030957") != a
+    # Cohort membership must not shift a node's coordinate: the same id resolves
+    # identically regardless of any surrounding set.
+    assert se._outside_ring_position("P00008628") == a
+
+
 def test_compose_case_explanation_ranks_target_local_attributions_and_proves_ledger():
     engine, case = _sage_case_fixture()
     calls = []
@@ -2569,7 +3268,8 @@ def test_compose_case_explanation_ranks_target_local_attributions_and_proves_led
     )
 
     assert calls == [("target", (0, 1, 2), 150)]
-    assert explanation["community"] == canonical_community
+    assert explanation.community_scope is canonical_community
+    assert explanation["community"]["display_scope"] == "target_local"
     assert all(
         not {
             "explainer_median",
@@ -2648,8 +3348,7 @@ def test_compose_case_explanation_ranks_target_local_attributions_and_proves_led
         0.5,
     ]
     assert all(
-        set(stage["node_ids"])
-        == set(explanation["community"]["nodes_by_id"])
+        set(stage) == {"stage_id", "edge_rule"}
         for stage in explanation["flow_stages"]
     )
     assert explanation["evidence_boundary"] == {
