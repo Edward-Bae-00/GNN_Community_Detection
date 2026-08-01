@@ -461,6 +461,79 @@ def test_community_accepts_one_shot_node_edge_and_provenance_streams(tmp_path):
     assert manifest["provenance_observation_count"] == 1
 
 
+def test_community_stream_source_normalizes_truncated_edge_source_row_count(tmp_path):
+    """A giant-community edge whose provenance was bounded by
+    MAX_LOCAL_SOURCE_ROWS_PER_EDGE carries source_row_count = full row total but a
+    truncated source_row_ids list. The base-community stream must normalize
+    source_row_count to the bounded id count (recording the true total under
+    complete_source_row_count) so publication does not fail closed, exactly as the
+    overlay stream already does."""
+    from gnn.observability_artifact import _community_stream_source
+
+    community = {
+        "community_key": "community:giant",
+        "complete": True,
+        "scoring_day": "2025-01-02T00:00:00+00:00",
+        "component_id": "component-giant",
+        "nodes": [
+            {"node_id": "person:p1", "kind": "person"},
+            {"node_id": "plate:x", "kind": "plate"},
+        ],
+        "edges": [
+            {
+                "edge_id": "edge:dense",
+                "u": "person:p1",
+                "v": "plate:x",
+                "edge_type": "used_plate",
+                # Bounded to two rows although five raw observations exist.
+                "source_row_ids": ["row:1", "row:2"],
+                "source_row_count": 5,
+                "source_rows_truncated": True,
+                "observations": [
+                    {"source_row_id": "row:1", "available_time": "2025-01-01"},
+                    {"source_row_id": "row:2", "available_time": "2025-01-01"},
+                ],
+            }
+        ],
+        "provenance_expansions": [],
+    }
+
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage",
+        tmp_path / "published",
+        run_fingerprint="giant-run",
+        chunk_size=8,
+    )
+    # Must not raise "edge source_row_count is inconsistent".
+    ref = writer.write_community(_community_stream_source(community))
+
+    manifest = _read_ref(tmp_path / "stage", ref)
+    assert manifest["edge_count"] == 1
+    assert manifest["provenance_observation_count"] == 2
+    # Day-membership source_row_count is normalized to the bounded id count and
+    # the observations remain an exact bijection with source_row_ids.
+    memberships = [
+        row
+        for chunk in manifest["day_view"]["edge_membership_chunks"]
+        for row in _read_ref(tmp_path / "stage", chunk)["edge_memberships"]
+    ]
+    (membership,) = memberships
+    assert membership["edge_id"] == "edge:dense"
+    assert membership["source_row_count"] == 2
+    assert membership["source_row_ids"] == ["row:1", "row:2"]
+    # The true untruncated total survives on the canonical edge record.
+    canonical_edge = json.loads(
+        writer.catalog_store._connection.execute(
+            "SELECT canonical_json FROM records "
+            "WHERE record_type = 'edges' AND canonical_id = ?",
+            ("edge:dense",),
+        ).fetchone()[0]
+    )
+    assert canonical_edge["complete_source_row_count"] == 5
+    assert canonical_edge["source_rows_truncated"] is True
+    assert "source_row_count" not in canonical_edge
+
+
 def test_case_attribution_overlays_do_not_change_shared_base_community(tmp_path):
     stage = tmp_path / "stage"
     writer = RecoveryBundleWriter(
@@ -600,6 +673,134 @@ def test_hybrid_case_overlay_streams_are_chunked_separately_from_base(tmp_path):
     assert all((bundle / path).is_file() for path in overlay_paths)
 
 
+def _overlay_with_shared_node(neighbor_fields):
+    """Overlay where 'person:overlay-neighbor' is both a ranked attribution node
+    and a structural-provenance expansion node. The two views carry disjoint
+    fields (attribution stats vs layout/membership), mirroring how a top-ranked
+    node that is also structurally expanded appears in the real observability
+    overlay."""
+    return {
+        "nodes": iter(
+            (
+                {
+                    "node_id": "person:overlay-neighbor",
+                    "rank": 3,
+                    "explainer_median": 0.42,
+                    "source_id": "person:overlay-neighbor",
+                },
+            )
+        ),
+        "edges": iter(
+            (
+                {
+                    "edge_id": "overlay-edge:1",
+                    "u": "person:overlay-neighbor",
+                    "v": "plate:x",
+                    "edge_type": "attributed_used_plate",
+                    "source_row_ids": ["overlay-row:1"],
+                    "source_row_count": 1,
+                },
+            )
+        ),
+        "provenance_observations": iter(
+            (
+                {
+                    "edge_id": "overlay-edge:1",
+                    "source_row_id": "overlay-row:1",
+                    "available_time": "2025-01-01",
+                },
+                {
+                    "edge_id": "overlay-edge:2",
+                    "source_row_id": "overlay-row:2",
+                    "available_time": "2025-01-01",
+                },
+            )
+        ),
+        "provenance_expansions": iter(
+            (
+                {
+                    "expansion_id": "overlay-expansion:1",
+                    "label": "attributed shared plate",
+                    "nodes": iter(
+                        (
+                            {
+                                "node_id": "person:overlay-neighbor",
+                                **neighbor_fields,
+                            },
+                        )
+                    ),
+                    "edges": iter(
+                        (
+                            {
+                                "edge_id": "overlay-edge:2",
+                                "u": "person:overlay-neighbor",
+                                "v": "plate:y",
+                                "edge_type": "attributed_used_plate",
+                                "source_row_ids": ["overlay-row:2"],
+                                "source_row_count": 1,
+                            },
+                        )
+                    ),
+                },
+            )
+        ),
+    }
+
+
+def test_overlay_merges_complementary_views_of_the_same_node(tmp_path):
+    """A node emitted once as a ranked attribution record and once as a
+    structural-provenance record (disjoint fields) must merge into a single
+    overlay node, not fail closed as a spurious conflict."""
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published",
+        run_fingerprint="overlay-merge", chunk_size=8,
+    )
+    writer.write_community(_community())
+    writer.write_case(
+        "hybrid_only",
+        _case("case:h"),
+        explanation=_explanation("case:h"),
+        overlay_evidence=_overlay_with_shared_node(
+            {"x": 0.2, "y": 0.3, "pooled_member": True}
+        ),
+    )
+    overlay = _read_ref(tmp_path / "stage", writer.case_index["case:h"]["ref"])[
+        "overlay_evidence"
+    ]
+    # One merged node, carrying the union of both views.
+    assert overlay["node_count"] == 1
+    nodes = [
+        node
+        for ref in overlay["node_chunks"]
+        for node in _read_ref(tmp_path / "stage", ref)["nodes"]
+    ]
+    (merged,) = nodes
+    assert merged["node_id"] == "person:overlay-neighbor"
+    assert merged["rank"] == 3
+    assert merged["explainer_median"] == 0.42
+    assert merged["x"] == 0.2
+    assert merged["pooled_member"] is True
+
+
+def test_overlay_still_rejects_genuine_shared_field_conflict(tmp_path):
+    """Merging is only for complementary fields; a real disagreement on a shared
+    field (same node_id, different value) must still fail closed."""
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published",
+        run_fingerprint="overlay-conflict", chunk_size=8,
+    )
+    writer.write_community(_community())
+    with pytest.raises(RecoveryBundleError, match="conflicting overlay node"):
+        writer.write_case(
+            "hybrid_only",
+            _case("case:h"),
+            explanation=_explanation("case:h"),
+            overlay_evidence=_overlay_with_shared_node(
+                {"source_id": "person:DIFFERENT", "x": 0.2, "y": 0.3}
+            ),
+        )
+
+
 def test_baseline_case_rejects_overlay_evidence(tmp_path):
     writer = RecoveryBundleWriter(
         tmp_path / "stage", tmp_path / "published", run_fingerprint="case-overlay"
@@ -720,6 +921,45 @@ def test_streamed_provenance_must_match_declared_source_row_ids(tmp_path):
 
     with pytest.raises(RecoveryBundleError, match="source_row_ids"):
         writer.write_community(community)
+
+
+def test_failed_stream_rolls_back_partial_catalog_and_retry_succeeds(tmp_path):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published", run_fingerprint="rollback"
+    )
+    failed = _community("community:rollback")
+    for edge in failed["edges"]:
+        edge.pop("observations")
+    failed["provenance_observations"] = iter(
+        [
+            {
+                "edge_id": "edge:1",
+                "source_row_id": "row:1",
+                "available_time": "2025-01-01",
+            }
+        ]
+    )
+    failed["provenance_expansions"][0]["edges"][0].pop("observations")
+
+    with pytest.raises(RecoveryBundleError, match="source_row_ids"):
+        writer.write_community(failed)
+
+    assert writer.catalog_store.community_counts("community:rollback") == {
+        "nodes": 0,
+        "edges": 0,
+        "provenance": 0,
+    }
+    assert writer.catalog_store._connection.in_transaction is False
+    assert "community:rollback" not in writer.community_index
+
+    reference = writer.write_community(_community("community:rollback"))
+
+    assert reference == writer.community_index["community:rollback"]
+    assert writer.catalog_store.community_counts("community:rollback") == {
+        "nodes": 3,
+        "edges": 2,
+        "provenance": 3,
+    }
 
 
 def test_case_identity_must_match_explanation_and_community(tmp_path):

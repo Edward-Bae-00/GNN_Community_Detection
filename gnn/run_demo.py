@@ -409,7 +409,12 @@ from gnn.observability_artifact import build_observability_bundle
 from gnn.sage_explainer import Seed0ExplanationEngine
 
 KS = (50, 100, 200, 500, 1000, 2000, 5000)
-DAILY_KS = (5, 10, 25, 50)   # per-day inspection budgets for the capacity-aware view
+DAILY_KS = (5, 10, 25)   # per-day inspection budgets for the capacity-aware view
+# The simulated-catch view sweeps its own budgets so the operational recovery
+# curve can be read at several staffing levels without changing the capacity
+# table, the daily crossing chart, or the daily bootstrap, which stay on the
+# budgets the run publishes in DAILY_KS.
+SIMULATED_DAILY_KS = (5, 10, 25)
 SUBSTRATE = "oracle"   # detection demo: perfect ER, shared by both arms (fair)
 
 
@@ -818,7 +823,8 @@ def _train_pool_and_labels(corpus_dir, train_cutoff):
 
 
 def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_comparison_v9.json",
-         epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS, gnn_arm="sage",
+         epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS,
+         simulated_daily_ks=SIMULATED_DAILY_KS, gnn_arm="sage",
          valid_sample=20000, observability=False,
          observability_out_name="hybrid_recovery_explanations_v9.json",
          explanation_limit=None, narrative=True, narrative_runner=None,
@@ -985,7 +991,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     simulated_catch_daily = evaluate_daily_simulated_catches(
         pool,
         {"baseline": base, "hybrid": hybrid},
-        daily_ks,
+        simulated_daily_ks,
         caught_time,
     )
     seed_level_unique_person_recovery = _seed_level_unique_person_recovery(
@@ -1019,6 +1025,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
            "hybrid_fusion_w_gnn": round(float(w_gnn), 3),
            "hybrid_fusion_w_gnn_oracle": round(float(w_gnn_oracle), 3),
            "daily_ks": list(daily_ks),
+           "simulated_catch_daily_ks": list(simulated_daily_ks),
            "stratum_hidden": {st: strat["baseline"][st]["hidden"] for st in STRATA},
            "overall": overall, "overall_daily": overall_daily, "stratified": strat,
            "simulated_catch_daily": simulated_catch_daily,

@@ -124,6 +124,20 @@ V9_RESULTS_CSS = r"""
 #tab-v9Results .v9-seg-small { margin: 0; padding: 3px; }
 #tab-v9Results .v9-seg-small button { padding: 4px 10px; font-size: 12px; }
 #tab-v9Results .v9-simulated-chart text { fill: var(--text2); font-size: 12px; }
+#tab-v9Results .v9-explain { margin: -6px 0 22px; padding: 16px 18px; border: 1px solid var(--border); border-left: 3px solid #4f7890; border-radius: 9px; background: var(--elevated); }
+#tab-v9Results .v9-explain-lead { margin: 0; color: var(--text2); font-size: 12px; line-height: 1.55; max-width: 780px; }
+#tab-v9Results .v9-explain-lead b { color: var(--text1); }
+#tab-v9Results .v9-explain-terms { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px 20px; margin: 14px 0 0; }
+#tab-v9Results .v9-explain-terms > div { min-width: 0; }
+#tab-v9Results .v9-explain-terms dt { color: var(--text1); font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: .01em; }
+#tab-v9Results .v9-explain-terms dd { margin: 4px 0 0; color: var(--text2); font-size: 11px; line-height: 1.45; }
+#tab-v9Results .v9-explain-terms dd .v9-pill { margin-right: 3px; vertical-align: baseline; }
+#tab-v9Results .v9-explain-sep { color: var(--text3); padding: 0 3px; }
+#tab-v9Results .v9-sig-note { margin: 0 0 12px; color: var(--text3); font-size: 11px; line-height: 1.45; max-width: 780px; }
+#tab-v9Results .v9-explain-foot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--border); color: var(--text3); font-size: 11px; line-height: 1.45; max-width: 780px; }
+#tab-v9Results .v9-methods { margin-top: 28px; }
+#tab-v9Results .v9-methods > h3 { margin: 0 0 12px; color: var(--text1); font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+#tab-v9Results .v9-methods > #v9-gnn-architecture-comparison { margin-top: 18px; }
 #tab-v9Results .v9-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 #tab-v9Results table.v9-sr-only { display: block; }
 @media(max-width:700px){
@@ -168,7 +182,7 @@ SIMULATED_CATCH_VIEW_MODEL_JS = r"""
     const budgets=Object.keys(sim.arms.baseline).map(key=>{const match=key.match(/^daily_people_found@(\d+)$/);return match?Number(match[1]):null;})
       .filter(k=>k!==null&&arms.every(a=>validBudget(a,k))&&matchingDateSets(k)).sort((a,b)=>a-b);
     if(!budgets.length) return unavailable();
-    const selected=budgets.includes(requestedBudget)?requestedBudget:(budgets.includes(25)?25:budgets[0]);
+    const selected=budgets.includes(requestedBudget)?requestedBudget:(budgets.includes(5)?5:budgets[0]);
     const dates=sim.arms.baseline[seriesPrefix+'@'+selected].map(row=>row.date).sort();
     const valuesByArm=Object.fromEntries(arms.map(a=>{
       const byDate=Object.fromEntries(sim.arms[a][seriesPrefix+'@'+selected].map(row=>[row.date,row.found]));
@@ -204,37 +218,22 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
   const demo=(typeof DATA!=='undefined'&&DATA)?DATA.v9Demo:null;
   if(!demo){sec.innerHTML='<div class="v9-card">No V9 demo result is embedded in data_v9.json.</div>';return;}
 
-  const ks=Object.keys(demo.overall.baseline)
-    .filter(k=>k.startsWith('found@')).map(k=>Number(k.slice(6))).sort((a,b)=>a-b);
   const fmt=n=>Number(n||0).toLocaleString();
   const pct=v=>(Number(v||0)*100).toFixed(1)+'%';
-  const found=(pop,arm,k)=>{
-    const src=pop==='observable'?demo.stratified[arm].observable:demo.overall[arm];
-    return Number(src['found@'+k]||0);
-  };
-  const hidden=pop=>pop==='observable'?demo.stratum_hidden.observable:demo.hidden_total;
-  const win=pop=>pop==='observable'?demo.win_hybrid_observable:demo.win_hybrid_whole_pool;
-  const winKey=(pop,k)=>pop==='observable'?'hybrid_vs_baseline_obs@'+k:'hybrid_vs_baseline@'+k;
-  const seizureRate=DATA.overview&&DATA.overview.outcome_rates?DATA.overview.outcome_rates.seizure:null;
   const preferredArms=['baseline','hybrid','gnn'];
-  const armOrder=preferredArms.filter(a=>demo.overall&&demo.overall[a]);
-  const armMeta=demo.model_arms||{};
   const armLabel=a=>a==='baseline'?'Baseline':(a==='hybrid'?'Deployable Hybrid':'GNN');
-  const runLabel=(demo.gnn_seeds?demo.gnn_seeds.length:0)+' seed(s), '+(demo.epochs||'-')+' epochs'+(demo.gnn_arm?', '+demo.gnn_arm+' arm':'');
-  const wDeploy=demo.hybrid_fusion_w_gnn;
-  const headlineK=ks.includes(2000)?2000:ks[ks.length-1];
-  const headlineBaseline=found('pool','baseline',headlineK);
-  const headlineHybrid=found('pool','hybrid',headlineK);
-  const headlineGnn=demo.overall&&demo.overall.gnn?found('pool','gnn',headlineK):null;
+  const supportedDailyKs=[5,10,25];
+  const publishedDailyKs=(demo.daily_ks||[]).map(Number).filter(k=>supportedDailyKs.includes(k)).sort((a,b)=>a-b);
+  const headlineDailyK=publishedDailyKs.includes(25)?25:(publishedDailyKs[publishedDailyKs.length-1]||5);
+  const headlineBaseline=Number((demo.overall_daily.baseline||{})['daily_found@'+headlineDailyK]||0);
+  const headlineHybrid=Number((demo.overall_daily.hybrid||{})['daily_found@'+headlineDailyK]||0);
+  const headlineGnn=demo.overall_daily&&demo.overall_daily.gnn?Number((demo.overall_daily.gnn||{})['daily_found@'+headlineDailyK]||0):null;
   const headlineDelta=headlineHybrid-headlineBaseline;
   const headlineLift=headlineBaseline?headlineDelta/headlineBaseline:null;
-  const wholeHybridAt2000=Number((demo.overall.hybrid||{})['found@2000']||0);
-  const wholeBaselineAt2000=Number((demo.overall.baseline||{})['found@2000']||0);
-  const dailyBaseline25=Number((demo.overall_daily.baseline||{})['daily_found@25']||0);
-  const dailyHybrid25=Number((demo.overall_daily.hybrid||{})['daily_found@25']||0);
-  const dailyBudget25=Number((demo.overall_daily.baseline||{})['daily_budget@25']||0);
+  const dailyBaselineAtK=headlineBaseline;
+  const dailyHybridAtK=headlineHybrid;
+  const dailyBudgetAtK=Number((demo.overall_daily.baseline||{})['daily_budget@'+headlineDailyK]||0);
   const dailyDays=Number((demo.overall_daily.baseline||{}).n_days||0);
-  let pop='observable';
   let simMode='cumulative';
   const modelVisibility={baseline:true,hybrid:true,gnn:true};
   const layerVisibility={crossings:true,'hidden-carriers':true};
@@ -242,69 +241,37 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
   sec.innerHTML='<h2>V9 Positive Control</h2>'
     +'<div class="v9-sub">Leak-safe baselines use row-level history and context. GNN arms add as-of relational signals.</div>'
     +'<div id="v9-summary" class="v9-summary" aria-label="V9 result summary">'
-    +'<div class="v9-summary-lead"><div class="v9-summary-kicker">Operational headline</div><div class="v9-summary-title">Deployable Hybrid records '+fmt(headlineDelta)+' more hidden-positive event hits at K='+fmt(headlineK)+'.</div><div class="v9-summary-copy">'+fmt(headlineHybrid)+' event hits vs '+fmt(headlineBaseline)+' for the baseline ('+(headlineLift==null?'n/a':pct(headlineLift))+' lift). GNN event-hit ceiling: '+(headlineGnn==null?'n/a':fmt(headlineGnn))+'. These found@K metrics count events, not unique people.</div><a class="v9-summary-link" href="#v9-case-evidence">Inspect seed-0 unique-person recovery evidence →</a></div>'
+    +'<div class="v9-summary-lead"><div class="v9-summary-kicker">Operational headline</div><div class="v9-summary-title">Deployable Hybrid records '+fmt(headlineDelta)+' more hidden-positive event hits at '+fmt(headlineDailyK)+'/day.</div><div class="v9-summary-copy">'+fmt(headlineHybrid)+' event hits vs '+fmt(headlineBaseline)+' for the baseline ('+(headlineLift==null?'n/a':pct(headlineLift))+' lift). GNN event-hit ceiling: '+(headlineGnn==null?'n/a':fmt(headlineGnn))+'. Daily metrics count events, not unique people.</div><a class="v9-summary-link" href="#v9-case-evidence">Inspect seed-0 unique-person recovery evidence →</a></div>'
     +'<div class="v9-summary-stat"><b>'+fmt(headlineHybrid)+'</b><span>Hybrid event hits</span></div>'
     +'<div class="v9-summary-stat"><b>'+fmt(headlineBaseline)+'</b><span>Baseline event hits</span></div>'
     +'<div class="v9-summary-stat"><b>'+(headlineGnn==null?'n/a':fmt(headlineGnn))+'</b><span>GNN event-hit ceiling</span></div>'
     +'</div>'
-    +'<div id="v9-metrics"></div>'
-    +'<div class="v9-card" style="margin-top:18px"><h3>What the models look for</h3><div class="v9-hint">Baselines use the target row; GNN arms add graph evidence available before scoring.</div><div id="v9-model-notes"></div></div>'
-    +'<section class="v9-story" aria-labelledby="v9-story-title"><div class="v9-story-header"><div><div class="v9-story-kicker">How to read this tab</div><h3 id="v9-story-title" class="v9-story-title">Read the V9 result through three lenses</h3><p class="v9-story-intro">The main rankings count event hits; the recovery explorer separately counts unique people.</p></div><div class="v9-story-note"><b>The short version</b>The graph advantage appears at operational depth.</div></div><div class="v9-lens-grid"><article class="v9-lens"><h4>1. Global event ranking</h4><p>One whole-pool top-K list, with all hidden-positive events in the recall denominator.</p><div class="v9-lens-stat"><b>'+fmt(wholeHybridAt2000)+' vs '+fmt(wholeBaselineAt2000)+'</b><span>Whole-pool hidden-positive event hits at K=2,000</span></div></article><article class="v9-lens"><h4>2. Findable event depth</h4><p>Defaults to the '+fmt(demo.stratum_hidden.observable)+'-event observable slice. Toggle for the whole pool.</p><div class="v9-lens-stat"><b>'+fmt(headlineHybrid)+' vs '+fmt(headlineBaseline)+'</b><span>Hybrid vs baseline event hits at K='+fmt(headlineK)+'</span></div></article><article class="v9-lens"><h4>3. Daily event operations</h4><p>Each of '+fmt(dailyDays)+' test days gets its own quota; 25/day equals '+fmt(dailyBudget25)+' inspections.</p><div class="v9-lens-stat"><b>'+fmt(dailyHybrid25)+' vs '+fmt(dailyBaseline25)+'</b><span>Hybrid vs baseline event hits at 25 inspections/day</span></div></article></div></section>'
-    +'<section id="v9-case-evidence" aria-labelledby="v9-recovery-title"></section>'
-    +'<h3 style="margin: 32px 0 12px; font-size: 20px; font-weight: 700; color: var(--text1); letter-spacing: -0.01em;">Baseline vs Hybrid vs GNN</h3>'
-    +'<div class="v9-seg" id="v9-pop" role="group" aria-label="Population scope"><button data-v="observable" class="on" aria-pressed="true">Observable slice</button><button data-v="pool" aria-pressed="false">Whole pool</button></div>'
-    +'<div class="v9-card"><h3>Depth event recall</h3><div class="v9-hint">Share of hidden-positive events hit in the selected population.</div><div id="v9-bars"></div></div>'
+    +'<section class="v9-story" aria-labelledby="v9-story-title"><div class="v9-story-header"><div><div class="v9-story-kicker">How to read this tab</div><h3 id="v9-story-title" class="v9-story-title">Read the V9 result as a daily operating view</h3><p class="v9-story-intro">Every result uses a fixed daily inspection budget. The recovery explorer separately counts unique people.</p></div><div class="v9-story-note"><b>The short version</b>The graph advantage appears at operational depth.</div></div><div class="v9-lens-grid"><article class="v9-lens"><h4>Daily event operations</h4><p>Each of '+fmt(dailyDays)+' test days gets its own '+fmt(headlineDailyK)+'/day quota, or '+fmt(dailyBudgetAtK)+' inspections in total.</p><div class="v9-lens-stat"><b>'+fmt(dailyHybridAtK)+' vs '+fmt(dailyBaselineAtK)+'</b><span>Hybrid vs baseline event hits at '+fmt(headlineDailyK)+'/day</span></div></article></div></section>'
     +'<div class="v9-card" style="margin-top:18px"><h3>Daily capacity view</h3><div class="v9-hint">Found, precision, recall, and F1 under fixed per-day inspection budgets.</div><div id="v9-daily"></div></div>'
-    +'<div class="v9-card" style="margin-top:18px"><h3>Daily Crossing Volume</h3><div class="v9-hint">Daily test-window crossing volume and hidden-positive event hits by each model.</div><div class="v9-chart-stack"><section class="v9-chart-block"><div class="v9-daily-found-header"><h4>Crossing events and hidden-positive event hits per day</h4><label><span class="v9-sr-only">Daily inspection budget</span><select id="v9-daily-found-k" class="v9-daily-found-select"></select></label></div><div class="v9-hint">Daily top-k event hits only. Toggle a model to show or hide its line.</div><div id="v9-volume"></div></section><section id="v9-simulated-catches" class="v9-chart-block" aria-labelledby="v9-simulated-title"><div class="v9-daily-found-header"><h4 id="v9-simulated-title">Simulated catches - first-time unique-person recoveries</h4><div class="v9-seg v9-seg-small" id="v9-simulated-mode" role="group" aria-label="Simulated chart mode"><button data-v="cumulative" class="on" aria-pressed="true">Cumulative</button><button data-v="daily" aria-pressed="false">Daily</button></div><label><span class="v9-sr-only">Simulated daily inspection budget</span><select id="v9-simulated-k" class="v9-daily-found-select"></select></label></div><div class="v9-hint">New people recovered each day after earlier simulated catches leave the candidate pool.</div><div id="v9-simulated-summary" class="v9-simulated-summary"></div><div id="v9-simulated-volume"></div></section></div></div>'
-    +'<div class="v9-card" style="margin-top:18px"><h3>Bootstrap verdicts</h3><div class="v9-hint">Paired event-bootstrap results for Hybrid minus baseline, using global and daily budgets.</div><div class="v9-table-wrap" id="v9-sig"></div></div>';
+    +'<div class="v9-chart-stack">'
+    +'<section id="v9-simulated-catches" class="v9-chart-block" aria-labelledby="v9-simulated-title"><div class="v9-daily-found-header"><h4 id="v9-simulated-title">Simulated catches</h4><div class="v9-seg v9-seg-small" id="v9-simulated-mode" role="group" aria-label="Simulated chart mode"><button data-v="cumulative" class="on" aria-pressed="true">Cumulative</button><button data-v="daily" aria-pressed="false">Daily</button></div><label><span class="v9-sr-only">Simulated daily inspection budget</span><select id="v9-simulated-k" class="v9-daily-found-select"></select></label></div><div class="v9-hint">Unique people caught for the first time. A caught person leaves the pool.</div><div id="v9-simulated-summary" class="v9-simulated-summary"></div><div id="v9-simulated-volume"></div></section>'
+    +'<section class="v9-chart-block" aria-labelledby="v9-crossing-volume-title"><div class="v9-daily-found-header"><h4 id="v9-crossing-volume-title">Daily Crossing Volume</h4><label><span class="v9-sr-only">Daily inspection budget</span><select id="v9-daily-found-k" class="v9-daily-found-select"></select></label></div><div class="v9-hint">Daily crossing volume and hidden-positive event hits by model. Toggle a model to show or hide its line.</div><div id="v9-volume"></div></section>'
+    +'</div>'
+    +'<section id="v9-case-evidence" aria-labelledby="v9-recovery-title"></section>'
+    +'<div class="v9-card" style="margin-top:18px"><h3>Daily bootstrap verdicts</h3><div class="v9-hint">Does the Hybrid lead survive resampling when every test day keeps the same inspection quota?</div>'
+    +'<div class="v9-explain"><p class="v9-explain-lead">Every row re-draws the test events with replacement many times over. Both rankers score the <b>same</b> re-draw, each one rebuilds its own top-K list, and the gap in hidden-positive event hits is recorded. The table describes the spread of those gaps, not a single run.</p>'
+    +'<dl class="v9-explain-terms">'
+    +'<div><dt>mean diff</dt><dd>Average extra hidden-positive event hits for Hybrid over the baseline. Above zero favors Hybrid.</dd></div>'
+    +'<div><dt>95% CI</dt><dd>Middle 95% of those re-drawn gaps. A wide interval means the depth is noisy.</dd></div>'
+    +'<div><dt>p(Hybrid&lt;=base)</dt><dd>Share of re-draws in which the Hybrid failed to beat the baseline.</dd></div>'
+    +'<div><dt>verdict</dt><dd><span class="v9-pill win">Hybrid win</span> entire CI above zero <span class="v9-explain-sep">/</span> <span class="v9-pill tie">wash</span> CI crosses zero <span class="v9-explain-sep">/</span> <span class="v9-pill loss">baseline win</span> entire CI below zero</dd></div>'
+    +'</dl>'
+    +'<p class="v9-explain-foot">Every row gives each test day its own quota, so it reads as fixed daily staffing and is scored on the whole pool. These results count events rather than unique people.</p></div>'
+    +'<div class="v9-table-wrap" id="v9-sig"></div></div>'
+    +'<section class="v9-methods" aria-labelledby="v9-methods-title"><h3 id="v9-methods-title">Methods</h3>'
+    +'<section id="v9-gnn-architecture-comparison" aria-labelledby="v9-gnn-architecture-title"></section></section>';
 
   mountV9RecoveryExplainer(
     document.getElementById('v9-case-evidence'),
     (typeof DATA!=='undefined'&&DATA)?DATA.v9RecoveryExplainer:null,
     {fmt,pct,esc}
   );
-
-  makeMetrics(document.getElementById('v9-metrics'),[
-    {l:'test pool',v:fmt(demo.pool_size),s:'detected events excluded'},
-    {l:'hidden-positive events',v:fmt(demo.hidden_total),s:'false-negative test events'},
-    {l:'observable hidden-positive events',v:fmt(demo.stratum_hidden.observable),s:'findable cell slice'},
-    {l:'seizure rate',v:seizureRate==null?'-':pct(seizureRate),s:'corpus outcome rate'},
-    {l:'fusion weight',v:wDeploy==null?'-':wDeploy,s:'deployable caught-tuned GNN blend'},
-    {l:'GNN run',v:runLabel,s:'settings recorded in JSON'},
-  ]);
-
-  function drawModelNotes(){
-    const groups = { 'GNN Models': [], 'Base Models': [], 'Hybrid Models': [] };
-    armOrder.forEach(a=>{
-      const meta=armMeta[a]||{};
-      const kind=meta.kind||((a.indexOf('gnn')===0)?'gnn':'baseline');
-      const group = (kind==='hybrid' || a.includes('hybrid')) ? 'Hybrid Models' : ((kind==='gnn' || a.indexOf('gnn')===0) ? 'GNN Models' : 'Base Models');
-      groups[group].push(a);
-    });
-
-    let h='';
-    for (const [gName, arms] of Object.entries(groups)) {
-      if (!arms.length) continue;
-      h += '<h4 style="margin: 16px 0 12px; font-size: 13px; font-weight: 600; color: var(--text1); padding-bottom: 4px; border-bottom: 1px solid var(--border);">' + gName + '</h4>';
-      h += '<div class="v9-model-list" style="margin-top: 0; margin-bottom: 24px;">'+arms.map(a=>{
-        const meta=armMeta[a]||{};
-        const kind=meta.kind||((a.indexOf('gnn')===0)?'gnn':'baseline');
-        const label=meta.label||a;
-        const text=meta.looks_for||'No model description provided.';
-        const pCls=kind==='gnn'?'win':(kind==='hybrid'?'tie':'tie');
-        return '<div class="v9-model-note"><b><span>'+esc(armLabel(a))+'</span><span class="v9-pill '+pCls+'">'+esc(kind)+'</span></b><p>'+esc(text)+'</p></div>';
-      }).join('')+'</div>';
-    }
-    document.getElementById('v9-model-notes').innerHTML = h;
-  }
-
-  document.getElementById('v9-pop').addEventListener('click',e=>{
-    const b=e.target.closest('button'); if(!b) return;
-    pop=b.dataset.v;
-    sec.querySelectorAll('#v9-pop button').forEach(x=>{const active=x===b;x.classList.toggle('on',active);x.setAttribute('aria-pressed',String(active));});
-    draw();
-  });
-
+  mountV9GNNArchitectureComparison(document.getElementById('v9-gnn-architecture-comparison'), (typeof DATA!=='undefined'&&DATA)?DATA.v9GNNArchitectureComparison:null, {fmt,pct,esc}, (typeof DATA!=='undefined'&&DATA)?DATA.demoComparison:null);
   function pill(summary){
     if(!summary) return '<span class="v9-pill tie">n/a</span>';
     const lo=Number(summary.ci[0]), hi=Number(summary.ci[1]);
@@ -313,23 +280,11 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
     return '<span class="v9-pill tie">wash</span>';
   }
 
-  const hasGnn=()=>!!(demo.overall&&demo.overall.gnn);
-  function drawBars(){
-    const k=ks.includes(5000)?5000:ks[ks.length-1];
-    const total=hidden(pop)||1;
-    const vals=[['baseline',found(pop,'baseline',k),'base'],['Hybrid',found(pop,'hybrid',k),'']];
-    if(hasGnn()) vals.push(['GNN',found(pop,'gnn',k),'']);
-    document.getElementById('v9-bars').innerHTML='<div class="v9-bars">'+vals.map(([label,val,cls])=>{
-      const w=Math.max(2,Math.round(val/total*100));
-      return '<div class="v9-bar-row"><span>'+label+'</span><div class="v9-track"><div class="v9-fill '+cls+'" style="width:'+w+'%"></div></div><b>'+fmt(val)+' / '+fmt(total)+'</b></div>';
-    }).join('')+'</div>';
-  }
-
   function drawDaily(){
     const el=document.getElementById('v9-daily'); if(!el) return;
     const od=demo.overall_daily;
     if(!od){el.innerHTML='<div class="v9-hint">No daily-capacity metric in this result (re-run the demo to populate it).</div>';return;}
-    const dks=(demo.daily_ks||[]).slice().sort((a,b)=>a-b);
+    const dks=(demo.daily_ks||[]).map(Number).filter(k=>supportedDailyKs.includes(k)).sort((a,b)=>a-b);
     const arms=['baseline','hybrid','gnn'].filter(a=>od[a]);
     const nDays=(od.baseline&&od.baseline.n_days)||null;
     let h='<div class="v9-capacity">';
@@ -354,7 +309,7 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
     if(!points.length){el.innerHTML='<div class="v9-hint">No daily crossing-volume series is embedded in this dashboard.</div>';return;}
     const select=document.getElementById('v9-daily-found-k');
     const od=demo.overall_daily||{}, arms=['baseline','hybrid','gnn'].filter(a=>od[a]);
-    const dks=(demo.daily_ks||[]).map(Number).filter(k=>[5,10,25,50].includes(k)).sort((a,b)=>a-b);
+    const dks=(demo.daily_ks||[]).map(Number).filter(k=>supportedDailyKs.includes(k)).sort((a,b)=>a-b);
     if(!select||!arms.length||!dks.length){el.innerHTML='<div class="v9-hint">No daily model catch series is embedded in this dashboard.</div>';return;}
     const current=Number(select.value), selected=dks.includes(current)?current:(dks.includes(25)?25:dks[0]);
     select.innerHTML=dks.map(k=>'<option value="'+k+'">'+fmt(k)+' / day</option>').join('');
@@ -450,21 +405,12 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
   }
 
   function drawSig(){
-    const wins=win(pop)||{};
-    let h='<h4 style="margin: 4px 0 12px; font-size: 13px; font-weight: 600; color: var(--text1);">Whole-window bootstrap</h4>';
-    h+='<table><thead><tr><th>K</th><th>mean diff</th><th>95% CI</th><th>p(Hybrid&lt;=base)</th><th>verdict</th></tr></thead><tbody>';
-    ks.forEach(k=>{
-      const s=wins[winKey(pop,k)];
-      if(!s) return;
-      h+='<tr><td>'+fmt(k)+'</td><td class="'+(s.mean_diff<0?'bad':'best')+'">'+(s.mean_diff>0?'+':'')+s.mean_diff+'</td>'
-        +'<td>['+s.ci[0]+', '+s.ci[1]+']</td><td>'+s.p_enh_le_base+'</td><td>'+pill(s)+'</td></tr>';
-    });
-    h+='</tbody></table>';
     const dailyWins=demo.win_hybrid_daily||{};
     const dailyBaseline=demo.overall_daily&&demo.overall_daily.baseline||{};
-    h+='<h4 style="margin: 24px 0 12px; font-size: 13px; font-weight: 600; color: var(--text1);">Daily-capacity bootstrap</h4>';
+    let h='<h4 style="margin: 4px 0 4px; font-size: 13px; font-weight: 600; color: var(--text1);">Daily-capacity bootstrap</h4>';
+    h+='<div class="v9-sig-note">Every one of the '+fmt(dailyDays)+' test days gets the same quota, so the total is what fixed staffing would actually inspect. Whole-pool events.</div>';
     h+='<table><thead><tr><th>per-day budget</th><th>mean diff</th><th>95% CI</th><th>p(Hybrid&lt;=base)</th><th>verdict</th></tr></thead><tbody>';
-    (demo.daily_ks||[]).slice().sort((a,b)=>a-b).forEach(k=>{
+    publishedDailyKs.forEach(k=>{
       const s=dailyWins['hybrid_vs_baseline_daily@'+k];
       if(!s) return;
       h+='<tr><td>'+fmt(dailyBaseline['daily_budget@'+k]||k)+' total ('+fmt(k)+'/day)</td><td class="'+(s.mean_diff<0?'bad':'best')+'">'+(s.mean_diff>0?'+':'')+s.mean_diff+'</td>'
@@ -474,8 +420,7 @@ V9_RESULTS_JS = r"""v9Results:{rendered:false,render(){
     document.getElementById('v9-sig').innerHTML=h;
   }
 
-  drawModelNotes();
-  function draw(){drawBars();drawDaily();drawCombined();drawSig();}
+  function draw(){drawDaily();drawCombined();drawSig();}
   draw();
   drawSimulatedCatches();
 }},
@@ -621,7 +566,8 @@ UNSUP_AD_CSS = r"""
   gap: 8px 14px;
   margin: 0 0 12px;
 }
-.uad-arm-header h4 { margin: 0; color: var(--text1); font-size: 14px; }
+.uad-arm-header h4 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text1); font-size: 14px; }
+.uad-arm-key { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
 .uad-arm-header span { color: var(--text3); font-size: 11px; }
 .uad-region-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .uad-region-table th, .uad-region-table td {
@@ -663,6 +609,92 @@ UNSUP_AD_CSS = r"""
   letter-spacing: .04em;
 }
 .uad-empty { color: var(--text3); font-size: 12px; }
+.uad-figures {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  margin: 0 0 28px;
+}
+.uad-figure {
+  min-width: 0;
+  max-width: 820px;
+  overflow: hidden;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.uad-figure h4 {
+  margin: 0 0 5px;
+  color: var(--text1);
+  font-size: 13px;
+  font-weight: 600;
+}
+.uad-figure-sub {
+  margin: 0 0 12px;
+  color: var(--text3);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.uad-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0 0 10px;
+  color: var(--text2);
+  font-size: 11px;
+}
+.uad-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.uad-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+}
+.uad-legend svg { display: block; overflow: visible; flex: none; }
+.uad-legend-shape { fill: var(--text2); }
+.uad-legend i.uad-legend-rule { width: 14px; height: 0; border-radius: 0; border-top: 1px solid var(--border-strong); }
+.uad-chart { display: block; width: 100%; height: auto; overflow: visible; }
+.uad-chart text { fill: var(--text3); font-family: inherit; font-size: 11px; }
+.uad-chart text.uad-axis-title { fill: var(--text3); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.uad-chart text.uad-value { fill: var(--text1); font-size: 10px; font-variant-numeric: tabular-nums; }
+.uad-chart text.uad-ref { fill: var(--text3); font-size: 10px; }
+.uad-chart .uad-rule { stroke: var(--border); stroke-width: 1; }
+.uad-chart .uad-baseline { stroke: var(--border-strong); stroke-width: 1; }
+.uad-chart .uad-ref-rule { stroke: var(--border-strong); stroke-width: 1; }
+.uad-chart .uad-dot { stroke: var(--surface); stroke-width: 2; }
+.uad-chart .uad-track { fill: none; stroke: var(--border-strong); stroke-width: 1; stroke-linejoin: round; }
+.uad-chart .uad-hit { fill: transparent; pointer-events: all; cursor: pointer; }
+.uad-strata { margin: -6px 0 16px; display: grid; gap: 7px; }
+.uad-strata-row {
+  display: grid;
+  grid-template-columns: minmax(0, 126px) 1fr 46px;
+  gap: 10px;
+  align-items: center;
+  color: var(--text2);
+  font-size: 11px;
+}
+.uad-strata-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uad-strata-row > b { color: var(--text1); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.uad-strata-track { height: 6px; border-radius: 999px; background: var(--elevated); overflow: hidden; }
+.uad-strata-fill { height: 100%; border-radius: 999px; }
+.uad-strata-scale { margin-top: 2px; color: var(--text3); font-size: 10px; }
+.uad-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+table.uad-sr-only { display: block; }
+@media(max-width:700px){
+  .uad-strata-row { grid-template-columns: minmax(0, 104px) 1fr 44px; }
+}
 """
 
 UNSUP_AD_NAV_BTN = '  <button data-tab="unsupervisedAD" aria-controls="tab-unsupervisedAD" aria-selected="false">Anomaly ranking</button>\n'
@@ -750,6 +782,258 @@ function buildUnsupervisedADViewModel(ad){
 }
 """
 
+# Categorical slots 1-4 of the validated dark-surface palette, in the fixed
+# progression order. Assignment follows the arm identity, never its rank, so a
+# missing arm never repaints the others.
+UNSUP_AD_CHART_JS = r"""
+const UAD_ARM_COLORS={
+  tabular_unlabeled:'#3987e5',
+  relational_unlabeled:'#d95926',
+  relational_caught_supervised:'#199e70',
+  tabular_caught_supervised:'#c98500'
+};
+const UAD_REGION_SHAPES=['circle','square','triangle','diamond'];
+
+function buildUnsupervisedADChartModel(view){
+  const toSeries=arms=>(Array.isArray(arms)?arms:[]).map(arm=>{
+    const byRegion={};
+    (arm&&arm.regions?arm.regions:[]).forEach(region=>{
+      if(region&&region.status!=='skipped'&&region.metrics) byRegion[region.region]=region.metrics;
+    });
+    return {
+      id:arm.id,
+      label:(arm.metadata&&arm.metadata.label)||arm.id,
+      color:UAD_ARM_COLORS[arm.id]||UAD_ARM_COLORS.tabular_unlabeled,
+      byRegion
+    };
+  }).filter(series=>Object.keys(series.byRegion).length>0);
+  const primary=toSeries(view&&view.primary);
+  const ablation=toSeries(view&&view.ablation);
+  const regions=[];
+  primary.concat(ablation).forEach(series=>Object.keys(series.byRegion).forEach(region=>{
+    if(regions.indexOf(region)<0) regions.push(region);
+  }));
+  return {available:primary.length>0&&regions.length>0,regions,primary,ablation};
+}
+
+function uadMetric(series,region,key){
+  const metrics=series&&series.byRegion?series.byRegion[region]:null;
+  const value=metrics?metrics[key]:null;
+  return typeof value==='number'&&isFinite(value)?value:null;
+}
+
+function uadNiceMax(values,step,floor){
+  const finite=(values||[]).filter(value=>typeof value==='number'&&isFinite(value));
+  const peak=Math.max(finite.length?Math.max.apply(null,finite):0,floor||0);
+  const size=step>0?step:1;
+  return Math.max(size,Math.ceil((peak-1e-9)/size)*size);
+}
+
+/* Grow the tick step through the 1-2-5 ladder until the axis tops out in at
+   most maxTicks intervals, so every printed tick stays a round number. */
+function uadAxis(values,step,floor,maxTicks){
+  const ladder=[1,2,5];
+  const limit=Math.max(2,maxTicks||5);
+  let size=step>0?step:1;
+  let guard=0;
+  let max=uadNiceMax(values,size,floor);
+  while(Math.round(max/size)>limit&&guard<24){
+    const decade=Math.pow(10,Math.floor(Math.log10(size)+1e-9));
+    const index=ladder.indexOf(Math.round(size/decade));
+    size=index<0||index===ladder.length-1?decade*10:decade*ladder[index+1];
+    max=uadNiceMax(values,size,floor);
+    guard+=1;
+  }
+  const ticks=[];
+  for(let value=0;value<=max+size/2;value+=size) ticks.push(Number(value.toFixed(10)));
+  return {max,step:size,ticks};
+}
+
+function uadTicks(max,count){
+  const steps=Math.max(1,count||4);
+  const out=[];
+  for(let i=0;i<=steps;i++) out.push(max*i/steps);
+  return out;
+}
+
+function uadBarPath(x,y,w,h,r){
+  const radius=Math.max(0,Math.min(r,w/2,h));
+  return 'M'+x.toFixed(1)+' '+(y+h).toFixed(1)
+    +' V'+(y+radius).toFixed(1)
+    +' Q'+x.toFixed(1)+' '+y.toFixed(1)+' '+(x+radius).toFixed(1)+' '+y.toFixed(1)
+    +' H'+(x+w-radius).toFixed(1)
+    +' Q'+(x+w).toFixed(1)+' '+y.toFixed(1)+' '+(x+w).toFixed(1)+' '+(y+radius).toFixed(1)
+    +' V'+(y+h).toFixed(1)+' Z';
+}
+
+function uadShapeMark(shape,cx,cy,size,attrs){
+  const extra=attrs||'';
+  const points=list=>list.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  if(shape==='square') return '<rect'+extra+' x="'+(cx-size).toFixed(1)+'" y="'+(cy-size).toFixed(1)
+    +'" width="'+(size*2).toFixed(1)+'" height="'+(size*2).toFixed(1)+'" rx="1.5"/>';
+  if(shape==='triangle') return '<polygon'+extra+' points="'
+    +points([[cx,cy-size*1.2],[cx+size*1.15,cy+size*0.85],[cx-size*1.15,cy+size*0.85]])+'"/>';
+  if(shape==='diamond') return '<polygon'+extra+' points="'
+    +points([[cx,cy-size*1.3],[cx+size*1.3,cy],[cx,cy+size*1.3],[cx-size*1.3,cy]])+'"/>';
+  return '<circle'+extra+' cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="'+size.toFixed(1)+'"/>';
+}
+
+function uadColorLegend(series,extra){
+  return '<div class="uad-legend">'+series.map(item=>'<span><i style="background:'+item.color+'"></i>'
+    +esc(item.label)+'</span>').join('')
+    +(extra?'<span><i class="uad-legend-rule"></i>'+esc(extra)+'</span>':'')+'</div>';
+}
+
+function uadShapeLegend(groups){
+  return '<div class="uad-legend">'+groups.map((group,index)=>'<span><svg width="12" height="12" '
+    +'viewBox="-6 -6 12 12" aria-hidden="true">'
+    +uadShapeMark(UAD_REGION_SHAPES[index%UAD_REGION_SHAPES.length],0,0,4,' class="uad-legend-shape"')
+    +'</svg>'+esc(group)+'</span>').join('')+'</div>';
+}
+
+function uadDataTable(id,caption,rowHeader,groups,series,cell){
+  return '<table id="'+id+'" class="uad-sr-only"><caption>'+esc(caption)+'</caption><thead><tr><th>'
+    +esc(rowHeader)+'</th>'+series.map(item=>'<th>'+esc(item.label)+'</th>').join('')
+    +'</tr></thead><tbody>'+groups.map(group=>'<tr><td>'+esc(group)+'</td>'
+    +series.map(item=>'<td>'+esc(cell(item,group))+'</td>').join('')+'</tr>').join('')
+    +'</tbody></table>';
+}
+
+function uadColumnChart(spec){
+  const groups=spec.groups||[], series=spec.series||[];
+  if(!groups.length||!series.length||!(spec.max>0)) return '';
+  const W=680, H=280, padL=54, padR=18, padT=34, padB=56;
+  const chartW=W-padL-padR, chartH=H-padT-padB;
+  const band=chartW/groups.length;
+  const gap=2, innerPad=Math.min(34,band*0.26);
+  const barW=Math.max(4,Math.min(24,(band-innerPad-gap*(series.length-1))/series.length));
+  const groupW=barW*series.length+gap*(series.length-1);
+  const scale=value=>padT+chartH-(Math.max(0,Math.min(value,spec.max))/spec.max)*chartH;
+  const ticks=spec.ticks||uadTicks(spec.max,4);
+  let body=ticks.map(tick=>'<line class="uad-rule" x1="'+padL+'" x2="'+(W-padR)+'" y1="'+scale(tick).toFixed(1)
+    +'" y2="'+scale(tick).toFixed(1)+'"/><text x="'+(padL-9)+'" y="'+(scale(tick)+4).toFixed(1)
+    +'" text-anchor="end">'+esc(spec.tickLabel(tick))+'</text>').join('');
+  if(spec.reference&&spec.reference.value>0&&spec.reference.value<spec.max){
+    const refY=scale(spec.reference.value);
+    body+='<line class="uad-ref-rule" x1="'+padL+'" x2="'+(W-padR)+'" y1="'+refY.toFixed(1)
+      +'" y2="'+refY.toFixed(1)+'"/>';
+  }
+  body+='<line class="uad-baseline" x1="'+padL+'" x2="'+(W-padR)+'" y1="'+scale(0).toFixed(1)
+    +'" y2="'+scale(0).toFixed(1)+'"/>';
+  groups.forEach((group,groupIndex)=>{
+    const left=padL+groupIndex*band+(band-groupW)/2;
+    const values=series.map(item=>spec.value(item,group));
+    const best=values.reduce((acc,value)=>value===null?acc:(acc===null||value>acc?value:acc),null);
+    let labelled=false;
+    series.forEach((item,seriesIndex)=>{
+      const value=values[seriesIndex];
+      const x=left+seriesIndex*(barW+gap);
+      if(value!==null){
+        const top=scale(value), height=scale(0)-top;
+        if(height>0.5) body+='<path fill="'+item.color+'" d="'+uadBarPath(x,top,barW,height,4)+'"/>';
+        if(!labelled&&best!==null&&value===best&&value>0){
+          labelled=true;
+          body+='<text class="uad-value" x="'+(x+barW/2).toFixed(1)+'" y="'+(top-7).toFixed(1)
+            +'" text-anchor="middle">'+esc(spec.valueLabel(value))+'</text>';
+        }
+      }
+      body+='<rect class="uad-hit" x="'+(x-gap).toFixed(1)+'" y="'+padT+'" width="'+(barW+gap*2).toFixed(1)
+        +'" height="'+chartH+'" data-tip="'+esc('<b>'+group+'</b><br>'+item.label+': '
+        +(value===null?'not reported':spec.valueLabel(value)))+'"/>';
+    });
+    body+='<text x="'+(padL+groupIndex*band+band/2).toFixed(1)+'" y="'+(H-30)
+      +'" text-anchor="middle">'+esc(group)+'</text>';
+  });
+  const table=uadDataTable(spec.id+'-data',spec.title,spec.groupHeader||'Region',groups,series,
+    (item,group)=>{const value=spec.value(item,group);return value===null?'not reported':spec.valueLabel(value);});
+  return uadColorLegend(series,spec.reference?spec.reference.label:null)
+    +'<svg class="uad-chart" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(spec.title)
+    +'" aria-describedby="'+spec.id+'-data"><text class="uad-axis-title" x="'+padL+'" y="11">'
+    +esc(spec.axisTitle)+'</text>'+body+'</svg>'+table;
+}
+
+function uadScatterChart(spec){
+  const groups=spec.groups||[], series=spec.series||[];
+  if(!groups.length||!series.length||!(spec.xMax>0)||!(spec.yMax>0)) return '';
+  const W=680, H=300, padL=56, padR=22, padT=22, padB=54;
+  const chartW=W-padL-padR, chartH=H-padT-padB;
+  const xScale=value=>padL+(Math.max(0,Math.min(value,spec.xMax))/spec.xMax)*chartW;
+  const yScale=value=>padT+chartH-(Math.max(0,Math.min(value,spec.yMax))/spec.yMax)*chartH;
+  const xTicks=spec.xTicks||uadTicks(spec.xMax,4), yTicks=spec.yTicks||uadTicks(spec.yMax,4);
+  let body=yTicks.map(tick=>'<line class="uad-rule" x1="'+padL+'" x2="'+(W-padR)+'" y1="'+yScale(tick).toFixed(1)
+    +'" y2="'+yScale(tick).toFixed(1)+'"/><text x="'+(padL-9)+'" y="'+(yScale(tick)+4).toFixed(1)
+    +'" text-anchor="end">'+esc(spec.tickLabel(tick))+'</text>').join('');
+  body+=xTicks.map(tick=>'<text x="'+xScale(tick).toFixed(1)+'" y="'+(H-32)+'" text-anchor="middle">'
+    +esc(spec.tickLabel(tick))+'</text>').join('');
+  body+='<line class="uad-baseline" x1="'+padL+'" x2="'+(W-padR)+'" y1="'+yScale(0).toFixed(1)
+    +'" y2="'+yScale(0).toFixed(1)+'"/>';
+  // One connector per group traces the progression through the arms in order,
+  // so the shape of the trade-off reads without a label on every mark.
+  groups.forEach(group=>{
+    const path=series.map(item=>{
+      const xValue=spec.x(item,group), yValue=spec.y(item,group);
+      return xValue===null||yValue===null?null:[xScale(xValue),yScale(yValue)];
+    }).filter(point=>point!==null);
+    if(path.length>1) body+='<path class="uad-track" d="'
+      +path.map((point,index)=>(index?'L':'M')+point[0].toFixed(1)+' '+point[1].toFixed(1)).join(' ')+'"/>';
+  });
+  series.forEach(item=>{
+    groups.forEach((group,groupIndex)=>{
+      const xValue=spec.x(item,group), yValue=spec.y(item,group);
+      if(xValue===null||yValue===null) return;
+      const cx=xScale(xValue), cy=yScale(yValue);
+      body+=uadShapeMark(UAD_REGION_SHAPES[groupIndex%UAD_REGION_SHAPES.length],cx,cy,5,
+        ' class="uad-dot" fill="'+item.color+'"');
+      body+='<circle class="uad-hit" cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="11" data-tip="'
+        +esc('<b>'+group+'</b><br>'+item.label+'<br>'+spec.xLabel+': '+spec.valueLabel(xValue)
+        +'<br>'+spec.yLabel+': '+spec.valueLabel(yValue))+'"/>';
+    });
+  });
+  const table='<table id="'+spec.id+'-data" class="uad-sr-only"><caption>'+esc(spec.title)
+    +'</caption><thead><tr><th>Region</th><th>Arm</th><th>'+esc(spec.xLabel)+'</th><th>'+esc(spec.yLabel)
+    +'</th></tr></thead><tbody>'+groups.map(group=>series.map(item=>{
+      const xValue=spec.x(item,group), yValue=spec.y(item,group);
+      return '<tr><td>'+esc(group)+'</td><td>'+esc(item.label)+'</td><td>'
+        +esc(xValue===null?'not reported':spec.valueLabel(xValue))+'</td><td>'
+        +esc(yValue===null?'not reported':spec.valueLabel(yValue))+'</td></tr>';
+    }).join('')).join('')+'</tbody></table>';
+  return uadColorLegend(series)+uadShapeLegend(groups)
+    +'<svg class="uad-chart" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(spec.title)
+    +'" aria-describedby="'+spec.id+'-data"><text class="uad-axis-title" x="'+padL+'" y="11">'
+    +esc(spec.yLabel)+'</text>'+body+'<text class="uad-axis-title" x="'+(W-padR)+'" y="'+(H-12)
+    +'" text-anchor="end">'+esc(spec.xLabel)+'</text></svg>'+table;
+}
+
+function uadStrataBars(metrics,color,max,formatValue){
+  const rows=[
+    ['All carrier events','allCarrierRecall'],
+    ['Missed at event','missedRecall'],
+    ['No prior catch','noPriorMissedRecall'],
+    ['Never-caught people','lifetimeNeverCaughtRecall']
+  ];
+  const ceiling=max>0?max:1;
+  return '<div class="uad-strata" role="group" aria-label="Recall across evaluation strata">'
+    +rows.map(([label,key])=>{
+      const value=metrics&&typeof metrics[key]==='number'&&isFinite(metrics[key])?metrics[key]:null;
+      const width=value===null?0:Math.max(1,Math.round(Math.min(value,ceiling)/ceiling*100));
+      return '<div class="uad-strata-row"><span title="'+esc(label)+'">'+esc(label)+'</span>'
+        +'<div class="uad-strata-track"><div class="uad-strata-fill" style="width:'+width
+        +'%;background:'+color+'"></div></div><b>'+esc(value===null?'—':formatValue(value))+'</b></div>';
+    }).join('')
+    +'</div><div class="uad-strata-scale">recall, shared 0 to '+esc(formatValue(ceiling))+' scale</div>';
+}
+
+function wireUnsupervisedADTooltips(root){
+  if(!root||typeof root.querySelectorAll!=='function') return;
+  if(typeof showTip!=='function'||typeof hideTip!=='function') return;
+  root.querySelectorAll('[data-tip]').forEach(node=>{
+    const html=node.getAttribute('data-tip');
+    node.addEventListener('pointermove',event=>showTip(event,html));
+    node.addEventListener('pointerleave',hideTip);
+  });
+}
+"""
+
 UNSUP_AD_JS = r"""unsupervisedAD:{rendered:false,render(){
   if(this.rendered) return; this.rendered=true;
   const sec=document.getElementById('tab-unsupervisedAD');
@@ -765,11 +1049,12 @@ UNSUP_AD_JS = r"""unsupervisedAD:{rendered:false,render(){
     return fallback;
   };
 
-  const renderRegion=region=>{
+  const renderRegion=(region,color,strataMax)=>{
     if(region.status==='skipped') return '<div class="uad-skipped"><b>'+esc(region.region)+'</b> · skipped — '+esc(region.skipReason)+'</div>';
     const m=region.metrics;
     return '<div class="uad-card">'
       +'<div class="uad-region-name">'+esc(region.region)+'</div>'
+      +uadStrataBars(m,color,strataMax,pct)
       +'<table class="uad-region-table"><tbody>'
       +'<tr><th>Fit signal</th><td>'+metricText(m.fitSignal)+'</td></tr>'
       +'<tr><th>Feature count</th><td>'+fmt(m.featureCount)+'</td></tr>'
@@ -786,12 +1071,16 @@ UNSUP_AD_JS = r"""unsupervisedAD:{rendered:false,render(){
       +'<tr><th>Observed-catch enrichment precision / lift</th><td>'+pct(m.observedCatchPrecision)+' / '+(m.observedCatchLift===null?'—':Number(m.observedCatchLift).toFixed(2)+'×')+'</td></tr>'
       +'</tbody></table></div>';
   };
-  const renderArm=arm=>{
+  const renderArm=(arm,strataMax)=>{
     const meta=arm.metadata||{};
-    let out='<div class="uad-arm"><div class="uad-arm-header"><h4>'+esc(meta.label||arm.id)+'</h4>';
+    const color=UAD_ARM_COLORS[arm.id]||UAD_ARM_COLORS.tabular_unlabeled;
+    let out='<div class="uad-arm"><div class="uad-arm-header"><h4>'
+      +'<i class="uad-arm-key" style="background:'+color+'"></i>'+esc(meta.label||arm.id)+'</h4>';
     out+='<span>'+esc(arm.id)+'</span><span>'+fmt(meta.feature_count)+' features</span></div>';
     if(!arm.regions.length) out+='<div class="uad-empty">No regional results embedded.</div>';
-    else out+='<div class="uad-grid">'+arm.regions.map(renderRegion).join('')+'</div>';
+    else out+='<div class="uad-grid">'+arm.regions.map(
+      region=>renderRegion(region,color,strataMax)
+    ).join('')+'</div>';
     return out+'</div>';
   };
 
@@ -833,13 +1122,93 @@ UNSUP_AD_JS = r"""unsupervisedAD:{rendered:false,render(){
   let h='<div class="uad-header"><h2>Unsupervised and caught-supervised anomaly ranking</h2>';
   h+='<p>This <strong>V9 designed positive control</strong> follows the primary progression from tabular and relational unlabeled detection to a relational <strong>caught-supervised</strong> ranker. The caught-supervised arm is a <strong>naive PU</strong> historical-enforcement ranker with <strong>no SCAR ranking guarantee</strong>. The label-free validation quantile is an <strong>operating-point policy</strong>, not probability calibration.</p>';
   h+='<p class="uad-note">Label and threshold semantics are deployable <strong>conditional on resolved identity</strong>. Oracle evaluation is unavailable in production and appears here only as retrospective synthetic evaluation after scores and thresholds are frozen. Day-to-day monitoring can use observed-catch enrichment.</p></div>';
+  const chart=buildUnsupervisedADChartModel(view);
+  const recallKeys=['allCarrierRecall','missedRecall','noPriorMissedRecall','lifetimeNeverCaughtRecall'];
+  const sample=(series,key)=>series.reduce(
+    (out,item)=>out.concat(chart.regions.map(region=>uadMetric(item,region,key))),[]
+  );
+  const strataCeiling=uadNiceMax(
+    recallKeys.reduce((out,key)=>out.concat(sample(chart.primary.concat(chart.ablation),key)),[]),
+    0.1, 0.1
+  );
+  const tickPct=value=>(Number(value)*100).toFixed(0)+'%';
+  const valuePct=value=>(Number(value)*100).toFixed(1)+'%';
+  const valueLift=value=>Number(value).toFixed(1)+'×';
+
+  function renderFigures(){
+    if(!chart.available) return '';
+    const series=chart.primary;
+    const recallAxis=uadAxis(sample(series,'missedRecall'),0.05,0.1,5);
+    const precisionAxis=uadAxis(sample(series,'missedPrecision'),0.05,0.05,5);
+    const liftAxis=uadAxis(sample(series,'observedCatchLift'),1,2,5);
+    const figure=(title,subtitle,body)=>'<figure class="uad-figure"><h4>'+esc(title)
+      +'</h4><figcaption class="uad-figure-sub">'+esc(subtitle)+'</figcaption>'+body+'</figure>';
+    let out='<div class="uad-figures">';
+    out+=figure(
+      'Missed carrier events found, by region',
+      'Share of the carrier events that enforcement had not caught at the time and that this ranker still put above its alert threshold. Higher is better.',
+      uadColumnChart({
+        id:'uad-missed-recall', title:'Missed-at-event recall by region and arm',
+        axisTitle:'missed-at-event recall', groups:chart.regions, series,
+        value:(item,region)=>uadMetric(item,region,'missedRecall'),
+        max:recallAxis.max, ticks:recallAxis.ticks, tickLabel:tickPct, valueLabel:valuePct
+      })
+    );
+    out+=figure(
+      'Observed-catch enrichment lift',
+      'The one signal a real deployment can watch without oracle labels: how much richer the alerted slice is in observed catches than the region base rate.',
+      uadColumnChart({
+        id:'uad-lift', title:'Observed-catch enrichment lift by region and arm',
+        axisTitle:'lift over prevalence', groups:chart.regions, series,
+        value:(item,region)=>uadMetric(item,region,'observedCatchLift'),
+        max:liftAxis.max, ticks:liftAxis.ticks,
+        tickLabel:value=>Number(value).toFixed(0)+'×', valueLabel:valueLift,
+        reference:{value:1,label:'1× = no enrichment'}
+      })
+    );
+    out+=figure(
+      'What each arm trades away',
+      'Every mark is one arm in one region, and the connector traces that region through the progression. Moving right means reaching more of the missed carriers; moving up means wasting fewer alerts.',
+      uadScatterChart({
+        id:'uad-tradeoff', title:'Missed-at-event precision against recall, by arm and region',
+        groups:chart.regions, series,
+        x:(item,region)=>uadMetric(item,region,'missedRecall'),
+        y:(item,region)=>uadMetric(item,region,'missedPrecision'),
+        xLabel:'missed-at-event recall', yLabel:'missed-at-event precision',
+        xMax:recallAxis.max, yMax:precisionAxis.max,
+        xTicks:recallAxis.ticks, yTicks:precisionAxis.ticks,
+        tickLabel:tickPct, valueLabel:valuePct
+      })
+    );
+    return out+'</div>';
+  }
+
+  h+='<h3 class="uad-mode-heading">Ranking quality at a glance</h3>';
+  h+='<p class="uad-note">Charts read the same frozen artifact as the tables below. All three are retrospective synthetic evaluation: the scores and thresholds were fixed before any oracle label was consulted.</p>';
+  h+=renderFigures();
   h+='<h3 class="uad-mode-heading">Primary deployability progression</h3>';
   if(view.primary.length!==3) h+='<div class="uad-skipped">Primary artifact contract incomplete: expected the three named deployability arms.</div>';
-  h+=view.primary.map(renderArm).join('');
+  h+=view.primary.map(arm=>renderArm(arm,strataCeiling)).join('');
 
   h+='<div class="uad-appendix"><h3 class="uad-mode-heading">Ablation appendix</h3>';
   h+='<p class="uad-note">The 14-feature caught-supervised arm completes the 2×2 diagnostic and is not part of the primary lineup.</p>';
-  h+=view.ablation.map(renderArm).join('');
+  if(chart.ablation.length){
+    const ablationSeries=chart.primary
+      .filter(item=>item.id==='relational_caught_supervised')
+      .concat(chart.ablation);
+    h+='<div class="uad-figures"><figure class="uad-figure"><h4>Does the relational feature set earn its place under caught supervision?</h4>'
+      +'<figcaption class="uad-figure-sub">Same supervision signal, same operating-point policy; only the feature scope differs.</figcaption>'
+      +uadColumnChart({
+        id:'uad-ablation', title:'Missed-at-event recall, relational against tabular caught-supervised',
+        axisTitle:'missed-at-event recall', groups:chart.regions, series:ablationSeries,
+        value:(item,region)=>uadMetric(item,region,'missedRecall'),
+        max:uadAxis(sample(ablationSeries,'missedRecall'),0.05,0.1,5).max,
+        ticks:uadAxis(sample(ablationSeries,'missedRecall'),0.05,0.1,5).ticks,
+        tickLabel:tickPct, valueLabel:valuePct
+      })
+      +'</figure></div>';
+  }
+  h+=view.ablation.map(arm=>renderArm(arm,strataCeiling)).join('');
   h+='</div>';
   if(view.legacyAssisted){
     const assisted=view.legacyAssisted;
@@ -848,5 +1217,6 @@ UNSUP_AD_JS = r"""unsupervisedAD:{rendered:false,render(){
     h+='<p class="uad-note">'+esc(assisted.description||'Oracle-label-assisted benchmark retained only for legacy context.')+'</p></div></div>';
   }
   sec.innerHTML=h;
+  wireUnsupervisedADTooltips(sec);
 }},
 """

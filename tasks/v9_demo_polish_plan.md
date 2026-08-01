@@ -208,8 +208,10 @@ Expected: at least one checkpoint with `sage [0, 1, 2]`. (Adjust the import if `
 PYTHONPATH=. CBP_CORPUS_DIR=$PWD/Documents/Data/synthetic_cbp_graph_corpus_v9 \
 .venv/bin/python -c "
 from gnn.run_demo import resume_observability
-resume_observability('gnn/diagnostics/checkpoints/<CHECKPOINT_ID>', explanation_limit=6)"
+resume_observability('gnn/diagnostics/checkpoints/<CHECKPOINT_ID>', explanation_limit=None)"
 ```
+
+**Execution correction (2026-07-19):** the plan originally said `explanation_limit=6`, but current `gnn/observability_artifact.py` raises `ValueError("explanation_limit must cover the complete Hybrid-only cohort")` for any limit below the full cohort size (593). The production mode is complete-cohort coverage; `None` selects it. Component-size failures are cheap ValueErrors, so the walk over 593 cases is dominated by the successful explanations' narrative validation.
 
 Expected: completes without traceback. If `preflight_narrative_contract` fails (no local Gemma), STOP this task and report the blocker.
 
@@ -572,11 +574,25 @@ function plainReading(entries){
 
 Build `entries` as `{k, v: verdictOf(s)}` while iterating `ks` (whole-window table) and `daily_ks` (daily table), and prepend `plainReading(entries)` above each `<table>`. Reuse `verdictOf` inside `pill()` to avoid duplicated CI logic.
 
-- [ ] **Step 4: GNN-run metric tile**
+- [ ] **Step 4: Derive lens/summary daily budgets from the artifact (bug found during execution)**
+
+The current `demo_comparison_v9.json` has `daily_ks: [5]`, but the three-lens panel hardcodes `daily_found@25` / `daily_budget@25` (lines ~224–227), rendering "0 vs 0" and "25/day equals 0 inspections". Replace the hardcoded 25 with a derived budget:
+
+```js
+const dailyKs=(demo.daily_ks||[]).map(Number).sort((a,b)=>a-b);
+const lensDailyK=dailyKs.includes(25)?25:(dailyKs[dailyKs.length-1]||null);
+const dailyBaselineLens=lensDailyK==null?null:Number((demo.overall_daily.baseline||{})['daily_found@'+lensDailyK]||0);
+const dailyHybridLens=lensDailyK==null?null:Number((demo.overall_daily.hybrid||{})['daily_found@'+lensDailyK]||0);
+const dailyBudgetLens=lensDailyK==null?null:Number((demo.overall_daily.baseline||{})['daily_budget@'+lensDailyK]||0);
+```
+
+Use these in lens 3's copy (`'…'+fmt(lensDailyK)+'/day equals '+fmt(dailyBudgetLens)+' inspections'`, stat `fmt(dailyHybridLens)+' vs '+fmt(dailyBaselineLens)`, label `'…at '+fmt(lensDailyK)+' inspections/day'`); when `lensDailyK==null` render 'n/a'. Delete the old `dailyBaseline25/dailyHybrid25/dailyBudget25` constants. Add a string-contract test asserting `V9_RESULTS_JS` contains no `daily_found@25` / `daily_budget@25` literals.
+
+- [ ] **Step 5: GNN-run metric tile**
 
 `runLabel` (line ~214) → `` (demo.gnn_seeds?demo.gnn_seeds.length:0)+' seeds · '+(demo.epochs||'-')+' epochs · '+(demo.gnn_arm||'-') `` (drop `(s)` and the trailing "arm" so the tile fits its metric styling).
 
-- [ ] **Step 5: Test, rebuild, commit**
+- [ ] **Step 6: Test, rebuild, commit**
 
 Run: `PYTHONPATH=. pytest -q tests/test_v9_dashboard_builder.py` (update `test_v9_ui_labels_overall_found_counts_as_event_hits_not_people` only if it pins `runLabel`/lowercase `baseline` strings). Rebuild + screenshot.
 
