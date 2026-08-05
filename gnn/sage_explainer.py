@@ -29,8 +29,13 @@ from gnn.recovery_observability import (
 )
 
 
-MAX_LOCAL_EXPLANATION_NODES = 128
-MAX_LOCAL_EXPLANATION_EDGES = 256
+# Kept in step with MAX_EXPLAINER_INPUT_NODES/EDGES in the schema-3 producer
+# package (v9_observability_colab_schema3/gnn/sage_explainer.py).  The two
+# copies must agree: the producer writes the display projection at its ceiling
+# and this module reads it back, so a lower bound here would silently mean
+# "top among displayed records" rather than top in the explanation.
+MAX_LOCAL_EXPLANATION_NODES = 512
+MAX_LOCAL_EXPLANATION_EDGES = 1024
 MAX_LOCAL_SOURCE_ROWS_PER_EDGE = 16
 MAX_NODE_ATTRIBUTION_SOURCE_ROWS = 16
 MAX_NODE_FEATURE_MASK_STATS = 512
@@ -252,6 +257,117 @@ class DaySnapshot:
     pooled_logits: torch.Tensor
     probabilities: np.ndarray
     caught_before_snapshot: frozenset[str]
+
+
+DISPLAY_LAYOUT_RADIUS = 0.46
+# A ring wider than this many nodes is split across concentric sub-rings.
+DISPLAY_RING_BAND_CAPACITY = 120
+MAX_DISPLAY_RING_BANDS = 4
+
+
+def display_hop_ring_layout(nodes, edges, target_person_id):
+    """Place displayed nodes on hop rings around the target, O(N log N + E).
+
+    The published ``x``/``y`` are the only positions a renderer gets, so they
+    have to carry structure.  The previous layout indexed nodes into a
+    ``sqrt(N)`` grid in sorted ``node_id`` order, which meant position encoded
+    alphabetical rank and every edge became a line between two unrelated cells.
+    It was also sized from the *whole* community while only the bounded display
+    projection is drawn, so the drawn nodes landed in scattered cells of an
+    oversized grid.
+
+    This instead puts the target at the centre, each ``message_distance`` on its
+    own ring, and orders a ring so that a node sits in the arc belonging to its
+    nearest-hop neighbour.  Reading outward from the centre therefore follows
+    the message path that produced the score.  Ordering is fully determined by
+    ``message_distance`` and sorted ``node_id``, so the same community always
+    lays out identically.
+
+    Kept byte-identical to the copy in the schema-3 producer package
+    (v9_observability_colab_schema3/gnn/sage_explainer.py).
+    """
+    if not nodes:
+        return {}
+    positions = {}
+    target = str(target_person_id) if target_person_id is not None else None
+    ring_of = {}
+    for node in nodes:
+        node_id = node["node_id"]
+        if node_id == target:
+            ring_of[node_id] = 0
+            continue
+        # A non-target node at distance 0 would collide with the centre; the
+        # smallest ring that is not the centre is 1.
+        ring_of[node_id] = max(1, int(node["message_distance"]))
+    neighbours = defaultdict(set)
+    for edge in edges:
+        u = edge["u"]
+        v = edge["v"]
+        if u in ring_of and v in ring_of and u != v:
+            neighbours[u].add(v)
+            neighbours[v].add(u)
+
+    by_ring = defaultdict(list)
+    for node_id, ring in ring_of.items():
+        by_ring[ring].append(node_id)
+    max_ring = max(by_ring)
+    angles = {}
+    for node_id in by_ring.get(0, ()):
+        positions[node_id] = (0.5, 0.5)
+        angles[node_id] = 0.0
+
+    for ring in range(1, max_ring + 1):
+        ring_nodes = sorted(by_ring[ring])
+        if not ring_nodes:
+            continue
+        # Group each node under its lowest-id neighbour one ring in, so a hop-2
+        # cluster is drawn in the arc beneath the hop-1 node that connects it.
+        groups = defaultdict(list)
+        orphans = []
+        for node_id in ring_nodes:
+            parents = sorted(
+                neighbour
+                for neighbour in neighbours[node_id]
+                if ring_of.get(neighbour) == ring - 1
+            )
+            if parents:
+                groups[parents[0]].append(node_id)
+            else:
+                orphans.append(node_id)
+        ordered = []
+        for parent in sorted(groups, key=lambda pid: (angles.get(pid, 0.0), pid)):
+            ordered.extend(sorted(groups[parent]))
+        ordered.extend(orphans)
+        # A ring with hundreds of members collapses into a solid band of dots at
+        # a single radius, which is what the 512-node projection produces at hop
+        # 2.  Spread a crowded ring over a few concentric sub-rings instead, and
+        # keep consecutive (same-parent) nodes on one angular slot so a parent's
+        # children read as a short radial spoke rather than an arc of noise.
+        bands = min(
+            MAX_DISPLAY_RING_BANDS,
+            max(
+                1,
+                (len(ordered) + DISPLAY_RING_BAND_CAPACITY - 1)
+                // DISPLAY_RING_BAND_CAPACITY,
+            ),
+        )
+        slots = (len(ordered) + bands - 1) // bands
+        # Even spacing over the whole ring keeps groups from overlapping while
+        # the parent-angle sweep keeps them near their connector.
+        step = 2 * np.pi / slots
+        # The half-ring of headroom is what the outermost band expands into, so
+        # every band still lands inside DISPLAY_LAYOUT_RADIUS.
+        base_radius = DISPLAY_LAYOUT_RADIUS * ring / (max_ring + 0.5)
+        band_step = DISPLAY_LAYOUT_RADIUS * 0.5 / (max_ring + 0.5) / bands
+        for index, node_id in enumerate(ordered):
+            angle = step * (index // bands + 0.5)
+            radius = base_radius + index % bands * band_step
+            angles[node_id] = angle
+            positions[node_id] = (
+                float(0.5 + radius * np.cos(angle)),
+                float(0.5 + radius * np.sin(angle)),
+            )
+    return positions
 
 
 class CaseExplanation(dict):
@@ -523,6 +639,18 @@ class CommunityScope:
                 edge["edge_id"],
             ),
         )
+        # Lay the projection out over exactly the nodes and edges that get
+        # drawn.  iter_nodes has to stay a whole-community stream for the
+        # chunked sidecars, so its grid is sized from the full member list; the
+        # display projection is a bounded subset of that and needs its own
+        # positions.  These dicts are shared with nodes_by_id, so updating them
+        # here updates both views.
+        layout = display_hop_ring_layout(nodes, edges, target)
+        for node in nodes:
+            point = layout.get(node["node_id"])
+            if point is not None:
+                node["x"], node["y"] = point
+
         edge_sources = {
             edge["edge_id"]: frozenset(edge["source_row_ids"])
             for edge in edges
@@ -567,6 +695,7 @@ class CommunityScope:
                     "target_then_pooled_caught_salience_then_hop_then_id"
                 ),
                 "edge_order": "target_incident_then_hop_then_id",
+                "node_layout": "hop_rings_around_target",
             },
         }
 

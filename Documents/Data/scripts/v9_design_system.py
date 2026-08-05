@@ -190,27 +190,15 @@ _SERIES_REDUNDANCY = """
 
 # Layer 4: type floor. 8px and 9px are not readable at arm's length on a
 # projector, which is where this dashboard gets shown.
+#
+# The recovery explorer used to be patched from here, but this sheet is injected
+# after V9_RECOVERY_EXPLAINER_CSS at equal specificity, so every rule below
+# silently beat the panel's own type and the panel could not be fixed at source.
+# That panel now owns its sizes in v9_recovery_explainer_ui.py. Do not reinstate
+# `#tab-v9Results .v9-recovery-*` font-size rules here; edit them there instead.
 _TYPE_SCALE = """
 .xp-nlabel,
-.xp-legend .xp-ltitle,
-#tab-v9Results .v9-recovery-scope small,
-#tab-v9Results .v9-recovery-rank span,
-#tab-v9Results .v9-recovery-source,
-#tab-v9Results .v9-recovery-stat span,
-#tab-v9Results .v9-recovery-field{font-size:var(--fs-micro)}
-
-#tab-v9Results .v9-recovery-case-ranks,
-#tab-v9Results .v9-recovery-case-meta,
-#tab-v9Results .v9-recovery-panel-head p,
-#tab-v9Results .v9-recovery-factor span,
-#tab-v9Results .v9-recovery-button,
-#tab-v9Results .v9-recovery-search,
-#tab-v9Results .v9-recovery-toolbar .v9-recovery-select,
-#tab-v9Results .v9-recovery-canvas-note{font-size:var(--fs-xs)}
-
-#tab-v9Results .v9-recovery-case-evidence,
-#tab-v9Results .v9-recovery-factor strong{font-size:var(--fs-xs)}
-#tab-v9Results .v9-recovery-search{width:132px}
+.xp-legend .xp-ltitle{font-size:var(--fs-micro)}
 """
 
 # Layer 5: shape and elevation consistency.

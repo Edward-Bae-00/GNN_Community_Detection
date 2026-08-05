@@ -172,6 +172,22 @@ def test_no_font_size_below_the_ten_pixel_floor():
     assert min(sizes) >= 10, f"sub-10px type present: {sorted(set(sizes))}"
 
 
+def test_this_layer_does_not_restyle_recovery_explorer_type():
+    """This sheet is injected after V9_RECOVERY_EXPLAINER_CSS at equal
+    specificity, so a font-size on a `.v9-recovery-*` selector here beats the
+    panel's own rule and makes that panel unfixable at source. It owns its type;
+    change sizes in v9_recovery_explainer_ui.py instead of reinstating them here.
+    """
+    css = _strip_comments(ds.build_design_system_css())
+    offenders = [
+        block.strip()
+        for block in css.split("}")
+        if "v9-recovery" in block and "font-size" in block
+    ]
+
+    assert not offenders, f"recovery type overridden from the design system: {offenders}"
+
+
 def test_type_scale_is_bounded():
     css = ds.build_design_system_css()
     scale = re.search(r"--fs-micro:(\d+)px", css)

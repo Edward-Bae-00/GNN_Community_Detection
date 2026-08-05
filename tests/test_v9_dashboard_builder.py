@@ -2680,6 +2680,23 @@ def test_generated_dashboard_has_grouped_accessible_navigation_and_hash_state():
     assert "closest('[data-navigate-tab]')" in html
 
 
+def test_generated_dashboard_renders_the_overview_tab_exactly_once():
+    """Only the hash-routed bootstrap may perform the initial render.
+
+    The template called ``Tabs.overview.render()`` unconditionally one line below
+    the nav binding that ``_rewrite_nav_js`` replaces. ``switchTab`` guards on
+    ``Tabs[name].rendered`` but that trailing call did not, so after the routed
+    IIFE rendered overview and set the flag, the template rendered it again. The
+    tab renderers append to the tab element rather than replacing its contents,
+    so the duplicate was additive: two metric rows, two outcome funnels and two
+    of each bar chart inside ``#tab-overview`` on every load.
+    """
+    html = GENERATED_INDEX.read_text()
+
+    assert "_navigateTo(n||'overview')" in html
+    assert "Tabs.overview.render()" not in html
+
+
 def test_generated_dashboard_has_v9_headline_and_responsive_table_contract():
     html = GENERATED_INDEX.read_text()
 

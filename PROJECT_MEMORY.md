@@ -183,3 +183,129 @@
 - The redundant V9 Results metrics/settings card (pool counts, outcome rate,
   fusion weight, and GNN run settings) was removed from the presentation layer;
   those values remain in the published JSON for provenance.
+
+## 2026-08-03: explainer ceiling raised to 512/1024 and the graph got a real layout
+
+- `MAX_LOCAL_EXPLANATION_NODES` / `_EDGES` moved from 128/256 to **512/1024** here
+  and in the schema-3 producer package at
+  `~/Desktop/v9_observability_colab_schema3` (`MAX_EXPLAINER_INPUT_NODES/EDGES`,
+  which the display bounds are defined from). The two copies must move together:
+  the producer writes the display projection at its ceiling and this repo reads
+  it back, so a lower bound here would silently mean "top among displayed
+  records" rather than top in the explanation. The driver was the exact-20
+  coverage gate, which needs >= 20 candidates to pass explainer preflight; at
+  128/256 only 10 of 268 did.
+- 512/1024 was chosen from the **display** side, not from measured candidate
+  sizes. Past roughly 1024 nodes the community canvas stops being interpretable,
+  and because selection freezes 20 cases with no post-failure replacement, a
+  bigger ceiling admits large graphs that can then be *selected* and time out.
+- **`CommunityScope.iter_nodes` never had a layout.** It placed nodes on a
+  `sqrt(N)` grid in sorted `node_id` order -- position encoded alphabetical rank,
+  so every edge was a line between two unrelated cells -- and the grid was sized
+  from the whole community while only the bounded projection is drawn.
+  `display_hop_ring_layout` replaces it for the projection: target centred, one
+  ring per `message_distance`, each ring ordered so a node sits in the arc of its
+  lowest-id neighbour one ring in. Rings over 120 nodes spread across up to 4
+  concentric sub-rings; 480 hop-2 nodes on a single circle render as a solid
+  band. `iter_nodes` keeps its grid because it must stay a whole-community stream
+  for the chunked sidecars.
+- The layout exists **three** times: Python in `gnn/sage_explainer.py`, a
+  byte-identical copy in the producer package, and a JS port
+  (`recoveryHopRingLayout`) in `Documents/Data/scripts/v9_recovery_explainer_ui.py`.
+  The UI recomputes rather than trusting payload `x`/`y` so artifacts published
+  before this change still render structurally, falling back to payload
+  coordinates only when `message_distance` is missing.
+  `tests/test_recovery_layout_parity.py` fails if they drift -- verified by
+  unlinking the JS radius constant and watching 5 tests fail, then reverting.
+- Recovery graph panel additions, all in the UI script: importance-ordered edge
+  drawing, viewport culling, density-scaled ink and node radii, a strided auto
+  label budget (taking the first N crowded every label onto one arc), hover
+  tooltip, click-to-focus neighbourhood dimming, a node/relation legend, a
+  "N nodes / M edges drawn" readout that flags when the display bound was hit,
+  and a responsive `clamp()` canvas height replacing the fixed 410px.
+- Verified with the headless-Chrome pattern above against a synthetic 513-node /
+  1024-edge community. Suites: this repo 978 passed / 1 skipped; producer package
+  62 passed. NOTE: run this repo's tests as `.venv/bin/python -m pytest`;
+  `.venv/bin/pytest` leaves the repo off `sys.path` and 16 dashboard-builder
+  tests fail with `ModuleNotFoundError: No module named 'gnn'`.
+
+## 2026-08-03: Overview tab was rendering twice on every load
+
+- `_rewrite_nav_js` (build_v9_dashboard.py) swaps the template's flat tab binding
+  for delegated hash routing ending in
+  `(function(){const n=_tabFromHash();_navigateTo(n||'overview');})();`. The
+  template's own trailing `Tabs.overview.render();Tabs.overview.rendered=true;`
+  was left in place one line below. `switchTab` guards on `Tabs[name].rendered`,
+  that trailing call does not, and the tab renderers (`makeMetrics`,
+  `makeSection`) APPEND to the tab element rather than replacing its contents.
+  Net effect: every visitor landed on an Overview carrying two metric rows, two
+  Outcome Funnels, and two of each bar chart. `_rewrite_nav_js` now strips the
+  redundant bootstrap; the routed IIFE owns the initial render for every entry
+  point including deep links like `#seizures`.
+- Removal is tolerant, not strict. The minimal template fixture in
+  test_v9_dashboard_builder.py has the nav binding but no overview bootstrap, so
+  raising on absence breaks two builder tests. Nothing to de-duplicate is not an
+  error.
+- Guarded by
+  `test_generated_dashboard_renders_the_overview_tab_exactly_once`. That test
+  reads the BUILT `Documents/Data/v9_dashboard/index.html`, so
+  `build_v9_dashboard.py` must be re-run before it reflects a source change.
+- **Do not "fix" the Overview bar-chart palette.** The multi-hue bars look like a
+  one-accent-rule violation but `C.node` in the base template is a semantic map
+  (person emerald, event blue, document purple, vehicle orange, location sky,
+  business rose) shared with the network canvas and Community Explorer.
+  Recolouring the bars to a single hue would break the encoding. The
+  all-emerald EDGE TYPES chart next to it is correct for the same reason: edge
+  types have no per-type colour.
+- `—` as a null-value placeholder in explorer data rows is a deliberate data-UI
+  convention and stays. Only prose em-dashes were replaced, and those live in
+  `explorer_ui.py`, which reaches the page through `build_dashboard.py` (corpus
+  template), not `build_v9_dashboard.py`.
+
+## 2026-08-03: seed-0 evidence audit readability pass
+
+- **The design system could not be used to fix this panel, and that was the
+  root cause of the small type.** `v9_design_system.py` `_TYPE_SCALE` carried a
+  block of `#tab-v9Results .v9-recovery-*` font-size rules. That sheet is
+  injected at byte ~410k of the built `index.html`, the panel's own sheet at
+  ~19k, and the selectors are equal specificity, so the design system silently
+  won every tie and editing the panel at source had no effect. The panel now
+  owns its type in `v9_recovery_explainer_ui.py`; `_TYPE_SCALE` keeps only the
+  `.xp-*` entries. Two guards enforce this:
+  `test_this_panel_owns_its_type_and_holds_the_ten_pixel_floor` (no sub-10px in
+  the panel sheet) and `test_this_layer_does_not_restyle_recovery_explorer_type`
+  (no `.v9-recovery-*` font-size in the design system). Both were verified to
+  fail on an injected regression. Do not reinstate recovery font-size rules in
+  the design system layer.
+- `var(--text3)` and `var(--text-dim)` are banned in this panel's CSS by
+  `test_essential_explorer_labels_use_the_contrast_safe_text_token`. Use
+  `var(--text2)` for the dimmest label.
+- **Rank direction was the worst comprehension defect and it was not visual.**
+  The case list showed `B 37 G 41 H 23` beside a `+14 ranks` badge, so an
+  improvement made the number fall while the badge rose, with nothing saying
+  which direction was good. Ranks are now labelled chips coloured with the
+  existing `--data-baseline` / `--data-gnn` / `--data-hybrid` tokens, and both
+  the rail and the case header state that rank 1 is inspected first.
+- The evidence area is a vertical stack: graph full width, then a 3-up row of
+  factors / narrative / attribution. Side by side, the 780px canvas left a
+  matching column of empty background and a 512-node community got about half
+  the width it needs. `renderDetail` still CALLS the renderers in the old order
+  (factors, narrative, attribution, then graph) and appends the graph container
+  first, because `test_detail_stops_before_evidence_renderers_when_boundary_is_invalid`
+  and `test_highest_attribution_renderer_contract_is_shared_by_schema_paths`
+  assert call ordering. Keep DOM order and call order decoupled here.
+- `.v9-recovery-case-list` must keep an explicit `max-height`. An auto grid row
+  sizes to its items' max-content, so an unbounded list stretches the whole
+  workspace to fit all 593 cases at once; `min-height:0` on the rail does not
+  prevent this.
+- A single-node community now renders a written empty state instead of a
+  full-height black canvas with one dot in it. The currently published artifact
+  hits this path for its one explained case.
+- **No test exercises this panel's DOM.** `_run_ui` runs pure functions in node
+  and the rest is string-token assertions, so render bugs are only caught by
+  eye. Verification harnesses live in the session scratchpad pattern: isolate
+  `#v9-case-evidence` in the built page for the real-data view, and mount the
+  panel standalone against `_valid_recovery_artifact()` with a synthetic
+  multi-hop community for the canvas view. When faking a community, rewrite
+  `flow_stages` node/edge ids to match or the view model returns
+  `invalid-flow-stages`.
