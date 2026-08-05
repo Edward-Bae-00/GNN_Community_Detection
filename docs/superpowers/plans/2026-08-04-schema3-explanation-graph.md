@@ -110,7 +110,7 @@ Run:
 rtk .venv/bin/pytest -q tests/test_v9_recovery_explainer_ui.py -k "explainer_only or overlay or bounded or schema3_detail"
 ```
 
-Expected result: overlay and slice contracts pass; mount integration tests may still fail until Task 3 loads the rows.
+Expected result: overlay validation and presentation-state contracts pass; the bounded-slice tests remain RED until Task 4 implements `buildRecoveryGraphSlice`, and mount integration tests may still fail until Task 3 loads the rows.
 
 ### Task 3: Load and merge explanation overlays in the schema-3 mount
 
