@@ -393,7 +393,12 @@ def test_community_contains_complete_pool_and_two_hop_provenance():
     poolmate_view = engine.community("poolmate", SCORING_DAY)
     assert poolmate_view.component_id == community.component_id
     assert poolmate_view.community_key == community.community_key
-    assert poolmate_view is community
+    assert poolmate_view is not community
+    poolmate_nodes_by_id = {
+        node["node_id"]: node for node in poolmate_view.iter_nodes()
+    }
+    assert poolmate_nodes_by_id["target"]["target"] is False
+    assert poolmate_nodes_by_id["poolmate"]["target"] is True
     assert set(nodes_by_id) == {
         "target",
         "poolmate",
@@ -415,7 +420,10 @@ def test_community_contains_complete_pool_and_two_hop_provenance():
         node["node_id"] for node in nodes if node["pooled_member"]
     }
     assert pooled == {"target", "poolmate"}
-    assert all("target" not in node for node in nodes)
+    assert nodes_by_id["target"]["target"] is True
+    assert all(
+        node["target"] is (node["node_id"] == "target") for node in nodes
+    )
     assert nodes_by_id["hop1"]["caught_label_available_time"] == (
         "2025-01-01T23:59:59+00:00"
     )
@@ -460,7 +468,29 @@ def test_community_layout_is_deterministic_and_normalized():
     )
 
 
-def test_same_component_reuses_one_immutable_cached_base_until_day_release(
+def test_same_component_cache_switches_target_flags_per_requested_subject():
+    engine, _ = _explanation_fixture()
+
+    target_scope = engine.community("target", SCORING_DAY)
+    poolmate_scope = engine.community("poolmate", SCORING_DAY)
+    target_nodes = {
+        node["node_id"]: node["target"]
+        for node in target_scope.iter_nodes()
+    }
+    poolmate_nodes = {
+        node["node_id"]: node["target"]
+        for node in poolmate_scope.iter_nodes()
+    }
+
+    assert target_scope is not poolmate_scope
+    assert target_scope.community_key == poolmate_scope.community_key
+    assert target_nodes["target"] is True
+    assert target_nodes["poolmate"] is False
+    assert poolmate_nodes["target"] is False
+    assert poolmate_nodes["poolmate"] is True
+
+
+def test_same_component_caches_request_specific_scopes_until_day_release(
     monkeypatch,
 ):
     engine, _ = _explanation_fixture()
@@ -481,9 +511,8 @@ def test_same_component_reuses_one_immutable_cached_base_until_day_release(
     )
     poolmate = engine.community("poolmate", SCORING_DAY)
 
-    assert target is poolmate
-    assert poolmate is target
-    assert len(calls) == 1
+    assert target is not poolmate
+    assert len(calls) == 2
 
     assert engine.release_snapshot(SCORING_DAY) is True
     rebuilt = engine.community("target", SCORING_DAY)
@@ -493,7 +522,7 @@ def test_same_component_reuses_one_immutable_cached_base_until_day_release(
         list(rebuilt.iter_edges()),
         list(rebuilt.iter_provenance()),
     ) == before
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_community_layout_never_uses_networkx_spring_layout(monkeypatch):
@@ -643,7 +672,6 @@ def test_community_scope_retains_compact_state_for_more_than_100k_display_edges(
         "max_source_rows_per_edge": se.MAX_LOCAL_SOURCE_ROWS_PER_EDGE,
         "node_order": "target_then_pooled_caught_salience_then_hop_then_id",
         "edge_order": "target_incident_then_hop_then_id",
-        "node_layout": "hop_rings_around_target",
     }
 
 
@@ -680,7 +708,7 @@ def test_flow_stages_use_compact_rules_instead_of_membership_copies():
     }
 
 
-def _legacy_production_giant_scope_explanation_and_bundle_are_bounded_and_complete(
+def _legacy_large_structural_bundle_helper_is_bounded_and_complete(
     tmp_path, monkeypatch
 ):
     edge_count = 100_001
@@ -791,7 +819,7 @@ def _legacy_production_giant_scope_explanation_and_bundle_are_bounded_and_comple
     writer = RecoveryBundleWriter(
         tmp_path / "stage",
         tmp_path / "published",
-        run_fingerprint="giant-streaming-e2e",
+        run_fingerprint="large-structural-bundle-helper",
         chunk_size=1_000,
     )
     community_ref = writer.write_community(
@@ -931,13 +959,14 @@ def _walk_reference_closure(pointer_path, bundle_root):
     }
 
 
-def _giant_hybrid_measurement_worker(root_value, metrics_path_value):
+def _exact_limit_structural_control_worker(root_value, metrics_path_value):
+    """Exercise over-limit compose rejection and structural-control helpers."""
     root = Path(root_value)
     metrics_path = Path(metrics_path_value)
     tracemalloc.start()
     rss_before = _rss_bytes()
     scoring_day = pd.Timestamp("2025-01-02T00:00:00Z")
-    display_edge_count = 100_001
+    display_edge_count = 1_001
     duplicate_observations = 20
     group_ids = ["group:000000"] * duplicate_observations + [
         f"group:{index:06d}" for index in range(1, display_edge_count)
@@ -1030,142 +1059,104 @@ def _giant_hybrid_measurement_worker(root_value, metrics_path_value):
         engine, selected_case, member_explainer=bounded_member_explainer
     )
 
-    def fake_gemma(packet):
-        narrative = render_template(packet)
-        narrative["source"] = "llm"
-        narrative["model"] = MODEL_TAG
-        return narrative
+    sentinel_calls = []
+
+    def sentinel_explainer(*args, **kwargs):
+        sentinel_calls.append((args, kwargs))
+        raise AssertionError(
+            "over-limit compose must reject before the explainer"
+        )
+
+    try:
+        se.compose_case_explanation(
+            engine,
+            case,
+            member_explainer=sentinel_explainer,
+        )
+    except se.ExplainerEligibilityError as error:
+        eligibility = error.eligibility
+    else:
+        raise AssertionError("over-limit compose did not fail closed")
+
+    if sentinel_calls:
+        raise AssertionError("over-limit compose ran the sentinel explainer")
 
     scope = engine.community("target", scoring_day)
-    explanation = oa._explain_case_with_narrative(case, engine, fake_gemma)
-    assert any(
-        edge.get("source_rows_truncated") is True
-        and edge.get("source_row_count") == se.MAX_LOCAL_SOURCE_ROWS_PER_EDGE
-        and edge.get("complete_source_row_count") == duplicate_observations
-        for edge in explanation["attributions"]["top_edges"]
-    )
-    local_community = explanation.pop("community")
-    streamed_scope = explanation.pop("_community_scope")
-    expansions = explanation.pop("provenance_expansions", [])
-    writer = RecoveryBundleWriter(
-        root / "stage",
-        root / "published",
-        run_fingerprint="giant-streaming-hybrid-e2e",
-        chunk_size=1_000,
-    )
-    writer.write_community(oa._community_stream_source(streamed_scope))
-    explanation["community_key"] = scope.community_key
-    explanation["provenance_expansion_ids"] = [
-        expansion["expansion_id"] for expansion in expansions
-    ]
-    writer.write_case(
-        "hybrid_only",
-        oa._bundle_case_record(
-            case, "hybrid_only", scope.community_key, explanation
+    control = se.build_structural_community_control(scope)
+    if control["detail_kind"] != "community_only":
+        raise AssertionError(
+            "exact-limit structural control has the wrong detail kind"
+        )
+    if control["evidence_kind"] != "structural_provenance":
+        raise AssertionError(
+            "exact-limit structural control has the wrong evidence kind"
+        )
+    control_sha256 = hashlib.sha256(
+        json.dumps(
+            control,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "eligibility": eligibility,
+                "sentinel_calls": len(sentinel_calls),
+                "control_detail_kind": control["detail_kind"],
+                "control_evidence_kind": control["evidence_kind"],
+                "control_complete": control["complete"],
+                "control_node_count": control["node_count"],
+                "control_edge_count": control["edge_count"],
+                "control_edges_with_provenance": sum(
+                    bool(edge["available_times"]) for edge in control["edges"]
+                ),
+                "control_sha256": control_sha256,
+            },
+            sort_keys=True,
         ),
-        explanation=explanation,
-        validation_metadata=explanation["llm_narrative"],
-        overlay_evidence=oa._overlay_stream_source(
-            explanation, local_community, expansions
-        ),
+        encoding="utf-8",
     )
-    manifest = writer.finalize(
-        expected_hybrid_case_ids={"case:target"},
-        expected_baseline_case_ids=set(),
-        policy={"inspections_per_day": 5},
-        summary={},
-    )
-    bundle_root = root / "published" / manifest["bundle_path"]
-    pointer_path = root / "published" / "current.json"
-    closure = _walk_reference_closure(pointer_path, bundle_root)
-    files = [path for path in bundle_root.rglob("*") if path.is_file()]
-    physical_bytes = sum(path.stat().st_size for path in files)
-    community_ref = manifest["community_index"][scope.community_key]
-    community_manifest = json.loads(
-        (bundle_root / community_ref["path"]).read_text(encoding="utf-8")
-    )
-
-    case_ref = manifest["case_index"]["case:target"]
-    case_content = (bundle_root / case_ref["path"]).read_bytes()
-    assert len(case_content) == case_ref["bytes"]
-    assert hashlib.sha256(case_content).hexdigest() == case_ref["sha256"]
-    finalized_case = json.loads(case_content)
-    overlay_edge_records = []
-    for reference_value in finalized_case["overlay_evidence"]["edge_chunks"]:
-        content = (bundle_root / reference_value["path"]).read_bytes()
-        assert len(content) == reference_value["bytes"]
-        assert hashlib.sha256(content).hexdigest() == reference_value["sha256"]
-        overlay_edge_records.extend(json.loads(content)["edges"])
-    truncation_records = [
-        record
-        for record in overlay_edge_records
-        if record.get("source_rows_truncated") is True
-    ]
-    assert truncation_records
-    assert any(
-        record.get("source_row_count") == se.MAX_LOCAL_SOURCE_ROWS_PER_EDGE
-        and record.get("complete_source_row_count") == duplicate_observations
-        for record in truncation_records
-    )
-    assert community_manifest["node_count"] == 2
-    assert community_manifest["edge_count"] == display_edge_count
-    assert community_manifest["provenance_observation_count"] == raw_row_count
-    assert manifest["coverage"]["complete"] is True
-    assert len(explanation["attributions"]["node_feature_mask_stats"]) <= (
-        se.MAX_NODE_FEATURE_MASK_STATS
-    )
-    assert len(explanation["stability"]["edge_restart_aggregate"]["median"]) <= (
-        se.MAX_LOCAL_EXPLANATION_EDGES
-    )
-    current_tracemalloc, peak_tracemalloc = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    metrics = {
-        "display_node_count": 2,
-        "display_edge_count": display_edge_count,
-        "provenance_observation_count": raw_row_count,
-        "bounded_explanation_node_count": len(local_community["nodes"]),
-        "bounded_explanation_edge_count": len(local_community["edges"]),
-        "peak_rss_bytes": _rss_bytes(),
-        "rss_before_bytes": rss_before,
-        "current_tracemalloc_bytes": current_tracemalloc,
-        "peak_tracemalloc_bytes": peak_tracemalloc,
-        "physical_bytes": physical_bytes,
-        "file_count": len(files),
-        "truncated_overlay_record_count": len(truncation_records),
-        **closure,
-    }
-    assert metrics["peak_rss_bytes"] < 2 * 1024 * 1024 * 1024
-    assert metrics["peak_tracemalloc_bytes"] < 768 * 1024 * 1024
-    assert metrics["physical_bytes"] < 512 * 1024 * 1024
-    assert metrics["file_count"] < 2_000
-    metrics_path.write_text(json.dumps(metrics, sort_keys=True), encoding="utf-8")
+    return
 
 
-def test_production_giant_hybrid_chain_is_bounded_complete_and_hash_closed(tmp_path):
-    metrics_path = tmp_path / "giant-metrics.json"
+def test_exact_limit_structural_control_rejects_over_limit_compose_and_hashes_complete_result(
+    tmp_path,
+):
+    """Cover helper-level exact-limit rejection and complete structural output."""
+    metrics_path = tmp_path / "structural-control-metrics.json"
     process = multiprocessing.get_context("spawn").Process(
-        target=_giant_hybrid_measurement_worker,
-        args=(str(tmp_path / "child"), str(metrics_path)),
+        target=_exact_limit_structural_control_worker,
+        args=(str(tmp_path / "structural-control-child"), str(metrics_path)),
     )
     process.start()
     process.join(timeout=240)
     if process.is_alive():
         process.terminate()
         process.join()
-        pytest.fail("giant Hybrid-only measurement exceeded 240 seconds")
+        pytest.fail(
+            "exact-limit structural-control helper exceeded 240 seconds"
+        )
     assert process.exitcode == 0
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-    print("GIANT_STREAMING_METRICS=" + json.dumps(metrics, sort_keys=True))
-    assert metrics["display_edge_count"] == 100_001
-    assert metrics["provenance_observation_count"] == 100_020
-    assert metrics["bounded_explanation_node_count"] <= (
-        se.MAX_LOCAL_EXPLANATION_NODES
+    print(
+        "EXACT_LIMIT_STRUCTURAL_CONTROL_METRICS="
+        + json.dumps(metrics, sort_keys=True)
     )
-    assert metrics["bounded_explanation_edge_count"] <= (
-        se.MAX_LOCAL_EXPLANATION_EDGES
-    )
-    assert metrics["verified_reference_count"] > 0
-    assert metrics["truncated_overlay_record_count"] > 0
+    assert metrics["eligibility"]["status"] == "community_only"
+    assert metrics["eligibility"]["reason_code"] == "edge_limit_exceeded"
+    assert metrics["eligibility"]["node_count"] == 2
+    assert metrics["eligibility"]["edge_count"] > se.MAX_LOCAL_EXPLANATION_EDGES
+    assert metrics["sentinel_calls"] == 0
+    assert metrics["control_detail_kind"] == "community_only"
+    assert metrics["control_evidence_kind"] == "structural_provenance"
+    assert metrics["control_complete"] is True
+    assert metrics["control_node_count"] == 2
+    assert metrics["control_edge_count"] == 1_001
+    assert metrics["control_edges_with_provenance"] == 1_001
+    assert metrics["control_complete"] is True
+    assert len(metrics["control_sha256"]) == hashlib.sha256().digest_size * 2
 
 
 def test_engine_exposes_counterfactual_scoring_without_mutable_source_state():
@@ -2543,7 +2534,7 @@ def test_factor_stability_rejects_invalid_restart_metrics(frequency, iqr, messag
         classify_factor_stability({"hybrid_rank_delta": 1}, frequency, iqr)
 
 
-def _sage_explanation_fixture():
+def _sage_explanation_fixture(*, caught_time=None):
     torch.manual_seed(0)
     node_ids = ["target", "poolmate", "hop1", "hop2"]
     edges = pd.DataFrame(
@@ -2562,7 +2553,7 @@ def _sage_explanation_fixture():
         edges_typed=edges,
         node_ids=node_ids,
         node_feat={person_id: np.array([1.0]) for person_id in node_ids},
-        caught_time={},
+        caught_time={} if caught_time is None else caught_time,
         num_rel=4,
     )
 
@@ -2731,7 +2722,7 @@ def test_make_gnn_explainer_uses_binary_node_raw_configuration():
         _sage_explanation_fixture().explanation_model_copy()
     )
 
-    explainer = se.make_gnn_explainer(wrapper, epochs=2)
+    explainer = se.make_gnn_explainer(wrapper, epochs=150)
 
     assert explainer.model is wrapper
     assert explainer.model_config.mode.value == "binary_classification"
@@ -2739,7 +2730,38 @@ def test_make_gnn_explainer_uses_binary_node_raw_configuration():
     assert explainer.model_config.return_type.value == "raw"
     assert explainer.node_mask_type.value == "attributes"
     assert explainer.edge_mask_type.value == "object"
-    assert explainer.algorithm.epochs == 2
+    assert explainer.algorithm.epochs == 150
+
+
+def test_production_explainer_epoch_policy_is_fixed():
+    wrapper = se.PrePoolSAGELogitWrapper(
+        _sage_explanation_fixture().explanation_model_copy()
+    )
+
+    with pytest.raises(ValueError, match="epochs must be exactly 150"):
+        se.make_gnn_explainer(wrapper, epochs=149)
+
+    with pytest.raises(ValueError, match="epochs must be exactly 150"):
+        se.run_member_explanation(
+            _sage_explanation_fixture(),
+            "target",
+            SCORING_DAY,
+            epochs=149,
+            explainer_factory=lambda *args, **kwargs: pytest.fail(
+                "invalid epoch policy must reject before the injected explainer"
+            ),
+        )
+
+    engine, case = _sage_case_fixture()
+    with pytest.raises(ValueError, match="epochs must be exactly 150"):
+        se.compose_case_explanation(
+            engine,
+            case,
+            explainer_epochs=149,
+            member_explainer=lambda *args, **kwargs: pytest.fail(
+                "invalid epoch policy must reject before the injected explainer"
+            ),
+        )
 
 
 def test_member_explanation_uses_exact_restarts_and_isolated_model_copy():
@@ -2767,7 +2789,7 @@ def test_member_explanation_uses_exact_restarts_and_isolated_model_copy():
             )
 
     def explainer_factory(wrapper, *, epochs):
-        assert epochs == 2
+        assert epochs == 150
         return FakeExplainer(wrapper)
 
     first = se.run_member_explanation(
@@ -2775,7 +2797,7 @@ def test_member_explanation_uses_exact_restarts_and_isolated_model_copy():
         "target",
         SCORING_DAY,
         restart_seeds=(0, 1, 2),
-        epochs=2,
+        epochs=150,
         explainer_factory=explainer_factory,
     )
     second = se.run_member_explanation(
@@ -2783,7 +2805,7 @@ def test_member_explanation_uses_exact_restarts_and_isolated_model_copy():
         "target",
         SCORING_DAY,
         restart_seeds=(0, 1, 2),
-        epochs=2,
+        epochs=150,
         explainer_factory=explainer_factory,
     )
 
@@ -2878,7 +2900,7 @@ def test_real_gnnexplainer_returns_isolated_target_node_masks():
         num_rel=4,
     )
 
-    result = se.run_member_explanation(engine, "target", SCORING_DAY, epochs=2)
+    result = se.run_member_explanation(engine, "target", SCORING_DAY, epochs=150)
 
     assert len(result["node_feature_masks"]) == 3
     assert all(mask.shape == (1, 8) for mask in result["node_feature_masks"])
@@ -2912,7 +2934,7 @@ def test_member_and_case_entrypoints_reject_noncanonical_restarts():
             "target",
             SCORING_DAY,
             restart_seeds=(7,),
-            epochs=1,
+            epochs=150,
             explainer_factory=lambda wrapper, epochs: ZeroExplainer(),
         )
 
@@ -3637,3 +3659,641 @@ def test_structural_factor_restart_stability_uses_feature_masks_not_edge_masks()
 
     assert actual[:2] == pytest.approx((0.75, 0.1))
     assert actual[2] == "feature_mask"
+
+
+def _synthetic_member_subgraph(node_count, edge_count):
+    sources = np.arange(edge_count, dtype=np.int64) % max(node_count, 1)
+    targets = (sources + 1) % max(node_count, 1)
+    edge_index = torch.tensor(
+        np.vstack((sources, targets)), dtype=torch.long
+    )
+    return se.MemberSubgraph(
+        x=torch.ones((node_count, 8), dtype=torch.float32),
+        edge_index=edge_index,
+        target_index=0,
+        original_node_indices=np.arange(node_count, dtype=np.int64),
+        tensor_edge_source_row_ids=np.array(
+            [f"source:{index}" for index in range(edge_count)],
+            dtype=object,
+        ),
+    )
+
+
+def _real_two_hop_boundary_engine(neighbor_count, extra_edges):
+    node_ids = ["target"] + [
+        f"neighbor:{index:03d}" for index in range(neighbor_count)
+    ]
+    rows = []
+    for index, neighbor_id in enumerate(node_ids[1:]):
+        rows.append((f"row:star:{index:03d}", "target", neighbor_id))
+    for index, (u, v) in enumerate(extra_edges):
+        rows.append((f"row:extra:{index:03d}", u, v))
+    edges = pd.DataFrame(
+        {
+            "source_row_id": [row[0] for row in rows],
+            "canonical_pair_group_id": [
+                f"group:{index:03d}" for index in range(len(rows))
+            ],
+            "u": [row[1] for row in rows],
+            "v": [row[2] for row in rows],
+            "avail_time": [SCORING_DAY - pd.Timedelta(hours=1)] * len(rows),
+            "rel": [0] * len(rows),
+            "edge_type": ["COTRAVEL"] * len(rows),
+        }
+    )
+    engine = se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=edges,
+        node_ids=node_ids,
+        node_feat={person_id: np.array([1.0]) for person_id in node_ids},
+        caught_time={},
+        num_rel=4,
+    )
+    return engine, set(node_ids), {row[0] for row in rows}
+
+
+def test_real_two_hop_extractor_preserves_exact_boundary_nodes_and_provenance():
+    engine, expected_nodes, expected_source_rows = (
+        _real_two_hop_boundary_engine(
+            127,
+            [("neighbor:000", "neighbor:001")],
+        )
+    )
+
+    local = se.member_subgraph(engine, "target", SCORING_DAY)
+    returned_nodes = {
+        engine.node_ids[int(index)] for index in local.original_node_indices
+    }
+    source_rows, source_counts = np.unique(
+        local.tensor_edge_source_row_ids, return_counts=True
+    )
+
+    assert returned_nodes == expected_nodes
+    assert local.x.shape[0] == se.MAX_LOCAL_EXPLANATION_NODES
+    assert local.edge_index.shape[1] == se.MAX_LOCAL_EXPLANATION_EDGES
+    assert set(source_rows) == expected_source_rows
+    assert set(source_counts) == {2}
+    assert se.explainability_eligibility(
+        engine, "target", SCORING_DAY
+    ) == {
+        "eligible": True,
+        "status": "eligible",
+        "node_count": 128,
+        "edge_count": 256,
+        "max_nodes": 128,
+        "max_edges": 256,
+        "reason_code": "eligible",
+    }
+
+
+@pytest.mark.parametrize(
+    ("neighbor_count", "extra_edges", "reason_code"),
+    [
+        (128, [], "node_limit_exceeded"),
+        (
+            127,
+            [("neighbor:000", "neighbor:001"), ("neighbor:002", "neighbor:003")],
+            "edge_limit_exceeded",
+        ),
+        (128, [("neighbor:000", "neighbor:001")], "node_and_edge_limits_exceeded"),
+    ],
+)
+def test_real_two_hop_extractor_fails_closed_over_exact_limits(
+    neighbor_count, extra_edges, reason_code
+):
+    engine, expected_nodes, expected_source_rows = (
+        _real_two_hop_boundary_engine(neighbor_count, extra_edges)
+    )
+    local = se.member_subgraph(engine, "target", SCORING_DAY)
+    returned_nodes = {
+        engine.node_ids[int(index)] for index in local.original_node_indices
+    }
+    source_rows, source_counts = np.unique(
+        local.tensor_edge_source_row_ids, return_counts=True
+    )
+    eligibility = se.explainability_eligibility(
+        engine, "target", SCORING_DAY
+    )
+    sentinel_calls = []
+
+    def sentinel(*args, **kwargs):
+        sentinel_calls.append((args, kwargs))
+        raise AssertionError("over-limit real subgraph reached GNNExplainer")
+
+    with pytest.raises(se.ExplainerEligibilityError) as error:
+        se.run_member_explanation(
+            engine,
+            "target",
+            SCORING_DAY,
+            explainer_factory=sentinel,
+        )
+
+    assert returned_nodes == expected_nodes
+    assert set(source_rows) == expected_source_rows
+    assert set(source_counts) == {2}
+    assert eligibility["eligible"] is False
+    assert eligibility["status"] == "community_only"
+    assert eligibility["reason_code"] == reason_code
+    assert error.value.eligibility == eligibility
+    assert sentinel_calls == []
+
+
+def test_explainer_policy_defaults_are_explicit_and_stable():
+    assert se.EXPLAINER_RESTART_SEEDS == (0, 1, 2)
+    assert se.EXPLAINER_EPOCHS == 150
+    assert se.MAX_LOCAL_EXPLANATION_NODES == 128
+    assert se.MAX_LOCAL_EXPLANATION_EDGES == 256
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [("max_nodes", 127), ("max_nodes", 129), ("max_edges", 255), ("max_edges", 257)],
+)
+def test_explainability_eligibility_rejects_policy_limit_overrides(
+    field_name, value
+):
+    engine = _sage_explanation_fixture()
+
+    with pytest.raises(ValueError, match=f"{field_name} must be exactly"):
+        se.explainability_eligibility(
+            engine,
+            "target",
+            SCORING_DAY,
+            **{field_name: value},
+        )
+
+
+def test_explainability_eligibility_accepts_under_limit_exact_subgraph(
+    monkeypatch,
+):
+    engine = _sage_explanation_fixture()
+    local = _synthetic_member_subgraph(3, 4)
+    monkeypatch.setattr(se, "member_subgraph", lambda *args: local)
+
+    result = se.explainability_eligibility(
+        engine, "target", SCORING_DAY
+    )
+
+    assert result == {
+        "eligible": True,
+        "status": "eligible",
+        "node_count": 3,
+        "edge_count": 4,
+        "max_nodes": 128,
+        "max_edges": 256,
+        "reason_code": "eligible",
+    }
+    json.dumps(result, allow_nan=False)
+
+
+def test_explainability_eligibility_accepts_exact_boundary_without_pruning(
+    monkeypatch,
+):
+    engine = _sage_explanation_fixture()
+    local = _synthetic_member_subgraph(128, 256)
+    returned = []
+
+    def return_local(*args):
+        returned.append(local)
+        return local
+
+    monkeypatch.setattr(se, "member_subgraph", return_local)
+
+    result = se.explainability_eligibility(
+        engine, "target", SCORING_DAY
+    )
+
+    assert result["eligible"] is True
+    assert result["reason_code"] == "eligible"
+    assert result["node_count"] == 128
+    assert result["edge_count"] == 256
+    assert returned == [local]
+    assert local.x.shape == (128, 8)
+    assert local.edge_index.shape == (2, 256)
+    assert len(local.tensor_edge_source_row_ids) == 256
+
+
+@pytest.mark.parametrize(
+    ("node_count", "edge_count", "reason_code"),
+    [
+        (129, 0, "node_limit_exceeded"),
+        (2, 257, "edge_limit_exceeded"),
+        (129, 257, "node_and_edge_limits_exceeded"),
+    ],
+)
+def test_explainability_eligibility_fails_closed_without_pruning(
+    monkeypatch, node_count, edge_count, reason_code
+):
+    engine = _sage_explanation_fixture()
+    local = _synthetic_member_subgraph(node_count, edge_count)
+    monkeypatch.setattr(se, "member_subgraph", lambda *args: local)
+
+    result = se.explainability_eligibility(
+        engine, "target", SCORING_DAY
+    )
+
+    assert result == {
+        "eligible": False,
+        "status": "community_only",
+        "node_count": node_count,
+        "edge_count": edge_count,
+        "max_nodes": 128,
+        "max_edges": 256,
+        "reason_code": reason_code,
+    }
+    assert local.x.shape[0] == node_count
+    assert local.edge_index.shape[1] == edge_count
+    assert len(local.tensor_edge_source_row_ids) == edge_count
+
+
+def test_compose_rejects_oversized_member_before_gnnexplainer_or_expansion(
+    monkeypatch,
+):
+    engine, case = _sage_case_fixture()
+    local = _synthetic_member_subgraph(129, 0)
+    monkeypatch.setattr(se, "member_subgraph", lambda *args: local)
+    monkeypatch.setattr(
+        se,
+        "diagnostic_edge_source_set_probability",
+        lambda *args, **kwargs: pytest.fail(
+            "oversized explanation must not run counterfactual scoring"
+        ),
+    )
+
+    def should_not_explain(*args, **kwargs):
+        pytest.fail("oversized explanation must not run GNNExplainer")
+
+    with pytest.raises(se.ExplainerEligibilityError) as error:
+        se.compose_case_explanation(
+            engine,
+            case,
+            member_explainer=should_not_explain,
+        )
+
+    assert error.value.status == "community_only"
+    assert error.value.reason_code == "node_limit_exceeded"
+    assert error.value.eligibility["node_count"] == 129
+    assert str(error.value) == (
+        "community_only explanation is ineligible: node_limit_exceeded"
+    )
+
+
+def test_run_member_explanation_rejects_oversized_member_before_gnnexplainer(
+    monkeypatch,
+):
+    engine = _sage_explanation_fixture()
+    local = _synthetic_member_subgraph(129, 0)
+    monkeypatch.setattr(se, "member_subgraph", lambda *args: local)
+
+    def should_not_explain(*args, **kwargs):
+        pytest.fail("oversized member must not reach GNNExplainer")
+
+    with pytest.raises(se.ExplainerEligibilityError) as error:
+        se.run_member_explanation(
+            engine,
+            "target",
+            SCORING_DAY,
+            explainer_factory=should_not_explain,
+        )
+
+    assert error.value.status == "community_only"
+    assert error.value.reason_code == "node_limit_exceeded"
+
+
+def _complete_structural_mapping(scope):
+    return {
+        "complete": True,
+        "scoring_day": scope.scoring_day.isoformat(),
+        "component_id": scope.component_id,
+        "community_key": scope.community_key,
+        "nodes": [
+            {
+                "node_id": node["node_id"],
+                "target": node["target"],
+                "message_distance": node["message_distance"],
+                "pooled_member": node["pooled_member"],
+                "caught_before_snapshot": node["caught_before_snapshot"],
+                "caught_label_available_time": node[
+                    "caught_label_available_time"
+                ],
+            }
+            for node in scope.iter_nodes()
+        ],
+        "edges": [
+            {
+                key: edge[key]
+                for key in (
+                    "edge_id",
+                    "u",
+                    "v",
+                    "rel",
+                    "edge_type",
+                    "source_row_ids",
+                    "source_row_count",
+                )
+                if key in edge
+            }
+            for edge in scope.iter_edges()
+        ],
+        "provenance_observations": list(scope.iter_provenance()),
+    }
+
+
+def test_structural_community_control_is_json_safe_and_attribution_free():
+    engine = _sage_explanation_fixture(
+        caught_time={"hop1": SCORING_DAY - pd.Timedelta(seconds=1)}
+    )
+    scope = engine.community("target", SCORING_DAY)
+
+    control = se.build_structural_community_control(scope)
+
+    assert control["detail_kind"] == "community_only"
+    assert control["kind"] == "community_only"
+    assert control["evidence_kind"] == "structural_provenance"
+    assert control["community_key"] == scope.community_key
+    assert control["component_id"] == scope.component_id
+    assert control["scoring_day"] == SCORING_DAY.isoformat()
+    assert control["node_count"] == len(scope.node_ids)
+    assert control["edge_count"] == sum(1 for _ in scope.iter_edges())
+    assert set(control["communities"]) == {
+        scope.community_key,
+    }
+    assert {node["node_id"] for node in control["nodes"]} == set(
+        scope.node_ids
+    )
+    assert all(
+        set(node)
+        <= {
+            "node_id",
+            "target",
+            "message_distance",
+            "pooled_member",
+            "caught_before_snapshot",
+            "caught_label_available_time",
+        }
+        for node in control["nodes"]
+    )
+    nodes_by_id = {node["node_id"]: node for node in control["nodes"]}
+    assert nodes_by_id["target"]["target"] is True
+    assert all(
+        node["target"] is (node["node_id"] == "target")
+        for node in control["nodes"]
+    )
+    assert nodes_by_id["target"]["caught_before_snapshot"] is False
+    assert nodes_by_id["target"]["caught_label_available_time"] is None
+    assert nodes_by_id["hop1"]["caught_before_snapshot"] is True
+    assert (
+        nodes_by_id["hop1"]["caught_label_available_time"]
+        == "2025-01-01T23:59:59+00:00"
+    )
+    assert all(
+        node["caught_label_available_time"] is None
+        or pd.Timestamp(node["caught_label_available_time"]) < SCORING_DAY
+        for node in control["nodes"]
+    )
+    assert all(
+        set(edge)
+        <= {
+            "edge_id",
+            "u",
+            "v",
+            "rel",
+            "edge_type",
+            "source_row_ids",
+            "source_row_count",
+            "message_hop",
+            "available_times",
+        }
+        for edge in control["edges"]
+    )
+    serialized = json.dumps(control, sort_keys=True, allow_nan=False)
+    for forbidden in (
+        "attributions",
+        "explanation",
+        "narrative",
+        "hidden",
+        "rank",
+        "mask",
+        "false_negative_flag",
+    ):
+        assert forbidden not in serialized.casefold()
+    assert control["evidence_boundary"] == {
+        "edge_rule": "available_time < snapshot",
+        "caught_rule": "label_available_time_utc < snapshot",
+        "snapshot": SCORING_DAY.isoformat(),
+    }
+
+    mapping_control = se.build_structural_community_control(
+        _complete_structural_mapping(scope)
+    )
+    projected_control = mapping_control
+    assert projected_control["detail_kind"] == "community_only"
+    assert projected_control["node_count"] == len(scope.node_ids)
+    assert projected_control["edge_count"] == sum(1 for _ in scope.iter_edges())
+    assert any(
+        edge["available_times"] for edge in projected_control["edges"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["provenance_observations"].clear(),
+        lambda payload: payload["provenance_observations"].pop(),
+        lambda payload: payload["provenance_observations"][0].update(
+            available_time=SCORING_DAY.isoformat()
+        ),
+        lambda payload: payload["provenance_observations"].append(
+            {
+                "edge_id": "edge:not-emitted",
+                "source_row_id": "row:extra",
+                "available_time": (
+                    SCORING_DAY - pd.Timedelta(hours=1)
+                ).isoformat(),
+            }
+        ),
+        lambda payload: payload["edges"][0].update(
+            source_row_count=len(payload["edges"][0]["source_row_ids"]) + 1
+        ),
+    ],
+)
+def test_structural_mapping_requires_complete_as_of_provenance(mutate):
+    scope = _sage_explanation_fixture().community("target", SCORING_DAY)
+    payload = _complete_structural_mapping(scope)
+    mutate(payload)
+
+    with pytest.raises(ValueError, match="provenance|source row|strictly"):
+        se.build_structural_community_control(payload)
+
+
+def test_structural_mapping_rejects_source_row_reused_across_edges():
+    scope = _sage_explanation_fixture().community("target", SCORING_DAY)
+    payload = _complete_structural_mapping(scope)
+    first_edge = payload["edges"][0]
+    second_edge = payload["edges"][1]
+    source_row_id = first_edge["source_row_ids"][0]
+    second_edge["source_row_ids"] = [source_row_id]
+    second_edge["source_row_count"] = 1
+    payload["provenance_observations"] = [
+        observation
+        for observation in payload["provenance_observations"]
+        if observation["edge_id"] != second_edge["edge_id"]
+    ]
+    payload["provenance_observations"].append(
+        {
+            "edge_id": second_edge["edge_id"],
+            "source_row_id": source_row_id,
+            "available_time": (
+                SCORING_DAY - pd.Timedelta(hours=1)
+            ).isoformat(),
+        }
+    )
+
+    with pytest.raises(ValueError, match="source_row_id.*multiple edges"):
+        se.build_structural_community_control(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["nodes"][0].update(metadata={"hidden": True}),
+        lambda payload: payload["nodes"][0].update(target={"status": "selected"}),
+        lambda payload: payload["nodes"][0].update(target=1),
+        lambda payload: payload["nodes"][0].update(message_distance=True),
+        lambda payload: payload["nodes"][0].update(message_distance=-1),
+        lambda payload: payload["nodes"][0].update(pooled_member=1),
+        lambda payload: payload["edges"][0].update(edge_type="future_outcome"),
+        lambda payload: payload["edges"][0].update(
+            source_row_ids=[" "]
+        ),
+        lambda payload: payload["provenance_observations"][0].update(
+            metadata={"rank": 1}
+        ),
+    ],
+)
+def test_structural_mapping_rejects_unsafe_nested_or_invalid_members(mutate):
+    scope = _sage_explanation_fixture().community("target", SCORING_DAY)
+    payload = _complete_structural_mapping(scope)
+    mutate(payload)
+
+    with pytest.raises(ValueError, match="structural|forbidden|nonnegative|boolean|source"):
+        se.build_structural_community_control(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: next(
+            node for node in payload["nodes"] if node["node_id"] == "hop1"
+        ).update(caught_label_available_time=SCORING_DAY.isoformat()),
+        lambda payload: next(
+            node for node in payload["nodes"] if node["node_id"] == "target"
+        ).update(caught_before_snapshot=True),
+        lambda payload: next(
+            node for node in payload["nodes"] if node["node_id"] == "target"
+        ).update(
+            caught_label_available_time=(
+                SCORING_DAY - pd.Timedelta(hours=1)
+            ).isoformat()
+        ),
+    ],
+)
+def test_structural_mapping_requires_as_of_consistent_catch_fields(mutate):
+    scope = _sage_explanation_fixture().community("target", SCORING_DAY)
+    payload = _complete_structural_mapping(scope)
+    mutate(payload)
+
+    with pytest.raises(ValueError, match="caught|snapshot|strictly"):
+        se.build_structural_community_control(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["edges"][0].update(
+            edge_type="futureOutcome_rankMaskNarrative"
+        ),
+        lambda payload: payload["nodes"][0].update(
+            **{"futureOutcome_rankMaskNarrative": True}
+        ),
+    ],
+)
+def test_structural_mapping_rejects_compound_forbidden_keys_and_values(mutate):
+    scope = _sage_explanation_fixture().community("target", SCORING_DAY)
+    payload = _complete_structural_mapping(scope)
+    mutate(payload)
+
+    with pytest.raises(ValueError, match="forbidden structural token"):
+        se.build_structural_community_control(payload)
+
+
+def test_structural_community_control_accepts_complete_isolated_community():
+    isolated_mapping = {
+        "complete": True,
+        "scoring_day": SCORING_DAY.isoformat(),
+        "component_id": "component:isolated",
+        "community_key": "community:isolated",
+        "nodes": [
+            {
+                "node_id": "isolated",
+                "target": True,
+                "message_distance": 0,
+                "pooled_member": True,
+                "caught_before_snapshot": False,
+                "caught_label_available_time": None,
+            }
+        ],
+        "edges": [],
+        "provenance_observations": [],
+    }
+
+    mapping_control = se.build_structural_community_control(isolated_mapping)
+
+    assert mapping_control["complete"] is True
+    assert mapping_control["node_count"] == 1
+    assert mapping_control["edge_count"] == 0
+    assert mapping_control["edges"] == []
+
+    empty_edges = pd.DataFrame(
+        columns=[
+            "source_row_id",
+            "canonical_pair_group_id",
+            "u",
+            "v",
+            "avail_time",
+            "rel",
+            "edge_type",
+        ]
+    )
+    isolated_engine = se.Seed0ExplanationEngine(
+        model=_SAGE(in_dim=8, hidden=4, out=4, num_relations=4),
+        edges_typed=empty_edges,
+        node_ids=["isolated"],
+        node_feat={"isolated": np.array([1.0])},
+        caught_time={},
+        num_rel=4,
+    )
+    scope_control = se.build_structural_community_control(
+        isolated_engine.community("isolated", SCORING_DAY)
+    )
+
+    assert scope_control["complete"] is True
+    assert scope_control["node_count"] == 1
+    assert scope_control["edge_count"] == 0
+    assert scope_control["edges"] == []
+
+
+def test_existing_compose_case_explanation_contract_remains_hybrid_only():
+    engine, case = _sage_case_fixture()
+
+    explanation = se.compose_case_explanation(
+        engine,
+        case,
+        member_explainer=_deterministic_member_explainer,
+    )
+
+    assert isinstance(case, HybridOnlyCase)
+    assert explanation["case_id"] == "case:target"
+    assert explanation["person_id"] == "target"
+    assert explanation["attributions"]["scope"]["restart_seeds"] == [0, 1, 2]
+    assert explanation["attributions"]["scope"]["epochs"] == 150

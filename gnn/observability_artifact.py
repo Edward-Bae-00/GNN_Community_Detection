@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
+import time
 from itertools import groupby
 from pathlib import Path
 from collections.abc import Mapping
@@ -16,20 +18,31 @@ from gnn.explanation_narrative import (
     build_fact_packet,
     generate_narrative,
     preflight_local_model,
+    render_template,
     validate_candidate,
 )
 from gnn.recovery_observability import (
     HybridOnlyCase,
     build_decision_trace,
     build_rank_reference,
+    build_recovery_case,
+    _round_robin_balanced_cases,
+    finalize_recovery_publication,
+    materialize_recovered_by_both_case,
     recovery_overlap,
     representative_attempt_order,
+    select_balanced_detail_cases,
     simulate_recovery_run,
 )
 from gnn.recovery_bundle import RecoveryBundleWriter
 from gnn.sage_explainer import (
     CommunityScope,
+    MAX_LOCAL_EXPLANATION_EDGES,
+    MAX_LOCAL_EXPLANATION_NODES,
+    build_flow_stages,
+    build_structural_community_control,
     compose_case_explanation,
+    explainability_eligibility as exact_explainability_eligibility,
     json_safe,
     validate_explanation_payload,
 )
@@ -43,6 +56,12 @@ _REQUIRED_PARITY = (
 )
 _SCOPE_ERROR = "observability requires the surrounding three-seed GraphSAGE run"
 _DEMO_INSPECTIONS_PER_DAY = 5
+SCHEMA2 = "2.0"
+SCHEMA3 = "3.0"
+DEFAULT_HYBRID_DETAIL_LIMIT = 20
+DEFAULT_BASELINE_CONTROL_LIMIT = 10
+EXPLAINER_RESTART_SEEDS = (0, 1, 2)
+EXPLAINER_EPOCHS = 150
 _RECOVERY_METRICS = (
     "baseline_unique_people_recovered",
     "hybrid_unique_people_recovered",
@@ -70,6 +89,43 @@ def _explanation_limit(value):
     ):
         raise ValueError("explanation_limit must be a non-negative integer or None")
     return int(value)
+
+
+def _detail_limit(value, *, field_name):
+    if value is None:
+        return None
+    if (
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value < 0
+    ):
+        raise ValueError(f"{field_name} must be a non-negative integer or None")
+    return int(value)
+
+
+def _resolve_schema3_limits(
+    explanation_limit, hybrid_detail_limit, baseline_control_limit
+):
+    legacy_limit = _detail_limit(explanation_limit, field_name="explanation_limit")
+    hybrid_limit = _detail_limit(
+        hybrid_detail_limit, field_name="hybrid_detail_limit"
+    )
+    baseline_limit = _detail_limit(
+        baseline_control_limit, field_name="baseline_control_limit"
+    )
+    if legacy_limit is not None and hybrid_limit is not None and legacy_limit != hybrid_limit:
+        raise ValueError(
+            "explanation_limit and hybrid_detail_limit have conflicting values"
+        )
+    if hybrid_limit is None:
+        hybrid_limit = (
+            legacy_limit
+            if legacy_limit is not None
+            else DEFAULT_HYBRID_DETAIL_LIMIT
+        )
+    if baseline_limit is None:
+        baseline_limit = DEFAULT_BASELINE_CONTROL_LIMIT
+    return hybrid_limit, baseline_limit
 
 
 def _validated_scope(gnn_arm, surrounding_seeds):
@@ -555,6 +611,31 @@ def _validate_complete_explanation(explanation):
     return explanation
 
 
+def _validate_schema3_evidence_boundary(payload, scoring_day, *, field_name):
+    """Re-check the immutable as-of contract before reusing staged evidence."""
+    expected_snapshot = _as_utc_timestamp(
+        scoring_day, field_name=f"{field_name} scoring_day"
+    )
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{field_name} is invalid")
+    payload_snapshot = _as_utc_timestamp(
+        payload.get("scoring_day"), field_name=f"{field_name} scoring_day"
+    )
+    boundary = payload.get("evidence_boundary")
+    if (
+        not isinstance(boundary, Mapping)
+        or boundary.get("edge_rule") != "available_time < snapshot"
+        or boundary.get("caught_rule") != "label_available_time_utc < snapshot"
+    ):
+        raise ValueError(f"invalid {field_name} evidence boundary")
+    boundary_snapshot = _as_utc_timestamp(
+        boundary.get("snapshot"), field_name=f"{field_name} boundary snapshot"
+    )
+    if payload_snapshot != expected_snapshot or boundary_snapshot != expected_snapshot:
+        raise ValueError(f"{field_name} evidence boundary is not strictly as-of")
+    return payload
+
+
 def _published_community(community, scoring_day):
     """Detach one complete view and key its exact serialized content."""
     snapshot = _as_utc_timestamp(scoring_day, field_name="case scoring_day")
@@ -655,6 +736,1507 @@ def _validate_grounded_narrative(packet, narrative):
     return narrative
 
 
+def _schema3_identity(value, *, corpus_identity):
+    supplied = (
+        {"corpus_identity": str(corpus_identity)}
+        if value is None
+        else _detached_json_object(value, field_name="recovery run identity")
+    )
+    supplied_corpus = supplied.get("corpus_identity")
+    if supplied_corpus is not None and str(supplied_corpus) != str(corpus_identity):
+        raise ValueError("conflicting corpus identity in recovery run identity")
+    supplied["corpus_identity"] = str(corpus_identity)
+    checkpoint_id = supplied.get("checkpoint_id")
+    if not isinstance(checkpoint_id, str) or not checkpoint_id.strip():
+        raise ValueError("schema-3 recovery run identity requires checkpoint_id")
+    run_id = supplied.get("run_id", supplied.get("score_run_id"))
+    if not isinstance(run_id, str) or not run_id.strip():
+        supplied["run_id"] = f"{checkpoint_id}:observability"
+    else:
+        supplied["run_id"] = run_id
+    return supplied
+
+
+def _schema3_identity_token(value, *, label):
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return f"{label}:sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _schema3_provenance(
+    *, corpus_identity, run_identity, as_of_identity, reference, recovery_arm
+):
+    return {
+        "corpus_identity": str(corpus_identity),
+        "run_identity": run_identity,
+        "as_of_identity": as_of_identity,
+        "percentile_reference_id": reference.percentile_reference_id,
+        "recovery_arm": recovery_arm,
+        "observability_seed": 0,
+        "gnn_arm": "sage",
+    }
+
+
+def _schema3_recovery_case(technical_case, *, cohort, recovery_anchor_arm, reference):
+    return build_recovery_case(
+        case_id=f"case:{technical_case.person_id}",
+        recovery_cohort=cohort,
+        anchor_event=technical_case.anchor,
+        subject_id=technical_case.person_id,
+        subject_display={},
+        decision_trace=technical_case.decision_trace_jsonable(),
+        recovery_anchor_arm=recovery_anchor_arm,
+        hybrid_blend_weight=reference.blend_weight,
+        relationship_categories=technical_case.relationship_categories,
+        scoring_period=technical_case.scoring_period,
+    )
+
+
+def _schema3_preflight(explanation_engine, technical_case):
+    adapter = getattr(explanation_engine, "schema3_preflight_adapter", None)
+    if callable(adapter) and getattr(explanation_engine, "schema3_test_adapter", False) is True:
+        result = adapter(
+            technical_case.person_id, technical_case.anchor.scoring_day
+        )
+    else:
+        result = exact_explainability_eligibility(
+            explanation_engine,
+            technical_case.person_id,
+            technical_case.anchor.scoring_day,
+        )
+    result = _detached_json_object(result, field_name="explainer preflight")
+    required = {
+        "eligible", "status", "node_count", "edge_count", "max_nodes",
+        "max_edges", "reason_code",
+    }
+    if (
+        set(result) != required
+        or not isinstance(result["eligible"], bool)
+        or result["status"] not in {"eligible", "community_only"}
+        or result["reason_code"] not in {
+            "eligible", "test_adapter", "node_limit_exceeded",
+            "edge_limit_exceeded", "node_and_edge_limits_exceeded",
+        }
+        or any(
+            not isinstance(result[field], int) or isinstance(result[field], bool)
+            or result[field] < 0
+            for field in ("node_count", "edge_count", "max_nodes", "max_edges")
+        )
+        or result["max_nodes"] != MAX_LOCAL_EXPLANATION_NODES
+        or result["max_edges"] != MAX_LOCAL_EXPLANATION_EDGES
+        or result["eligible"]
+        != (
+            result["node_count"] <= MAX_LOCAL_EXPLANATION_NODES
+            and result["edge_count"] <= MAX_LOCAL_EXPLANATION_EDGES
+        )
+        or (result["eligible"] and result["status"] != "eligible")
+        or (not result["eligible"] and result["status"] != "community_only")
+    ):
+        raise ValueError("explainer preflight result is invalid")
+    return result
+
+
+def _schema3_structural_detail(explanation_engine, technical_case, community):
+    try:
+        structural = build_structural_community_control(community)
+    except (KeyError, TypeError, ValueError):
+        if getattr(explanation_engine, "schema3_test_adapter", False) is not True:
+            # Production engines must yield extractable structural evidence. A
+            # silent shim here would publish degraded community-only evidence
+            # while hiding a real extraction defect, so surface the error and
+            # let the caller record the case as failed.
+            raise
+        # Test-only compatibility shim for fake engines that expose the already
+        # validated community shape but not the streaming structural adapter.
+        # It still removes shared target markers and retains as-of rows.
+        structural = _detached_json_object(
+            community, field_name="baseline community"
+        )
+        structural["detail_kind"] = "community_only"
+        structural["kind"] = "community_only"
+        structural["evidence_kind"] = "structural_provenance"
+        structural["complete"] = True
+        structural["flow_stages"] = build_flow_stages(community)
+    structural["target_person_id"] = technical_case.person_id
+    structural["score_evidence"] = "baseline_vs_hybrid_risk_values_and_ranks"
+    return structural
+
+
+def _schema3_materialize_community(community):
+    if not isinstance(community, CommunityScope):
+        return community
+    edges = []
+    provenance = list(community.iter_provenance())
+    observations_by_edge = {}
+    for observation in provenance:
+        observations_by_edge.setdefault(observation["edge_id"], []).append(
+            {
+                "source_row_id": observation["source_row_id"],
+                "available_time": observation["available_time"],
+            }
+        )
+    for edge in community.iter_edges():
+        record = dict(edge)
+        record["observations"] = observations_by_edge.get(record["edge_id"], [])
+        edges.append(record)
+    return {
+        "complete": True,
+        "scoring_day": community.scoring_day.isoformat(),
+        "component_id": community.component_id,
+        "community_key": community.community_key,
+        "nodes": list(community.iter_nodes()),
+        "edges": edges,
+        "provenance_expansions": [],
+    }
+
+
+def _schema3_summary_record(
+    case,
+    *,
+    cohort,
+    reference,
+    provenance,
+    detail_status="not_selected",
+    detail_kind=None,
+    selection_reason="not_selected",
+    failure_reason=None,
+):
+    return {
+        "cohort": cohort,
+        "case_id": case.case_id,
+        "person_id": case.subject_id,
+        "event_id": case.anchor_event.event_id,
+        "scoring_day": case.anchor_event.scoring_day.isoformat(),
+        "baseline_raw": case.baseline_raw,
+        "baseline_percentile": case.baseline_percentile,
+        "baseline_rank": case.baseline_rank,
+        "seed0_gnn_probability": case.seed0_gnn_probability,
+        "seed0_gnn_percentile": case.seed0_gnn_percentile,
+        "seed0_gnn_rank": case.seed0_gnn_rank,
+        "seed0_hybrid_score": case.seed0_hybrid_score,
+        "seed0_hybrid_rank": case.seed0_hybrid_rank,
+        "hybrid_score_semantics": "percentile_fusion_not_probability",
+        "hybrid_rank_uplift": case.hybrid_rank_uplift,
+        "gnn_percentile_uplift": case.gnn_percentile_uplift,
+        "relationship_categories": list(case.relationship_categories),
+        "detail_status": detail_status,
+        "detail_kind": detail_kind,
+        "selection_reason": selection_reason,
+        "failure_reason": failure_reason,
+        "community_key": None,
+        "target_person_id": None,
+        "provenance": provenance,
+        "run_identity": provenance["run_identity"],
+        "recovery_anchor_arm": case.recovery_anchor_arm,
+        "recovery_anchor_event_id": case.anchor_event.event_id,
+        "recovery_anchor_inspected_rank": case.anchor_event.inspected_rank,
+        "percentile_reference_id": reference.percentile_reference_id,
+    }
+
+
+def _process_peak_rss_bytes():
+    try:
+        import resource
+
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        return value * (1024 if os.uname().sysname == "Darwin" else 1)
+    except (AttributeError, OSError, ImportError, ValueError):
+        return None
+
+
+def _schema3_stage_recorder(instrumentation):
+    started = time.perf_counter()
+    stages = []
+
+    def record(stage, **fields):
+        item = {
+            "stage": stage,
+            "elapsed_seconds": max(0.0, time.perf_counter() - started),
+            "process_peak_rss_bytes": _process_peak_rss_bytes(),
+            **fields,
+        }
+        stages.append(item)
+        callback = instrumentation
+        if isinstance(instrumentation, Mapping):
+            callback = instrumentation.get("on_stage")
+        if callable(callback):
+            callback(stage, dict(item))
+
+    return started, stages, record
+
+
+def _build_schema3_artifact(
+    *,
+    pool,
+    baseline_raw,
+    seed0_gnn_raw,
+    blend_weight,
+    caught_times,
+    gnn_arm,
+    surrounding_seeds,
+    explanation_engine,
+    seed_level_unique_person_recovery,
+    explanation_limit,
+    hybrid_detail_limit,
+    baseline_control_limit,
+    inspections_per_day,
+    narrative_builder,
+    corpus_identity,
+    recovery_run_identity,
+    instrumentation,
+    narrative_preflight,
+    bundle_writer=None,
+):
+    seeds = _validated_scope(gnn_arm, surrounding_seeds)
+    hybrid_limit, baseline_limit = _resolve_schema3_limits(
+        explanation_limit, hybrid_detail_limit, baseline_control_limit
+    )
+    daily_budget = _positive_integer(
+        inspections_per_day, field_name="inspections_per_day"
+    )
+    if daily_budget != _DEMO_INSPECTIONS_PER_DAY:
+        raise ValueError("observability inspections_per_day must be exactly 5")
+    seed_recovery = _validate_seed_level_unique_person_recovery(
+        seed_level_unique_person_recovery, blend_weight=blend_weight
+    )
+    if not callable(narrative_builder):
+        raise ValueError("narrative_builder must be callable")
+    for capability in (
+        "bind_rank_reference",
+        "relationship_categories",
+        "community",
+        "release_snapshot",
+    ):
+        if not callable(getattr(explanation_engine, capability, None)):
+            raise ValueError(f"explanation_engine must support {capability}")
+    started, stages, stage = _schema3_stage_recorder(instrumentation)
+    snapshot_peak_days = 0
+
+    def release_day(scoring_day):
+        """Drop day-bound tensors as soon as the producer is finished with them.
+
+        Every snapshot the engine materializes stays cached until it is
+        released, and a full V9 run touches one scoring day per recovery
+        candidate.  Without this the cache holds every day's node features,
+        edge index, and pooled activations at once, which is the exact
+        unbounded growth that per-day release was introduced to fix.
+        """
+        nonlocal snapshot_peak_days
+        cached = getattr(explanation_engine, "cached_snapshot_days", ())
+        try:
+            snapshot_peak_days = max(snapshot_peak_days, len(cached))
+        except TypeError:
+            pass
+        explanation_engine.release_snapshot(scoring_day)
+    stage("preparation_start")
+    rows, scoring_days = _prepared_pool(pool)
+    reference = build_rank_reference(
+        rows, baseline_raw, seed0_gnn_raw, blend_weight
+    )
+    explanation_engine.bind_rank_reference(
+        reference, _rank_row_bindings(rows, scoring_days)
+    )
+    run_identity_payload = _schema3_identity(
+        recovery_run_identity, corpus_identity=corpus_identity
+    )
+    run_identity_token = _schema3_identity_token(
+        run_identity_payload, label="recovery-run"
+    )
+    as_of_identity = _schema3_identity_token(
+        {
+            "corpus_identity": str(corpus_identity),
+            "percentile_reference_id": reference.percentile_reference_id,
+            "inspections_per_day": daily_budget,
+        },
+        label="as-of",
+    )
+    baseline_run = simulate_recovery_run(
+        rows,
+        reference.baseline_selection_score,
+        arm="baseline",
+        daily_budget=daily_budget,
+        official_caught_times=caught_times,
+        run_identity=run_identity_token,
+        as_of_identity=as_of_identity,
+    )
+    hybrid_run = simulate_recovery_run(
+        rows,
+        reference.seed0_hybrid_selection_score,
+        arm="hybrid_seed0",
+        daily_budget=daily_budget,
+        official_caught_times=caught_times,
+        run_identity=run_identity_token,
+        as_of_identity=as_of_identity,
+    )
+    overlap = recovery_overlap(baseline_run, hybrid_run, strict=True)
+    _validate_seed0_recovery_overlap(seed_recovery, overlap)
+    stage(
+        "recovery_overlap_complete",
+        baseline_recovered=len(overlap.baseline_ids),
+        hybrid_recovered=len(overlap.hybrid_ids),
+        recovered_by_both=len(overlap.both_ids),
+    )
+
+    hybrid_technical = {
+        case.person_id: case
+        for case in build_hybrid_only_cases(
+            rows, overlap, baseline_run, hybrid_run, reference, explanation_engine
+        )
+    }
+    baseline_technical = {
+        case.person_id: case
+        for case in build_baseline_only_cases(
+            rows, overlap, baseline_run, hybrid_run, reference, explanation_engine
+        )
+    }
+    both_baseline_technical = {}
+    both_hybrid_technical = {}
+    for person_id in sorted(overlap.both_ids):
+        # Recovered-by-both records are aggregate summaries.  Build each
+        # source trace against its own arm's daily candidate reference before
+        # materializing the earlier anchor.  The other arm may have recovered
+        # the person on an earlier day, in which case its row is correctly
+        # absent from the candidate pool on this anchor day.
+        both_baseline_technical[person_id] = _build_exclusive_case(
+            rows,
+            scoring_days,
+            rows["primary_person_id"].to_numpy(dtype=str),
+            person_id,
+            baseline_run,
+            baseline_run,
+            baseline_run,
+            reference,
+            explanation_engine,
+        )
+        both_hybrid_technical[person_id] = _build_exclusive_case(
+            rows,
+            scoring_days,
+            rows["primary_person_id"].to_numpy(dtype=str),
+            person_id,
+            hybrid_run,
+            hybrid_run,
+            hybrid_run,
+            reference,
+            explanation_engine,
+        )
+
+    hybrid_cases = {
+        f"case:{person_id}": _schema3_recovery_case(
+            technical,
+            cohort="hybrid_only",
+            recovery_anchor_arm="hybrid_seed0",
+            reference=reference,
+        )
+        for person_id, technical in hybrid_technical.items()
+    }
+    baseline_cases = {
+        f"case:{person_id}": _schema3_recovery_case(
+            technical,
+            cohort="baseline_only",
+            recovery_anchor_arm="baseline",
+            reference=reference,
+        )
+        for person_id, technical in baseline_technical.items()
+    }
+    both_cases = {}
+    for person_id in sorted(overlap.both_ids):
+        both_cases[f"case:{person_id}"] = materialize_recovered_by_both_case(
+            _schema3_recovery_case(
+                both_baseline_technical[person_id],
+                cohort="baseline_only",
+                recovery_anchor_arm="baseline",
+                reference=reference,
+            ),
+            _schema3_recovery_case(
+                both_hybrid_technical[person_id],
+                cohort="hybrid_only",
+                recovery_anchor_arm="hybrid_seed0",
+                reference=reference,
+            ),
+        )
+
+    stage("preflight_start", hybrid_candidates=len(hybrid_cases))
+    # Preflight measures the exact two-hop input for every Hybrid candidate, so
+    # it materializes one day snapshot per candidate scoring day.  Walk the
+    # candidates in day order and release each day as soon as its group is
+    # measured; the results are re-keyed in case-ID order below so the frozen
+    # selection and its fingerprint stay independent of this traversal.
+    measured_preflight = {}
+    day_ordered_candidates = sorted(
+        hybrid_cases.items(),
+        key=lambda item: (item[1].anchor_event.scoring_day, item[0]),
+    )
+    for scoring_day, day_candidates in groupby(
+        day_ordered_candidates, key=lambda item: item[1].anchor_event.scoring_day
+    ):
+        try:
+            for case_id, case in day_candidates:
+                measured_preflight[case_id] = _schema3_preflight(
+                    explanation_engine, hybrid_technical[case.person_id]
+                )
+        finally:
+            release_day(scoring_day)
+    preflight = {
+        case_id: measured_preflight[case_id] for case_id in sorted(hybrid_cases)
+    }
+    eligible_ids = [
+        case_id for case_id, result in preflight.items() if result["eligible"]
+    ]
+    stage(
+        "preflight_complete",
+        hybrid_candidates=len(hybrid_cases),
+        eligible_hybrid=len(eligible_ids),
+        ineligible_hybrid=len(hybrid_cases) - len(eligible_ids),
+    )
+    selection = select_balanced_detail_cases(
+        list(hybrid_cases.values()),
+        list(baseline_cases.values()),
+        hybrid_limit=hybrid_limit,
+        baseline_limit=baseline_limit,
+        eligible_hybrid_ids=eligible_ids,
+    )
+    selected_ids = selection.selected_ids
+    # Oversized Hybrid candidates cannot receive GNNExplainer evidence, so the
+    # unused remainder of the frozen Hybrid budget is filled deterministically
+    # with community-only structural fallbacks. This happens before any
+    # explanation work, so it never replaces a case after a failure.
+    fallback_slots = max(0, hybrid_limit - len(selected_ids["hybrid_only"]))
+    eligible_id_set = set(eligible_ids)
+    ineligible_cases = [
+        case
+        for case_id, case in sorted(hybrid_cases.items())
+        if case_id not in eligible_id_set
+    ]
+    structural_fallback_ids = tuple(
+        case.case_id
+        for case in _round_robin_balanced_cases(ineligible_cases, hybrid=True)[
+            :fallback_slots
+        ]
+    )
+    stage(
+        "selection_frozen",
+        hybrid_selected=len(selected_ids["hybrid_only"]),
+        baseline_selected=len(selected_ids["baseline_only"]),
+        hybrid_structural_fallback=len(structural_fallback_ids),
+    )
+    narrative_stats = {
+        "narrative_attempted": 0,
+        "narrative_generated": 0,
+        "narrative_fallback": 0,
+        "narrative_failed": 0,
+        "narrative_preflight_failed": 0,
+    }
+    if callable(narrative_preflight):
+        try:
+            narrative_preflight()
+        except Exception as error:
+            narrative_stats["narrative_preflight_failed"] += 1
+            narrative_stats["narrative_preflight_error"] = (
+                f"{type(error).__name__}: {error}"
+            )
+    elif narrative_builder is generate_narrative:
+        try:
+            preflight_local_model()
+        except Exception as error:
+            narrative_stats["narrative_preflight_failed"] += 1
+            narrative_stats["narrative_preflight_error"] = (
+                f"{type(error).__name__}: {error}"
+            )
+
+    provenance_by_cohort = {
+        "hybrid_only": _schema3_provenance(
+            corpus_identity=corpus_identity,
+            run_identity=run_identity_payload,
+            as_of_identity=as_of_identity,
+            reference=reference,
+            recovery_arm="hybrid_seed0",
+        ),
+        "baseline_only": _schema3_provenance(
+            corpus_identity=corpus_identity,
+            run_identity=run_identity_payload,
+            as_of_identity=as_of_identity,
+            reference=reference,
+            recovery_arm="baseline",
+        ),
+        "recovered_by_both": _schema3_provenance(
+            corpus_identity=corpus_identity,
+            run_identity=run_identity_payload,
+            as_of_identity=as_of_identity,
+            reference=reference,
+            recovery_arm="both_summary_only",
+        ),
+    }
+    records = {
+        cohort: {}
+        for cohort in ("hybrid_only", "baseline_only", "recovered_by_both")
+    }
+    for cohort, cases in (
+        ("hybrid_only", hybrid_cases),
+        ("baseline_only", baseline_cases),
+        ("recovered_by_both", both_cases),
+    ):
+        for case_id, case in cases.items():
+            records[cohort][case_id] = _schema3_summary_record(
+                case,
+                cohort=cohort,
+                reference=reference,
+                provenance=provenance_by_cohort[cohort],
+            )
+    for case_id, result in preflight.items():
+        if not result["eligible"]:
+            # Ineligible candidates stay unselected unless they win a frozen
+            # structural-fallback slot below, which is what actually publishes
+            # their community evidence.
+            records["hybrid_only"][case_id].update(
+                {
+                    "detail_status": "not_selected",
+                    "detail_kind": None,
+                    "selection_reason": "ineligible_preflight",
+                    "failure_reason": result["reason_code"],
+                    "preflight_status": result["status"],
+                    "preflight_node_count": result["node_count"],
+                    "preflight_edge_count": result["edge_count"],
+                }
+            )
+
+    communities = {}
+    source_communities = {}
+    detail_index = {}
+    community_index = {}
+    failures = []
+    attempted_ids = []
+    succeeded_ids = []
+    failed_ids = []
+    published_ids = {"hybrid_only": [], "baseline_only": [], "recovered_by_both": []}
+
+    structural_fallback_published = []
+    structural_fallback_failures = []
+
+    def staged_payload(case_id, cohort):
+        """Return evidence a previous run already published for this case."""
+        if bundle_writer is None or not bundle_writer.has_completed_case(
+            case_id, cohort
+        ):
+            return None
+        return bundle_writer.read_case_payload(case_id)
+
+    def open_attempt(case_id):
+        """Claim the next persisted attempt slot, or None when both are spent.
+
+        The attempt is checkpointed before the work starts, so a run killed
+        mid-case resumes into the deferred-retry slot instead of silently
+        repeating an attempt or replacing the frozen selection.
+        """
+        if bundle_writer is None:
+            return "first_pass"
+        state = bundle_writer.case_attempt_state(case_id)
+        for phase in ("first_pass", "deferred_retry"):
+            if state[phase] == "pending":
+                bundle_writer.begin_case_attempt(case_id, phase)
+                return phase
+        return None
+
+    def store_case_community(community, scoring_day):
+        """Key one community, streaming it into the bundle when one is staged.
+
+        The in-memory store materializes every record and refuses communities
+        over its legacy 10,000-record bound, which real V9 communities exceed;
+        the staged path streams the same evidence in bounded chunks instead.
+        """
+        if bundle_writer is None:
+            return _store_community(
+                communities,
+                source_communities,
+                _schema3_materialize_community(community),
+                scoring_day,
+            )
+        community_key = (
+            community.community_key
+            if isinstance(community, CommunityScope)
+            else community["community_key"]
+        )
+        if community_key not in bundle_writer.community_index:
+            bundle_writer.write_community(_community_stream_source(community))
+        return community_key
+
+    def publish_community_control(
+        case_id,
+        *,
+        cohort,
+        case,
+        technical,
+        selection_reason,
+        published_bucket,
+        failure_bucket,
+        unavailable_reason=None,
+    ):
+        """Publish community-only structural evidence for one selected case."""
+        attempted_ids.append(case_id)
+        record = records[cohort][case_id]
+        try:
+            staged = staged_payload(case_id, cohort)
+            if staged is not None:
+                community_key = staged["community_key"]
+                structural = staged["detail"]
+                _validate_schema3_evidence_boundary(
+                    structural,
+                    technical.anchor.scoring_day,
+                    field_name="staged structural detail",
+                )
+            else:
+                if open_attempt(case_id) is None:
+                    raise RuntimeError(
+                        "selected case exhausted its persisted publication attempts"
+                    )
+                community = explanation_engine.community(
+                    technical.person_id, technical.anchor.scoring_day
+                )
+                community_key = store_case_community(
+                    community, technical.anchor.scoring_day
+                )
+                structural = _schema3_structural_detail(
+                    explanation_engine, technical, community
+                )
+                if bundle_writer is not None:
+                    bundle_writer.write_case(
+                        cohort,
+                        _bundle_case_record(technical, cohort, community_key),
+                        structural_detail=structural,
+                    )
+            record.update(
+                {
+                    "detail_status": "community_only",
+                    "detail_kind": "community_control",
+                    "selection_reason": selection_reason,
+                    "community_key": community_key,
+                    "target_person_id": case.person_id,
+                    # This case has evidence, so failure_reason stays empty and
+                    # the missing GNN explanation is explained separately.
+                    "failure_reason": None,
+                    "explanation_unavailable_reason": unavailable_reason,
+                    # Community-only evidence carries the score ledger for both
+                    # Baseline controls and oversized-Hybrid fallbacks.
+                    "score_ledger": {
+                        "baseline_rank": case.baseline_rank,
+                        "hybrid_rank": case.seed0_hybrid_rank,
+                        "baseline_percentile": case.baseline_percentile,
+                        "hybrid_score": case.seed0_hybrid_score,
+                        "hybrid_score_semantics": "percentile_fusion_not_probability",
+                    },
+                }
+            )
+            community_index[case_id] = {
+                "community_key": community_key,
+                "target_person_id": case.person_id,
+                # Staged runs publish the structural payload as a verified
+                # sidecar, so it is referenced rather than carried inline.
+                **(
+                    {}
+                    if bundle_writer is not None
+                    else {"structural_evidence": structural}
+                ),
+            }
+            published_bucket.append(case_id)
+            succeeded_ids.append(case_id)
+        except Exception as error:
+            failed_ids.append(case_id)
+            record.update(
+                {
+                    "detail_status": "failed",
+                    "detail_kind": "community_control",
+                    "selection_reason": selection_reason,
+                    "community_key": None,
+                    "failure_reason": f"{type(error).__name__}: {error}",
+                }
+            )
+            failure = {
+                "case_id": case_id,
+                "cohort": cohort,
+                "reason_code": type(error).__name__,
+                "message": str(error),
+            }
+            failure_bucket.append(failure)
+            if bundle_writer is not None:
+                bundle_writer.record_failure(failure)
+        finally:
+            # The community payload is fully detached by now, so the day's
+            # tensors can go even though later selected cases may share it.
+            release_day(technical.anchor.scoring_day)
+
+    for case_id in selected_ids["baseline_only"]:
+        publish_community_control(
+            case_id,
+            cohort="baseline_only",
+            case=baseline_cases[case_id],
+            technical=baseline_technical[baseline_cases[case_id].person_id],
+            selection_reason="balanced_frozen_prefix",
+            published_bucket=published_ids["baseline_only"],
+            failure_bucket=failures,
+        )
+
+    stage("baseline_controls_complete", attempted=len(selected_ids["baseline_only"]))
+    stage(
+        "hybrid_structural_fallback_start", attempted=len(structural_fallback_ids)
+    )
+    for case_id in structural_fallback_ids:
+        publish_community_control(
+            case_id,
+            cohort="hybrid_only",
+            case=hybrid_cases[case_id],
+            technical=hybrid_technical[hybrid_cases[case_id].person_id],
+            selection_reason="ineligible_preflight_structural_fallback",
+            published_bucket=structural_fallback_published,
+            failure_bucket=structural_fallback_failures,
+            unavailable_reason=preflight[case_id]["reason_code"],
+        )
+    stage(
+        "hybrid_structural_fallback_complete",
+        attempted=len(structural_fallback_ids),
+        succeeded=len(structural_fallback_published),
+    )
+    stage("hybrid_explanations_start", attempted=len(selected_ids["hybrid_only"]))
+    for case_id in selected_ids["hybrid_only"]:
+        case = hybrid_cases[case_id]
+        technical = hybrid_technical[case.person_id]
+        attempted_ids.append(case_id)
+        try:
+            staged = staged_payload(case_id, "hybrid_only")
+            if staged is not None:
+                # A resumed run must never re-run GNNExplainer or the narrative
+                # for a case whose evidence is already published.
+                explanation = staged["explanation"]
+                community_key = staged["community_key"]
+                # Replay the staged narrative outcome so a resumed run reports
+                # true coverage instead of "no narratives generated".
+                _validate_schema3_evidence_boundary(
+                    explanation,
+                    technical.anchor.scoring_day,
+                    field_name="staged explanation",
+                )
+                narrative_stats["narrative_attempted"] += 1
+                if explanation.get("llm_narrative", {}).get("source") == (
+                    "deterministic_template"
+                ):
+                    narrative_stats["narrative_fallback"] += 1
+                else:
+                    narrative_stats["narrative_generated"] += 1
+            else:
+                if open_attempt(case_id) is None:
+                    raise RuntimeError(
+                        "selected case exhausted its persisted explanation attempts"
+                    )
+                explanation = _explain_case_with_narrative(
+                    technical,
+                    explanation_engine,
+                    narrative_builder,
+                    narrative_stats=narrative_stats,
+                    narrative_preflight_failed=bool(
+                        narrative_stats["narrative_preflight_failed"]
+                    ),
+                )
+                local_community = explanation.pop("community")
+                community = explanation.pop("_community_scope", local_community)
+                expansions = explanation.pop("provenance_expansions", [])
+                _validate_complete_community(
+                    community, technical.anchor.scoring_day
+                )
+                if bundle_writer is None:
+                    community_key = _store_community(
+                        communities,
+                        source_communities,
+                        local_community,
+                        technical.anchor.scoring_day,
+                    )
+                else:
+                    community_key = store_case_community(
+                        community, technical.anchor.scoring_day
+                    )
+                explanation["community_key"] = community_key
+                explanation["provenance_expansion_ids"] = [
+                    expansion["expansion_id"] for expansion in expansions
+                ]
+                if bundle_writer is not None:
+                    bundle_writer.write_case(
+                        "hybrid_only",
+                        _bundle_case_record(
+                            technical, "hybrid_only", community_key, explanation
+                        ),
+                        explanation=explanation,
+                        validation_metadata=explanation["llm_narrative"],
+                        overlay_evidence=_overlay_stream_source(
+                            explanation, local_community, expansions
+                        ),
+                    )
+            record = records["hybrid_only"][case_id]
+            record.update(
+                {
+                    "detail_status": "available",
+                    "detail_kind": "gnn_explanation",
+                    "selection_reason": "balanced_frozen_prefix",
+                    "community_key": community_key,
+                    "target_person_id": case.person_id,
+                }
+            )
+            detail_index[case_id] = {
+                **record,
+                "target_person_id": case.person_id,
+                "explanation": explanation,
+            }
+            published_ids["hybrid_only"].append(case_id)
+            succeeded_ids.append(case_id)
+        except Exception as error:
+            failed_ids.append(case_id)
+            records["hybrid_only"][case_id].update(
+                {
+                    "detail_status": "failed",
+                    "detail_kind": "gnn_explanation",
+                    "selection_reason": "balanced_frozen_prefix",
+                    "failure_reason": f"{type(error).__name__}: {error}",
+                }
+            )
+            failure = {
+                "case_id": case_id,
+                "cohort": "hybrid_only",
+                "reason_code": type(error).__name__,
+                "message": str(error),
+            }
+            failures.append(failure)
+            if bundle_writer is not None:
+                bundle_writer.record_failure(failure)
+        finally:
+            release_day(technical.anchor.scoring_day)
+    stage(
+        "hybrid_explanations_complete",
+        attempted=len(selected_ids["hybrid_only"]),
+        succeeded=len(published_ids["hybrid_only"]),
+        failed=len([item for item in failures if item["cohort"] == "hybrid_only"]),
+    )
+
+    # Structural-fallback cases are not part of the frozen publication
+    # selection, so their failures are reported in the artifact but not fed
+    # back into the selection finalizer.
+    all_failures = list(failures) + list(structural_fallback_failures)
+    selection_final = finalize_recovery_publication(
+        selection,
+        published_ids=published_ids,
+        failures=failures,
+    )
+    selection_policy = selection_final.policy_jsonable()
+    selection_policy.update(
+        {
+            "eligible_hybrid_ids": list(eligible_ids),
+            "eligible_ordered_prefix": list(
+                selection_policy["eligible_ordered_prefix"]
+            ),
+            "preflight": preflight,
+            "selected_ids": {
+                cohort: list(ids) for cohort, ids in selected_ids.items()
+            },
+            "hybrid_structural_fallback_ids": list(structural_fallback_ids),
+            "no_post_failure_replacement": True,
+            "explainer_input_policy": {
+                "max_nodes": MAX_LOCAL_EXPLANATION_NODES,
+                "max_directed_edges": MAX_LOCAL_EXPLANATION_EDGES,
+                "pruning": "none",
+            },
+        }
+    )
+    fingerprint_material = {
+        "schema_version": SCHEMA3,
+        "corpus_identity": str(corpus_identity),
+        "run_identity": run_identity_payload,
+        "as_of_identity": as_of_identity,
+        "percentile_reference_id": reference.percentile_reference_id,
+        "selection": selection_policy,
+        "restart_seeds": list(EXPLAINER_RESTART_SEEDS),
+        "epochs": EXPLAINER_EPOCHS,
+    }
+    engine_fingerprint = getattr(
+        explanation_engine, "observability_fingerprint_material", None
+    )
+    if not callable(engine_fingerprint):
+        raise ValueError(
+            "explanation_engine must support observability_fingerprint_material"
+        )
+    engine_material = _detached_json_object(
+        engine_fingerprint(), field_name="engine fingerprint material"
+    )
+    for field in ("graph_sha256", "model_state_sha256", "rank_reference_fingerprint"):
+        value = engine_material.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"engine fingerprint material requires {field}")
+    fingerprint_material.update(
+        {
+            "checkpoint_id": run_identity_payload.get("checkpoint_id"),
+            "graph_fingerprint": engine_material.get("graph_sha256"),
+            "model_state_fingerprint": engine_material.get("model_state_sha256"),
+            "rank_reference_identity": reference.percentile_reference_id,
+            "eligible_ordered_prefix": list(
+                selection_policy["eligible_ordered_prefix"]
+            ),
+            "selected_ids": {
+                cohort: list(ids) for cohort, ids in selected_ids.items()
+            },
+            "policy": selection_policy,
+            "engine_fingerprint": engine_material,
+            "limits": {
+                "hybrid_detail": hybrid_limit,
+                "baseline_control": baseline_limit,
+            },
+        }
+    )
+    fingerprint = _schema3_identity_token(fingerprint_material, label="schema3")
+    summary = dict(overlap.summary)
+    summary["seed_level_unique_person_recovery"] = seed_recovery
+    coverage = {
+        "hybrid_requested": hybrid_limit,
+        "baseline_requested": baseline_limit,
+        "hybrid_available": len(hybrid_cases),
+        "baseline_available": len(baseline_cases),
+        "hybrid_candidates": len(hybrid_cases),
+        "baseline_candidates": len(baseline_cases),
+        "hybrid_eligible": len(eligible_ids),
+        "hybrid_selected": len(selected_ids["hybrid_only"]),
+        "baseline_selected": len(selected_ids["baseline_only"]),
+        "hybrid_explained": len(published_ids["hybrid_only"]),
+        "baseline_community": len(published_ids["baseline_only"]),
+        "hybrid_structural_fallback_selected": len(structural_fallback_ids),
+        "hybrid_structural_fallback": len(structural_fallback_published),
+        "attempted": len(attempted_ids),
+        "succeeded": len(succeeded_ids),
+        "failed": len(failed_ids),
+        "failed_count": len(all_failures),
+        # Shortfall is measured against the requested limits, so a small
+        # candidate pool is reported as a real shortfall rather than being
+        # silently absorbed by clamping the request to what was available.
+        "shortfall": (
+            max(0, hybrid_limit - len(published_ids["hybrid_only"]))
+            + max(0, baseline_limit - len(published_ids["baseline_only"]))
+        ),
+        "hybrid_shortfall": max(
+            0, hybrid_limit - len(published_ids["hybrid_only"])
+        ),
+        "baseline_shortfall": max(
+            0, baseline_limit - len(published_ids["baseline_only"])
+        ),
+        "shortfall_reasons": [
+            failure["reason_code"] for failure in all_failures
+        ]
+        + (["ineligible_hybrid_candidates"] if len(eligible_ids) < len(hybrid_cases) else []),
+        "narrative_attempted": narrative_stats["narrative_attempted"],
+        "narrative_generated": narrative_stats["narrative_generated"],
+        "narrative_fallback": narrative_stats["narrative_fallback"],
+        "narrative_failed": narrative_stats["narrative_failed"],
+        "narrative_preflight_failed": narrative_stats["narrative_preflight_failed"],
+        "oversized_hybrid": sum(
+            result["reason_code"] in {
+                "node_limit_exceeded",
+                "edge_limit_exceeded",
+                "node_and_edge_limits_exceeded",
+            }
+            for result in preflight.values()
+        ),
+    }
+    if len(hybrid_cases) < hybrid_limit:
+        coverage["shortfall_reasons"].append("insufficient_hybrid_candidates")
+    if len(baseline_cases) < baseline_limit:
+        coverage["shortfall_reasons"].append("insufficient_baseline_candidates")
+    if coverage["shortfall"] and not coverage["shortfall_reasons"]:
+        raise ValueError("schema-3 shortfall must record an explicit reason")
+    artifact = {
+        "schema_version": SCHEMA3,
+        "policy": {
+            "observability_seed": 0,
+            "gnn_arm": "sage",
+            "surrounding_results_seeds": list(seeds),
+            "inspections_per_day": daily_budget,
+            "hybrid_blend_weight": float(reference.blend_weight),
+            "percentile_reference_id": reference.percentile_reference_id,
+            "hybrid_score_semantics": "percentile_fusion_not_probability",
+            "gnnexplainer_restart_seeds": list(EXPLAINER_RESTART_SEEDS),
+            "gnnexplainer_epochs": EXPLAINER_EPOCHS,
+            "selection_policy_version": selection_policy["policy_version"],
+            "recovery_overlap_provenance": "strict_shared_run_and_as_of_identity",
+        },
+        "summary": summary,
+        "coverage": coverage,
+        "cohorts": {
+            cohort: list(records[cohort].values())
+            for cohort in ("hybrid_only", "baseline_only", "recovered_by_both")
+        },
+        "selection": selection_policy,
+        "detail_index": detail_index,
+        "community_index": community_index,
+        "catalog_index": {
+            case_id: {"cohort": record["cohort"], "detail_status": record["detail_status"]}
+            for cohort in records.values()
+            for case_id, record in cohort.items()
+        },
+        "communities": communities,
+        "run_identity": run_identity_payload,
+        "run_fingerprint": {
+            "fingerprint": fingerprint,
+            "material": fingerprint_material,
+        },
+        "generation_diagnostics": {
+            "failed_attempts": all_failures,
+            "preflight": preflight,
+            "stage_transitions": stages,
+            "elapsed_seconds": max(0.0, time.perf_counter() - started),
+            "process_peak_rss_bytes": _process_peak_rss_bytes(),
+            # Highest number of day snapshots the engine held at once. Per-day
+            # release keeps this bounded; unbounded growth here is the OOM
+            # signature that killed earlier full-corpus generation.
+            "snapshot_cache_peak_days": snapshot_peak_days,
+            "snapshot_cache_residual_days": len(
+                getattr(explanation_engine, "cached_snapshot_days", ())
+            ),
+            "counts": {
+                "selected": len(selected_ids["hybrid_only"])
+                + len(selected_ids["baseline_only"]),
+                "attempted": len(attempted_ids),
+                "succeeded": len(succeeded_ids),
+                "failed": len(failed_ids),
+            },
+            "attempted_ids": list(attempted_ids),
+            "succeeded_ids": list(succeeded_ids),
+            "failed_ids": list(failed_ids),
+            "restart_seeds": list(EXPLAINER_RESTART_SEEDS),
+            "epochs": EXPLAINER_EPOCHS,
+            "narrative": dict(narrative_stats),
+        },
+    }
+    stage("artifact_validated")
+    return validate_schema3_artifact(_detached_json_object(artifact, field_name="artifact"))
+
+
+def validate_schema3_artifact(artifact):
+    if not isinstance(artifact, Mapping) or artifact.get("schema_version") != SCHEMA3:
+        raise ValueError("invalid schema-3 observability artifact version")
+    policy = artifact.get("policy")
+    if not isinstance(policy, Mapping) or policy.get("observability_seed") != 0:
+        raise ValueError("invalid schema-3 observability scope")
+    if policy.get("gnn_arm") != "sage" or policy.get("surrounding_results_seeds") != [0, 1, 2]:
+        raise ValueError("invalid schema-3 ensemble provenance")
+    if policy.get("hybrid_score_semantics") != "percentile_fusion_not_probability":
+        raise ValueError("Hybrid score semantics must identify percentile fusion")
+    if policy.get("gnnexplainer_restart_seeds") != [0, 1, 2] or policy.get("gnnexplainer_epochs") != 150:
+        raise ValueError("invalid GNNExplainer policy")
+
+    summary = artifact.get("summary")
+    if not isinstance(summary, Mapping):
+        raise ValueError("schema-3 summary is required")
+    algebra = (
+        ("baseline_recovered", "recovered_by_both", "baseline_only_recovered"),
+        ("hybrid_total", "recovered_by_both", "hybrid_only_recovered"),
+    )
+    if any(
+        not isinstance(summary.get(total), int)
+        or summary[total] != summary[both] + summary[exclusive]
+        for total, both, exclusive in algebra
+    ):
+        raise ValueError("invalid schema-3 overlap algebra")
+    if summary.get("net_gain") != summary["hybrid_total"] - summary["baseline_recovered"]:
+        raise ValueError("invalid schema-3 net gain algebra")
+
+    cohorts = artifact.get("cohorts")
+    cohort_names = {"hybrid_only", "baseline_only", "recovered_by_both"}
+    if not isinstance(cohorts, Mapping) or set(cohorts) != cohort_names:
+        raise ValueError("schema-3 artifact requires exactly three cohorts")
+    expected_lengths = {
+        "hybrid_only": summary["hybrid_only_recovered"],
+        "baseline_only": summary["baseline_only_recovered"],
+        "recovered_by_both": summary["recovered_by_both"],
+    }
+    if any(
+        not isinstance(cohorts[cohort], list)
+        or len(cohorts[cohort]) != expected_lengths[cohort]
+        for cohort in cohort_names
+    ):
+        raise ValueError("schema-3 cohort counts do not match summary")
+
+    run_identity = artifact.get("run_identity")
+    if not isinstance(run_identity, Mapping):
+        raise ValueError("schema-3 run identity is required")
+    corpus_identity = run_identity.get("corpus_identity")
+    if not isinstance(corpus_identity, str) or not corpus_identity:
+        raise ValueError("schema-3 corpus identity is required")
+    checkpoint_id = run_identity.get("checkpoint_id")
+    run_id = run_identity.get("run_id")
+    if (
+        not isinstance(checkpoint_id, str)
+        or not checkpoint_id.strip()
+        or not isinstance(run_id, str)
+        or not run_id.strip()
+    ):
+        raise ValueError("schema-3 checkpoint and run identity are required")
+    reference_id = policy.get("percentile_reference_id")
+    as_of_id = None
+    required = {
+        "baseline_raw", "baseline_percentile", "baseline_rank",
+        "seed0_gnn_probability", "seed0_gnn_percentile", "seed0_gnn_rank",
+        "seed0_hybrid_score", "seed0_hybrid_rank", "detail_status",
+        "provenance", "run_identity",
+    }
+    records_by_id = {}
+    for cohort, records in cohorts.items():
+        for record in records:
+            if not isinstance(record, Mapping) or not required.issubset(record):
+                raise ValueError(f"{cohort} record is missing required score/provenance fields")
+            case_id = record.get("case_id")
+            if not isinstance(case_id, str) or case_id in records_by_id:
+                raise ValueError("schema-3 case IDs must be globally unique")
+            if record.get("cohort") != cohort or record.get("hybrid_score_semantics") != policy["hybrid_score_semantics"]:
+                raise ValueError("schema-3 record cohort or score semantics is invalid")
+            provenance = record.get("provenance")
+            if not isinstance(provenance, Mapping) or record["run_identity"] != run_identity:
+                raise ValueError("schema-3 record provenance identity is invalid")
+            if (
+                provenance.get("corpus_identity") != corpus_identity
+                or provenance.get("run_identity") != run_identity
+                or provenance.get("percentile_reference_id") != reference_id
+                or provenance.get("as_of_identity") is None
+            ):
+                raise ValueError("schema-3 record provenance identity is invalid")
+            if as_of_id is None:
+                as_of_id = provenance["as_of_identity"]
+            elif provenance["as_of_identity"] != as_of_id:
+                raise ValueError("schema-3 as-of provenance identity is inconsistent")
+            for field in (
+                "baseline_raw", "baseline_percentile", "seed0_gnn_probability",
+                "seed0_gnn_percentile", "seed0_hybrid_score",
+            ):
+                value = record[field]
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not np.isfinite(float(value))
+                    or not 0.0 <= float(value) <= 1.0
+                ):
+                    raise ValueError(f"schema-3 {field} must be in [0, 1]")
+            for field in ("baseline_rank", "seed0_gnn_rank", "seed0_hybrid_rank"):
+                if not isinstance(record[field], int) or isinstance(record[field], bool) or record[field] <= 0:
+                    raise ValueError(f"schema-3 {field} must be a positive rank")
+            expected_score = (1.0 - float(policy["hybrid_blend_weight"])) * float(record["baseline_percentile"]) + float(policy["hybrid_blend_weight"]) * float(record["seed0_gnn_percentile"])
+            if not np.isclose(record["seed0_hybrid_score"], expected_score, rtol=1e-9, atol=1e-9):
+                raise ValueError("schema-3 hybrid fusion arithmetic is invalid")
+            if record.get("hybrid_rank_uplift") != record["baseline_rank"] - record["seed0_hybrid_rank"]:
+                raise ValueError("schema-3 hybrid rank arithmetic is invalid")
+            if not np.isclose(record.get("gnn_percentile_uplift"), record["seed0_gnn_percentile"] - record["baseline_percentile"], rtol=1e-9, atol=1e-9):
+                raise ValueError("schema-3 percentile uplift arithmetic is invalid")
+            records_by_id[case_id] = record
+
+    selection = artifact.get("selection")
+    if not isinstance(selection, Mapping) or selection.get("no_post_failure_replacement") is not True:
+        raise ValueError("schema-3 frozen selection is required")
+    selected = selection.get("selected_ids")
+    if not isinstance(selected, Mapping) or set(selected) != cohort_names:
+        raise ValueError("schema-3 selected IDs are required")
+    selected_sets = {}
+    for cohort in cohort_names:
+        ids = selected[cohort]
+        if not isinstance(ids, list) or len(ids) != len(set(ids)) or any(case_id not in records_by_id for case_id in ids):
+            raise ValueError("schema-3 selection IDs do not match cohort summaries")
+        if cohort == "recovered_by_both" and ids:
+            raise ValueError("recovered_by_both is summary-only")
+        selected_sets[cohort] = set(ids)
+    preflight = selection.get("preflight")
+    hybrid_ids = {record["case_id"] for record in cohorts["hybrid_only"]}
+    if not isinstance(preflight, Mapping) or set(preflight) != hybrid_ids:
+        raise ValueError("schema-3 preflight coverage is incomplete")
+    eligible_ids = selection.get("eligible_hybrid_ids")
+    if not isinstance(eligible_ids, list) or len(eligible_ids) != len(set(eligible_ids)) or not set(eligible_ids) <= hybrid_ids:
+        raise ValueError("schema-3 eligible Hybrid prefix is invalid")
+    eligible_ordered_prefix = selection.get("eligible_ordered_prefix")
+    if (
+        not isinstance(eligible_ordered_prefix, list)
+        or len(eligible_ordered_prefix) != len(set(eligible_ordered_prefix))
+        or set(eligible_ordered_prefix) != set(eligible_ids)
+    ):
+        raise ValueError("schema-3 eligible ordered prefix is invalid")
+    for result in preflight.values():
+        if not isinstance(result, Mapping) or set(result) != {"eligible", "status", "node_count", "edge_count", "max_nodes", "max_edges", "reason_code"}:
+            raise ValueError("schema-3 preflight result shape is invalid")
+        if (
+            result["max_nodes"] != MAX_LOCAL_EXPLANATION_NODES
+            or result["max_edges"] != MAX_LOCAL_EXPLANATION_EDGES
+        ):
+            raise ValueError("schema-3 preflight limits must be exact")
+        if any(not isinstance(result[field], int) or isinstance(result[field], bool) or result[field] < 0 for field in ("node_count", "edge_count")):
+            raise ValueError("schema-3 preflight counts are invalid")
+        if result["eligible"] != (
+            result["node_count"] <= MAX_LOCAL_EXPLANATION_NODES
+            and result["edge_count"] <= MAX_LOCAL_EXPLANATION_EDGES
+        ):
+            raise ValueError("schema-3 preflight eligibility is invalid")
+    if not set(selected["hybrid_only"]) <= set(eligible_ids):
+        raise ValueError("schema-3 selected Hybrid cases must be preflight eligible")
+    fallback_ids = selection.get("hybrid_structural_fallback_ids")
+    if (
+        not isinstance(fallback_ids, list)
+        or len(fallback_ids) != len(set(fallback_ids))
+        or not set(fallback_ids) <= hybrid_ids
+        or set(fallback_ids) & selected_sets["hybrid_only"]
+        or set(fallback_ids) & set(eligible_ids)
+    ):
+        raise ValueError("schema-3 Hybrid structural fallback selection is invalid")
+    fallback_set = set(fallback_ids)
+    coverage = artifact.get("coverage")
+    if not isinstance(coverage, Mapping):
+        raise ValueError("schema-3 coverage diagnostics are required")
+    hybrid_requested = coverage.get("hybrid_requested")
+    baseline_requested = coverage.get("baseline_requested")
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in (hybrid_requested, baseline_requested)
+    ):
+        raise ValueError("schema-3 coverage limits are invalid")
+    coverage_counts = (
+        "hybrid_available", "baseline_available", "hybrid_candidates",
+        "baseline_candidates", "hybrid_eligible", "hybrid_selected",
+        "baseline_selected", "hybrid_explained", "baseline_community",
+        "hybrid_structural_fallback_selected", "hybrid_structural_fallback",
+        "attempted", "succeeded", "failed", "failed_count",
+    )
+    if any(
+        not isinstance(coverage.get(field), int)
+        or isinstance(coverage.get(field), bool)
+        or coverage[field] < 0
+        for field in coverage_counts
+    ):
+        raise ValueError("schema-3 coverage counters are invalid")
+    if (
+        coverage["hybrid_available"] != len(cohorts["hybrid_only"])
+        or coverage["baseline_available"] != len(cohorts["baseline_only"])
+        or coverage["hybrid_candidates"] != len(cohorts["hybrid_only"])
+        or coverage["baseline_candidates"] != len(cohorts["baseline_only"])
+        or coverage["hybrid_eligible"] != len(eligible_ids)
+        or coverage["hybrid_selected"] != len(selected["hybrid_only"])
+        or coverage["baseline_selected"] != len(selected["baseline_only"])
+    ):
+        raise ValueError("schema-3 selection coverage counters do not reconcile")
+    if len(selected["hybrid_only"]) + len(fallback_ids) > hybrid_requested:
+        raise ValueError("schema-3 Hybrid detail budget is exceeded")
+    if len(selected["baseline_only"]) > baseline_requested:
+        raise ValueError("schema-3 Baseline detail budget is exceeded")
+
+    detail_index = artifact.get("detail_index", {})
+    community_index = artifact.get("community_index", {})
+    if not isinstance(detail_index, Mapping) or not isinstance(community_index, Mapping):
+        raise ValueError("schema-3 detail indexes must be objects")
+    if not set(detail_index) <= selected_sets["hybrid_only"] or not set(community_index) <= (
+        selected_sets["baseline_only"] | fallback_set
+    ):
+        raise ValueError("schema-3 detail indexes are not frozen cohort subsets")
+    forbidden_baseline = {
+        "explanation", "llm_narrative", "overlay", "overlay_evidence",
+        "attributions", "factors", "stability", "faithfulness", "mask",
+        "masks", "node_masks", "edge_masks",
+    }
+
+    def _contains_forbidden_fields(value):
+        if isinstance(value, Mapping):
+            if forbidden_baseline.intersection(value):
+                return True
+            return any(_contains_forbidden_fields(child) for child in value.values())
+        if isinstance(value, list):
+            return any(_contains_forbidden_fields(child) for child in value)
+        return False
+
+    for case_id, record in records_by_id.items():
+        selected_status = record["detail_status"]
+        if case_id in selected_sets["hybrid_only"]:
+            if selected_status not in {"available", "failed"} or record.get("detail_kind") != "gnn_explanation":
+                raise ValueError("schema-3 Hybrid detail_status is inconsistent with selection")
+            if selected_status == "available" and case_id not in detail_index:
+                raise ValueError("schema-3 detail_status=available Hybrid detail is missing")
+        elif case_id in selected_sets["baseline_only"]:
+            if selected_status not in {"community_only", "failed"} or record.get("detail_kind") != "community_control":
+                raise ValueError("schema-3 Baseline detail_status is inconsistent with selection")
+            if selected_status == "community_only" and case_id not in community_index:
+                raise ValueError("schema-3 available Baseline control is missing")
+            if _contains_forbidden_fields(record):
+                raise ValueError("Baseline records must not contain explanation fields")
+        elif case_id in fallback_set:
+            if selected_status not in {"community_only", "failed"} or record.get("detail_kind") != "community_control":
+                raise ValueError("schema-3 Hybrid structural fallback detail_status is inconsistent with selection")
+            if record.get("selection_reason") != "ineligible_preflight_structural_fallback":
+                raise ValueError("schema-3 Hybrid structural fallback selection reason is invalid")
+            if selected_status == "community_only" and case_id not in community_index:
+                raise ValueError("schema-3 Hybrid structural fallback evidence is missing")
+            if _contains_forbidden_fields(record):
+                raise ValueError(
+                    "Hybrid structural fallback records must not contain explanation fields"
+                )
+        else:
+            if (
+                record["detail_status"] != "not_selected"
+                or record.get("detail_kind") is not None
+            ):
+                raise ValueError("schema-3 unselected detail_status is invalid")
+    for case_id, detail in detail_index.items():
+        if (
+            detail.get("cohort") != "hybrid_only"
+            or detail.get("detail_status") != "available"
+            or case_id not in selected_sets["hybrid_only"]
+            or "explanation" not in detail
+            or case_id in set(
+                item.get("case_id")
+                for item in artifact.get("generation_diagnostics", {}).get(
+                    "failed_attempts", []
+                )
+                if isinstance(item, Mapping)
+            )
+        ):
+            raise ValueError("schema-3 Hybrid detail is invalid")
+    for case_id, detail in community_index.items():
+        expected_cohort = (
+            "hybrid_only" if case_id in fallback_set else "baseline_only"
+        )
+        if (
+            records_by_id[case_id].get("cohort") != expected_cohort
+            or records_by_id[case_id].get("detail_status") != "community_only"
+            or records_by_id[case_id].get("community_key") != detail.get("community_key")
+            or detail.get("target_person_id") != records_by_id[case_id]["person_id"]
+        ):
+            raise ValueError("community control target identity must be case-local")
+        if _contains_forbidden_fields(detail):
+            raise ValueError("Baseline controls must not contain explanation fields")
+
+    communities = artifact.get("communities", {})
+    if not isinstance(communities, Mapping):
+        raise ValueError("schema-3 communities must be an object")
+
+    def _reject_nested_target_markers(value):
+        if isinstance(value, Mapping):
+            if "target" in value or "target_person_id" in value:
+                raise ValueError("target markers must remain case-local")
+            for child in value.values():
+                _reject_nested_target_markers(child)
+        elif isinstance(value, list):
+            for child in value:
+                _reject_nested_target_markers(child)
+
+    for community in communities.values():
+        if not isinstance(community, Mapping):
+            raise ValueError("schema-3 community payload must be an object")
+        _reject_nested_target_markers(community)
+
+    catalog = artifact.get("catalog_index")
+    if not isinstance(catalog, Mapping) or set(catalog) != set(records_by_id):
+        raise ValueError("schema-3 catalog index does not reconcile")
+    for case_id, record in records_by_id.items():
+        catalog_record = catalog.get(case_id)
+        if not isinstance(catalog_record, Mapping) or catalog_record != {
+            "cohort": record["cohort"],
+            "detail_status": record["detail_status"],
+        }:
+            raise ValueError("schema-3 catalog index does not reconcile")
+
+    diagnostics = artifact.get("generation_diagnostics")
+    if not isinstance(diagnostics, Mapping):
+        raise ValueError("schema-3 coverage diagnostics are required")
+    expected_attempted_ids = diagnostics.get("attempted_ids")
+    expected_succeeded_ids = diagnostics.get("succeeded_ids")
+    expected_failed_ids = diagnostics.get("failed_ids")
+    if any(
+        not isinstance(ids, list) or len(ids) != len(set(ids))
+        for ids in (expected_attempted_ids, expected_succeeded_ids, expected_failed_ids)
+    ):
+        raise ValueError("schema-3 generation ID counters are invalid")
+    if set(expected_attempted_ids) != set(selected["hybrid_only"]) | set(selected["baseline_only"]) | fallback_set:
+        raise ValueError("schema-3 attempted counter does not reconcile")
+    if set(expected_succeeded_ids) & set(expected_failed_ids):
+        raise ValueError("schema-3 succeeded and failed counters overlap")
+    if set(expected_succeeded_ids) | set(expected_failed_ids) != set(expected_attempted_ids):
+        raise ValueError("schema-3 generation counters do not reconcile")
+    published_fallback = fallback_set & set(community_index)
+    if coverage.get("hybrid_explained") != len(detail_index) or coverage.get(
+        "baseline_community"
+    ) != len(community_index) - len(published_fallback):
+        raise ValueError("schema-3 coverage counters do not reconcile")
+    if coverage.get("hybrid_structural_fallback_selected") != len(fallback_ids) or coverage.get(
+        "hybrid_structural_fallback"
+    ) != len(published_fallback):
+        raise ValueError("schema-3 structural fallback counters do not reconcile")
+    if coverage.get("attempted") != len(expected_attempted_ids) or coverage.get("succeeded") != len(expected_succeeded_ids) or coverage.get("failed") != len(expected_failed_ids):
+        raise ValueError("schema-3 coverage counters do not reconcile")
+    if coverage.get("failed_count") != len(expected_failed_ids):
+        raise ValueError("schema-3 failure counter does not reconcile")
+    hybrid_shortfall = max(0, hybrid_requested - len(detail_index))
+    baseline_shortfall = max(
+        0, baseline_requested - (len(community_index) - len(published_fallback))
+    )
+    if (
+        coverage.get("hybrid_shortfall") != hybrid_shortfall
+        or coverage.get("baseline_shortfall") != baseline_shortfall
+        or coverage.get("shortfall") != hybrid_shortfall + baseline_shortfall
+    ):
+        raise ValueError("schema-3 shortfall totals do not reconcile")
+    shortfall_reasons = coverage.get("shortfall_reasons")
+    if not isinstance(shortfall_reasons, list) or (
+        coverage["shortfall"] and not shortfall_reasons
+    ):
+        raise ValueError("schema-3 shortfall must record an explicit reason")
+    narrative = diagnostics.get("narrative", {})
+    if not isinstance(narrative, Mapping) or (
+        narrative.get("narrative_attempted")
+        != narrative.get("narrative_generated", 0)
+        + narrative.get("narrative_fallback", 0)
+    ):
+        raise ValueError("schema-3 narrative counters do not reconcile")
+    fingerprint = artifact.get("run_fingerprint")
+    material = fingerprint.get("material") if isinstance(fingerprint, Mapping) else None
+    if not isinstance(fingerprint, Mapping) or not isinstance(material, Mapping):
+        raise ValueError("schema-3 fingerprint material is required")
+    for field in ("schema_version", "checkpoint_id", "corpus_identity", "run_identity", "as_of_identity", "percentile_reference_id", "graph_fingerprint", "model_state_fingerprint", "rank_reference_identity", "eligible_ordered_prefix", "selected_ids", "selection", "policy", "engine_fingerprint", "restart_seeds", "epochs", "limits"):
+        if field not in material:
+            raise ValueError(f"schema-3 fingerprint is missing {field}")
+    if (
+        material["corpus_identity"] != corpus_identity
+        or material["checkpoint_id"] != checkpoint_id
+        or material["selected_ids"] != {cohort: list(ids) for cohort, ids in selected.items()}
+        or material["rank_reference_identity"] != reference_id
+        or any(
+            material.get(field) in (None, "")
+            for field in (
+                "graph_fingerprint",
+                "model_state_fingerprint",
+                "rank_reference_identity",
+            )
+        )
+    ):
+        raise ValueError("schema-3 fingerprint identity is inconsistent")
+    # The fingerprint hashes its own material, so authenticating the token only
+    # proves the material is self-consistent. Bind the material to what the
+    # artifact actually published, otherwise selection, preflight, policy, and
+    # limit tampering all survive an authentic-looking fingerprint.
+    engine_material = material["engine_fingerprint"]
+    if (
+        material["schema_version"] != SCHEMA3
+        or material["run_identity"] != run_identity
+        or (as_of_id is not None and material["as_of_identity"] != as_of_id)
+        or material["percentile_reference_id"] != reference_id
+        or material["eligible_ordered_prefix"] != eligible_ordered_prefix
+        or material["selection"] != selection
+        or material["policy"] != selection
+        or material["restart_seeds"] != policy["gnnexplainer_restart_seeds"]
+        or material["epochs"] != policy["gnnexplainer_epochs"]
+        or material["limits"] != {
+            "hybrid_detail": hybrid_requested,
+            "baseline_control": baseline_requested,
+        }
+        or not isinstance(engine_material, Mapping)
+        or engine_material.get("graph_sha256") != material["graph_fingerprint"]
+        or engine_material.get("model_state_sha256") != material["model_state_fingerprint"]
+    ):
+        raise ValueError("schema-3 fingerprint does not bind the published artifact")
+    expected_fingerprint = _schema3_identity_token(material, label="schema3")
+    if fingerprint.get("fingerprint") != expected_fingerprint:
+        raise ValueError("schema-3 fingerprint authentication failed")
+    json.dumps(artifact, sort_keys=True, allow_nan=False)
+    return artifact
+
+
 def explain_representatives(
     cases,
     explanation_engine,
@@ -686,7 +2268,14 @@ def explain_representatives(
     return explanations, failures
 
 
-def _explain_case_with_narrative(case, explanation_engine, narrative_builder):
+def _explain_case_with_narrative(
+    case,
+    explanation_engine,
+    narrative_builder,
+    *,
+    narrative_stats=None,
+    narrative_preflight_failed=False,
+):
     raw_explanation = explain_case(explanation_engine, case)
     community_scope = getattr(raw_explanation, "community_scope", None)
     explanation = _detached_json_object(
@@ -712,10 +2301,33 @@ def _explain_case_with_narrative(case, explanation_engine, narrative_builder):
     builder_packet = _detached_json_object(
         fact_packet, field_name="narrative builder fact packet"
     )
-    narrative = _detached_json_object(
-        narrative_builder(builder_packet), field_name="narrative"
-    )
-    _validate_grounded_narrative(fact_packet, narrative)
+    if narrative_stats is not None:
+        narrative_stats["narrative_attempted"] += 1
+    try:
+        if narrative_preflight_failed:
+            raise RuntimeError("narrative preflight failed")
+        narrative = _detached_json_object(
+            narrative_builder(builder_packet), field_name="narrative"
+        )
+        _validate_grounded_narrative(fact_packet, narrative)
+        if narrative_stats is not None:
+            narrative_stats["narrative_generated"] += 1
+    except Exception:
+        if narrative_stats is not None:
+            narrative_stats["narrative_fallback"] += 1
+        try:
+            narrative = _detached_json_object(
+                render_template(builder_packet), field_name="narrative fallback"
+            )
+            narrative["source"] = "deterministic_template"
+            narrative["model"] = None
+            narrative["prompt_version"] = PROMPT_VERSION
+            narrative["validated"] = True
+            _validate_grounded_narrative(fact_packet, narrative)
+        except Exception:
+            if narrative_stats is not None:
+                narrative_stats["narrative_failed"] += 1
+            raise
     explanation["llm_narrative"] = narrative
     _validate_complete_explanation(explanation)
     if community_scope is not None:
@@ -817,6 +2429,8 @@ def serialize_artifact(
 
 
 def validate_artifact_invariants(artifact):
+    if isinstance(artifact, Mapping) and artifact.get("schema_version") == SCHEMA3:
+        return validate_schema3_artifact(artifact)
     if artifact.get("schema_version") != "2.0":
         raise ValueError("invalid observability artifact schema version")
     policy = artifact.get("policy", {})
@@ -975,8 +2589,38 @@ def build_observability_artifact(
     explanation_limit=None,
     inspections_per_day=5,
     narrative_builder=generate_narrative,
+    schema_version=SCHEMA2,
+    hybrid_detail_limit=None,
+    baseline_control_limit=None,
+    corpus_identity="in_memory_fixture",
+    recovery_run_identity=None,
+    instrumentation=None,
+    narrative_preflight=None,
 ):
     """Build the legacy in-memory artifact for small fixtures and adapters only."""
+    if str(schema_version) == SCHEMA3:
+        return _build_schema3_artifact(
+            pool=pool,
+            baseline_raw=baseline_raw,
+            seed0_gnn_raw=seed0_gnn_raw,
+            blend_weight=blend_weight,
+            caught_times=caught_times,
+            gnn_arm=gnn_arm,
+            surrounding_seeds=surrounding_seeds,
+            explanation_engine=explanation_engine,
+            seed_level_unique_person_recovery=seed_level_unique_person_recovery,
+            explanation_limit=explanation_limit,
+            hybrid_detail_limit=hybrid_detail_limit,
+            baseline_control_limit=baseline_control_limit,
+            inspections_per_day=inspections_per_day,
+            narrative_builder=narrative_builder,
+            corpus_identity=corpus_identity,
+            recovery_run_identity=recovery_run_identity,
+            instrumentation=instrumentation,
+            narrative_preflight=narrative_preflight,
+        )
+    if str(schema_version) != SCHEMA2:
+        raise ValueError("unsupported observability artifact schema version")
     seeds = _validated_scope(gnn_arm, surrounding_seeds)
     limit = _explanation_limit(explanation_limit)
     daily_budget = _positive_integer(
@@ -1279,6 +2923,105 @@ def _recovery_run_fingerprint(
     }
 
 
+def _build_schema3_bundle(
+    *,
+    pool,
+    baseline_raw,
+    seed0_gnn_raw,
+    blend_weight,
+    caught_times,
+    gnn_arm,
+    surrounding_seeds,
+    explanation_engine,
+    seed_level_unique_person_recovery,
+    staging_root,
+    final_root,
+    explanation_limit,
+    hybrid_detail_limit,
+    baseline_control_limit,
+    inspections_per_day,
+    narrative_builder,
+    corpus_identity,
+    recovery_run_identity,
+    instrumentation,
+    narrative_preflight,
+    writer_factory,
+):
+    """Stage, resume, and atomically publish the balanced schema-3 bundle.
+
+    Selected-case evidence is checkpointed as it is produced, so an
+    interrupted run resumes without repeating GNNExplainer or narrative work,
+    and communities stream into the bundle instead of being materialized in
+    memory.
+    """
+    seeds = _validated_scope(gnn_arm, surrounding_seeds)
+    hybrid_limit, baseline_limit = _resolve_schema3_limits(
+        explanation_limit, hybrid_detail_limit, baseline_control_limit
+    )
+    run_fingerprint = _recovery_run_fingerprint(
+        explanation_engine,
+        corpus_identity=corpus_identity,
+        seeds=seeds,
+        recovery_run_identity=recovery_run_identity,
+    )
+    # The staging identity has to change with the requested balance, otherwise
+    # a 20/10 run could resume into a bundle staged for different limits.
+    run_fingerprint["policy"] = {
+        **run_fingerprint["policy"],
+        "schema_version": SCHEMA3,
+        "hybrid_detail_limit": hybrid_limit,
+        "baseline_control_limit": baseline_limit,
+    }
+    fingerprint_bytes = json.dumps(
+        run_fingerprint, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    fingerprint_id = hashlib.sha256(fingerprint_bytes).hexdigest()[:24]
+    writer = writer_factory(
+        Path(staging_root) / fingerprint_id,
+        final_root,
+        run_fingerprint=run_fingerprint,
+        sidecar_prefix="recovery",
+    )
+    artifact = _build_schema3_artifact(
+        pool=pool,
+        baseline_raw=baseline_raw,
+        seed0_gnn_raw=seed0_gnn_raw,
+        blend_weight=blend_weight,
+        caught_times=caught_times,
+        gnn_arm=gnn_arm,
+        surrounding_seeds=surrounding_seeds,
+        explanation_engine=explanation_engine,
+        seed_level_unique_person_recovery=seed_level_unique_person_recovery,
+        explanation_limit=explanation_limit,
+        hybrid_detail_limit=hybrid_detail_limit,
+        baseline_control_limit=baseline_control_limit,
+        inspections_per_day=inspections_per_day,
+        narrative_builder=narrative_builder,
+        corpus_identity=corpus_identity,
+        recovery_run_identity=recovery_run_identity,
+        instrumentation=instrumentation,
+        narrative_preflight=narrative_preflight,
+        bundle_writer=writer,
+    )
+    selection = artifact["selection"]
+    manifest = writer.finalize_schema3(
+        selected_hybrid_case_ids=selection["selected_ids"]["hybrid_only"],
+        selected_baseline_case_ids=selection["selected_ids"]["baseline_only"],
+        hybrid_structural_fallback_case_ids=selection[
+            "hybrid_structural_fallback_ids"
+        ],
+        cohorts=artifact["cohorts"],
+        policy=artifact["policy"],
+        coverage=artifact["coverage"],
+        summary=artifact["summary"],
+        run_fingerprint=artifact["run_fingerprint"],
+    )
+    compact = _detached_json_object(manifest, field_name="bundle manifest")
+    if "communities" in compact or "explanations" in compact:
+        raise ValueError("production observability manifest must remain compact")
+    return compact
+
+
 def build_observability_bundle(
     *,
     pool,
@@ -1297,9 +3040,40 @@ def build_observability_bundle(
     explanation_limit=None,
     inspections_per_day=5,
     narrative_builder=generate_narrative,
+    schema_version=SCHEMA2,
+    hybrid_detail_limit=None,
+    baseline_control_limit=None,
+    instrumentation=None,
+    narrative_preflight=None,
     writer_factory=RecoveryBundleWriter,
 ):
     """Incrementally build and publish the production recovery bundle."""
+    if str(schema_version) == SCHEMA3:
+        return _build_schema3_bundle(
+            pool=pool,
+            baseline_raw=baseline_raw,
+            seed0_gnn_raw=seed0_gnn_raw,
+            blend_weight=blend_weight,
+            caught_times=caught_times,
+            gnn_arm=gnn_arm,
+            surrounding_seeds=surrounding_seeds,
+            explanation_engine=explanation_engine,
+            seed_level_unique_person_recovery=seed_level_unique_person_recovery,
+            staging_root=staging_root,
+            final_root=final_root,
+            explanation_limit=explanation_limit,
+            hybrid_detail_limit=hybrid_detail_limit,
+            baseline_control_limit=baseline_control_limit,
+            inspections_per_day=inspections_per_day,
+            narrative_builder=narrative_builder,
+            corpus_identity=corpus_identity,
+            recovery_run_identity=recovery_run_identity,
+            instrumentation=instrumentation,
+            narrative_preflight=narrative_preflight,
+            writer_factory=writer_factory,
+        )
+    if str(schema_version) != SCHEMA2:
+        raise ValueError("unsupported observability bundle schema version")
     seeds = _validated_scope(gnn_arm, surrounding_seeds)
     limit = _explanation_limit(explanation_limit)
     daily_budget = _positive_integer(

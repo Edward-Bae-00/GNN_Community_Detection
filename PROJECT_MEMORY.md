@@ -184,128 +184,253 @@
   fusion weight, and GNN run settings) was removed from the presentation layer;
   those values remain in the published JSON for provenance.
 
-## 2026-08-03: explainer ceiling raised to 512/1024 and the graph got a real layout
+## 2026-08-02: schema-3 balanced explainability producer review and repair
 
-- `MAX_LOCAL_EXPLANATION_NODES` / `_EDGES` moved from 128/256 to **512/1024** here
-  and in the schema-3 producer package at
-  `~/Desktop/v9_observability_colab_schema3` (`MAX_EXPLAINER_INPUT_NODES/EDGES`,
-  which the display bounds are defined from). The two copies must move together:
-  the producer writes the display projection at its ceiling and this repo reads
-  it back, so a lower bound here would silently mean "top among displayed
-  records" rather than top in the explanation. The driver was the exact-20
-  coverage gate, which needs >= 20 candidates to pass explainer preflight; at
-  128/256 only 10 of 268 did.
-- 512/1024 was chosen from the **display** side, not from measured candidate
-  sizes. Past roughly 1024 nodes the community canvas stops being interpretable,
-  and because selection freezes 20 cases with no post-failure replacement, a
-  bigger ceiling admits large graphs that can then be *selected* and time out.
-- **`CommunityScope.iter_nodes` never had a layout.** It placed nodes on a
-  `sqrt(N)` grid in sorted `node_id` order -- position encoded alphabetical rank,
-  so every edge was a line between two unrelated cells -- and the grid was sized
-  from the whole community while only the bounded projection is drawn.
-  `display_hop_ring_layout` replaces it for the projection: target centred, one
-  ring per `message_distance`, each ring ordered so a node sits in the arc of its
-  lowest-id neighbour one ring in. Rings over 120 nodes spread across up to 4
-  concentric sub-rings; 480 hop-2 nodes on a single circle render as a solid
-  band. `iter_nodes` keeps its grid because it must stay a whole-community stream
-  for the chunked sidecars.
-- The layout exists **three** times: Python in `gnn/sage_explainer.py`, a
-  byte-identical copy in the producer package, and a JS port
-  (`recoveryHopRingLayout`) in `Documents/Data/scripts/v9_recovery_explainer_ui.py`.
-  The UI recomputes rather than trusting payload `x`/`y` so artifacts published
-  before this change still render structurally, falling back to payload
-  coordinates only when `message_distance` is missing.
-  `tests/test_recovery_layout_parity.py` fails if they drift -- verified by
-  unlinking the JS radius constant and watching 5 tests fail, then reverting.
-- Recovery graph panel additions, all in the UI script: importance-ordered edge
-  drawing, viewport culling, density-scaled ink and node radii, a strided auto
-  label budget (taking the first N crowded every label onto one arc), hover
-  tooltip, click-to-focus neighbourhood dimming, a node/relation legend, a
-  "N nodes / M edges drawn" readout that flags when the display bound was hit,
-  and a responsive `clamp()` canvas height replacing the fixed 410px.
-- Verified with the headless-Chrome pattern above against a synthetic 513-node /
-  1024-edge community. Suites: this repo 978 passed / 1 skipped; producer package
-  62 passed. NOTE: run this repo's tests as `.venv/bin/python -m pytest`;
-  `.venv/bin/pytest` leaves the repo off `sys.path` and 16 dashboard-builder
-  tests fail with `ModuleNotFoundError: No module named 'gnn'`.
+- The schema-3 producer and downstream bundle/dashboard work live uncommitted
+  on `feature/v9-balanced-explainability` (superpowers worktree). Tasks 1-7 are
+  implemented; Task 8 (full regeneration and result-specific docs) remains
+  pending because no full V9 generation has been run. Per-case resume state is
+  still deferred.
+- Durable decisions made while repairing the producer:
+  - The Hybrid detail budget is a single frozen budget of `hybrid_detail_limit`.
+    Eligible candidates fill it with GNNExplainer evidence; any remaining slots
+    are filled deterministically with community-only structural fallbacks for
+    preflight-ineligible (oversized) candidates. Both selections are frozen
+    before any explanation work, so this is not post-failure replacement.
+    Candidates beyond the budget stay `not_selected` with
+    `selection_reason="ineligible_preflight"` and claim no evidence.
+  - `community_index` may therefore contain `hybrid_only` case IDs. The
+    deferred schema-3 sidecar validator must not assume it is baseline-only.
+  - Coverage shortfall is measured against the requested limits, never against
+    the clamped candidate pool, and a nonzero shortfall must carry a reason.
+  - The run fingerprint is cross-checked against the published selection,
+    preflight, policy, and limits. Recomputing the token alone only proves the
+    material is self-consistent.
+  - The structural-community compatibility shim is gated on
+    `explanation_engine.schema3_test_adapter is True`; production extraction
+    errors surface as failed cases instead of degraded evidence.
+  - Baseline controls must measure zero explainer work in the benchmark rather
+    than assert it. `_baseline_explainer_monitor` hooks the model encoder and
+    the explainer entry points and raises on any nonzero count.
+- Known, unaddressed: the fingerprint material stores the full selection policy
+  twice in addition to `artifact["selection"]`, so the per-candidate preflight
+  map is triplicated in the artifact. This remains a fingerprint-contract
+  compatibility tradeoff, not a correctness failure.
+- The schema-3 sidecar validator accepts Hybrid structural-fallback case IDs,
+  schema-3 sidecars are packaged atomically with lazy case/community refs, and
+  the dashboard has a schema-specific view model/mount that keeps technical
+  Hybrid detail separate from structural-only controls. Explicit schema-3
+  bundle refs are verified before publication, and explainer limits are sourced
+  from `sage_explainer` constants.
+- Verified green in the focused environment: 771 tests across schema-3,
+  recovery-observability, recovery-bundle, benchmark, sage-explainer, dashboard
+  builder, and recovery UI suites. No full V9 generation has been run, so no
+  coverage numbers are published yet.
+  No full V9 generation has been run, so no coverage numbers are published yet.
 
-## 2026-08-03: Overview tab was rendering twice on every load
+## 2026-08-02: schema-3 producer audit — snapshot lifecycle, staging, resume
 
-- `_rewrite_nav_js` (build_v9_dashboard.py) swaps the template's flat tab binding
-  for delegated hash routing ending in
-  `(function(){const n=_tabFromHash();_navigateTo(n||'overview');})();`. The
-  template's own trailing `Tabs.overview.render();Tabs.overview.rendered=true;`
-  was left in place one line below. `switchTab` guards on `Tabs[name].rendered`,
-  that trailing call does not, and the tab renderers (`makeMetrics`,
-  `makeSection`) APPEND to the tab element rather than replacing its contents.
-  Net effect: every visitor landed on an Overview carrying two metric rows, two
-  Outcome Funnels, and two of each bar chart. `_rewrite_nav_js` now strips the
-  redundant bootstrap; the routed IIFE owns the initial render for every entry
-  point including deep links like `#seizures`.
-- Removal is tolerant, not strict. The minimal template fixture in
-  test_v9_dashboard_builder.py has the nav binding but no overview bootstrap, so
-  raising on absence breaks two builder tests. Nothing to de-duplicate is not an
-  error.
-- Guarded by
-  `test_generated_dashboard_renders_the_overview_tab_exactly_once`. That test
-  reads the BUILT `Documents/Data/v9_dashboard/index.html`, so
-  `build_v9_dashboard.py` must be re-run before it reflects a source change.
-- **Do not "fix" the Overview bar-chart palette.** The multi-hue bars look like a
-  one-accent-rule violation but `C.node` in the base template is a semantic map
-  (person emerald, event blue, document purple, vehicle orange, location sky,
-  business rose) shared with the network canvas and Community Explorer.
-  Recolouring the bars to a single hue would break the encoding. The
-  all-emerald EDGE TYPES chart next to it is correct for the same reason: edge
-  types have no per-type colour.
-- `—` as a null-value placeholder in explorer data rows is a deliberate data-UI
-  convention and stays. Only prose em-dashes were replaced, and those live in
-  `explorer_ui.py`, which reaches the page through `build_dashboard.py` (corpus
-  template), not `build_v9_dashboard.py`.
+Independent review of the schema-3 work above. The five repairs it claims
+(fingerprint cross-binding, oversized-Hybrid structural fallback, test-only
+adapter gating, shortfall-vs-requested, measured Baseline explainer counts)
+were verified present and correct in the code, not just asserted.
 
-## 2026-08-03: seed-0 evidence audit readability pass
+Three defects remained, all in the producer-to-bundle seam:
 
-- **The design system could not be used to fix this panel, and that was the
-  root cause of the small type.** `v9_design_system.py` `_TYPE_SCALE` carried a
-  block of `#tab-v9Results .v9-recovery-*` font-size rules. That sheet is
-  injected at byte ~410k of the built `index.html`, the panel's own sheet at
-  ~19k, and the selectors are equal specificity, so the design system silently
-  won every tie and editing the panel at source had no effect. The panel now
-  owns its type in `v9_recovery_explainer_ui.py`; `_TYPE_SCALE` keeps only the
-  `.xp-*` entries. Two guards enforce this:
-  `test_this_panel_owns_its_type_and_holds_the_ten_pixel_floor` (no sub-10px in
-  the panel sheet) and `test_this_layer_does_not_restyle_recovery_explorer_type`
-  (no `.v9-recovery-*` font-size in the design system). Both were verified to
-  fail on an injected regression. Do not reinstate recovery font-size rules in
-  the design system layer.
-- `var(--text3)` and `var(--text-dim)` are banned in this panel's CSS by
-  `test_essential_explorer_labels_use_the_contrast_safe_text_token`. Use
-  `var(--text2)` for the dimmest label.
-- **Rank direction was the worst comprehension defect and it was not visual.**
-  The case list showed `B 37 G 41 H 23` beside a `+14 ranks` badge, so an
-  improvement made the number fall while the badge rose, with nothing saying
-  which direction was good. Ranks are now labelled chips coloured with the
-  existing `--data-baseline` / `--data-gnn` / `--data-hybrid` tokens, and both
-  the rail and the case header state that rank 1 is inspected first.
-- The evidence area is a vertical stack: graph full width, then a 3-up row of
-  factors / narrative / attribution. Side by side, the 780px canvas left a
-  matching column of empty background and a 512-node community got about half
-  the width it needs. `renderDetail` still CALLS the renderers in the old order
-  (factors, narrative, attribution, then graph) and appends the graph container
-  first, because `test_detail_stops_before_evidence_renderers_when_boundary_is_invalid`
-  and `test_highest_attribution_renderer_contract_is_shared_by_schema_paths`
-  assert call ordering. Keep DOM order and call order decoupled here.
-- `.v9-recovery-case-list` must keep an explicit `max-height`. An auto grid row
-  sizes to its items' max-content, so an unbounded list stretches the whole
-  workspace to fit all 593 cases at once; `min-height:0` on the rail does not
-  prevent this.
-- A single-node community now renders a written empty state instead of a
-  full-height black canvas with one dot in it. The currently published artifact
-  hits this path for its one explained case.
-- **No test exercises this panel's DOM.** `_run_ui` runs pure functions in node
-  and the rest is string-token assertions, so render bugs are only caught by
-  eye. Verification harnesses live in the session scratchpad pattern: isolate
-  `#v9-case-evidence` in the built page for the real-data view, and mount the
-  panel standalone against `_valid_recovery_artifact()` with a synthetic
-  multi-hop community for the canvas view. When faking a community, rewrite
-  `flow_stages` node/edge ids to match or the view model returns
-  `invalid-flow-stages`.
+- **Unbounded day snapshots (the reason no full V9 run finished).**
+  `_build_schema3_artifact` never called `release_snapshot`, unlike the
+  schema-2 `run_pass`. Preflight measures the exact two-hop input for every
+  Hybrid candidate, so the engine cached one `DaySnapshot` per candidate
+  scoring day with no eviction — reintroducing the exit-137 OOM that per-day
+  release had already resolved at ~5.2 GiB peak. Preflight now walks candidates
+  in scoring-day order and releases each day after its group; the detail
+  phases release per case. `generation_diagnostics.snapshot_cache_peak_days`
+  records the high-water mark, and `release_snapshot` is now a required
+  engine capability for schema 3 exactly as it is for schema 2.
+- **`finalize_schema3` was dead code.** `build_observability_bundle`'s schema-3
+  branch ignored `staging_root`, `final_root`, and `writer_factory` and
+  returned a monolithic in-memory artifact. That path also routes communities
+  through `_store_community`, whose legacy 10,000-record bound is smaller than
+  real V9 communities (the giant benchmark measured a 6,952-node Hybrid
+  community), so large cases would have failed. `_build_schema3_bundle` now
+  stages through `RecoveryBundleWriter`, streams communities, and publishes via
+  `finalize_schema3`. The published manifest is verified end to end against the
+  real `publish_prepackaged_schema3_manifest`, not a stub.
+- **Per-case resume state was never persisted.** Selected cases now claim a
+  checkpointed attempt slot before any work (`first_pass`, then
+  `deferred_retry` on resume) and completed cases are served from their staged
+  sidecar, so an interrupted run never re-runs GNNExplainer or Gemma for
+  evidence it already published. Staged narrative outcomes are replayed into
+  the coverage counters so a resumed run does not report zero narratives.
+
+Durable decisions:
+
+- `build_observability_artifact(schema_version="3.0")` stays the in-memory
+  fixture path (no writer, inline communities). `build_observability_bundle`
+  is the production path and always stages. Do not merge them.
+- The staging identity folds in the schema version and the 20/10 limits, so a
+  run with different limits can never resume into another run's bundle.
+- Resume applies only to an interrupted run. A successful `finalize_schema3`
+  moves staging into the published bundle and deletes it; re-running then
+  reproduces the same bundle ID idempotently.
+- `python -m gnn.run_demo observability <checkpoint>` is the entry point for
+  schema-3 generation and defaults to `3.0` with 20/10. The library defaults
+  stay at `2.0` for legacy callers.
+
+Still open: Task 8 (full regeneration, dashboard rebuild, and the
+`changes_3.md` coverage entry) has not been run.
+
+## 2026-08-02: clean schema-3 Colab handoff
+
+- The runnable handoff is `/Users/edward/Desktop/v9_observability_colab_schema3/`,
+  separate from the legacy `/Users/edward/Desktop/v9_observability_colab/`
+  schema-2 package. It contains the fixed source, full V9 corpus, verified
+  three-seed checkpoint `17d5ee9f…`, a local-scratch runner, and a Colab
+  notebook that exports only after final schema-3 validation.
+- The handoff was validated from its own package import path: 268 focused
+  schema-3/recovery tests passed, Python compilation passed, runner `--help`
+  passed, and notebook JSON parsed. The package is about 1.4 GB and includes
+  40 corpus files plus the three model weights.
+- A full local generation was started after the anchor-day fix but stopped
+  before publication when this 16 GiB Mac reached roughly 7 GiB resident plus
+  2.8 GiB swap. The Colab run should use high-RAM GPU, local `/content`
+  scratch, one Ollama model instance, and Drive only for the final export.
+
+## 2026-08-02: Task 6 schema-3 dashboard evidence renderers
+
+The schema-3 mount previously rendered ranks, a status line, narrative text, a
+factor count, and a 25-item node list. It now reuses the real evidence
+renderers and drives the lazy sidecar pipeline end to end.
+
+- `mountRecoveryExplorerV3` loads the community's node and edge chunks,
+  resolves them through the normalized catalog, and merges the day-view status
+  and membership chunks, so `x`/`y`, `pooled_member`, `caught_before_snapshot`,
+  and `message_hop` reach the renderer. The catalog/day-view resolution was
+  extracted from the schema-2 mount into `recoveryResolveCatalogRows` and
+  `recoveryApplyDayView` and is now shared by both.
+- Hybrid detail renders counterfactual factors, restart stability, edge-removal
+  faithfulness, the grounded narrative, the highest-attribution panel, and the
+  staged community graph, behind the strict as-of evidence-boundary gate.
+- Baseline controls render the same graph-stage controls with neutral emphasis
+  and no attribution or factor panels.
+- Filters cover `all`, the three cohorts, `gnn_explanation`,
+  `community_control`, and `all_detail`; unselected and failed cases stay in
+  the list.
+
+Durable decisions and deviations from the written plan:
+
+- **The plan's "exact copy" for a control uses an em dash, which the repo
+  bans.** `tests/test_v9_recovery_explainer_ui.py` asserts no em/en dash exists
+  anywhere in the explainer JS or CSS, and `recoveryVisibleText` strips them at
+  render time. The copy is therefore
+  `Community context only: GNNExplainer was not run for this baseline control.`
+- **Baseline controls carry `structural_stages`, not `flow_stages`.**
+  `build_structural_community_control` is guarded by a test that forbids the
+  substring `rank` anywhere in a control payload, and the Hybrid `rank_fusion`
+  stage has no meaning for a control. Controls therefore expose three
+  structural stages and `buildStructuralDrawCommands` rejects `rank_fusion`.
+- **A stability/faithfulness panel had to be written, not reused.** The plan
+  said to reuse existing panels, but no renderer had ever surfaced
+  `explanation.stability` or `explanation.faithfulness`, even though the
+  producer has always emitted both. The panel reports the top-edge probability
+  drop against its matched random control and reports an unmatched control as
+  `not measured` rather than imputing one.
+- **Per-factor provenance expansion is not overlaid on the schema-3 graph.**
+  Schema 3 publishes attribution overlay as a separate chunked sidecar owner,
+  so the community's `provenance_expansions` is empty. The factor panel says so
+  instead of silently drawing nothing.
+- **Canvas is bounded at 1500 nodes / 4000 edges.** Above that the paged data
+  table is the only representation, and it states why. The table renders in
+  every case as the non-canvas accessibility fallback.
+
+## 2026-08-02: schema-3 integrity follow-up
+
+- Schema-3 detail construction rejects any evidence boundary whose snapshot or
+  strict-before rules do not match the case scoring day, before evidence
+  panels render. Summary records must carry the published baseline, GNN, and
+  percentile-fusion score fields with their declared semantics.
+- Catalog resolution and day-view joins fail closed on missing, mismatched, or
+  duplicate identities. Both the staged writer and prepackaged publisher
+  verify day-view identity alignment; the browser cache key includes the
+  expected chunk hash.
+- Hybrid structural-fallback copy and canvas aria labels identify the case as
+  Hybrid fallback rather than calling it a baseline control.
+
+## 2026-08-02: final Colab handoff verification
+
+- `/Users/edward/Desktop/v9_observability_colab_schema3/` now matches the
+  current feature-worktree `gnn/` source exactly, including resume-path as-of
+  re-validation and cached-community chunk offset/count/identity checks.
+- Verified locally: checkpoint closure plus all 30 corpus CSV fingerprints;
+  484 producer/recovery/bundle/explainer tests; 303 downstream dashboard/UI
+  tests; Python compilation; valid nbformat 4.5 with 11 uniquely identified
+  cells; and a real manifest-plus-sidecar export accepted by
+  `publish_prepackaged_schema3_manifest`.
+- The notebook's exact Ollama acquisition, list-verification, and HTTP
+  generation-smoke cells were executed locally with `gemma4:12b`; the model
+  returned `ready`. The acquisition cell skips a registry pull when an exact
+  imported/private tag is already present, while later verification remains
+  mandatory.
+- The live Colab run remains the only environment-specific check: use
+  high-RAM local `/content` scratch and Drive only for the final export pair.
+  Do not publish the JSON without its sibling `recovery/` tree.
+
+## 2026-08-03: Colab Ollama bootstrap and cold-start behavior
+
+- Stock Colab can lack `zstd`, which causes the Ollama installer to fail
+  before installing the CLI. The notebook bootstrap now installs `zstd` with
+  `apt-get` when absent and verifies the resulting CLI is usable.
+- A 12B CPU model may take longer than two minutes to produce its first visible
+  response even when `ollama list` shows the exact tag. The smoke request uses
+  deterministic settings, a small 64-token output cap, `keep_alive`, and a
+  10-minute socket timeout. Do not interpret a two-minute timeout as proof the
+  model tag is broken.
+
+## 2026-08-03: Colab Drive path with spaces
+
+- The user uploaded the package under `MyDrive/Colab Notebooks/`. The old
+  notebook used unquoted shell `cp` arguments, so the space split the source
+  path and left `/content/v9_observability_colab_schema3` absent; later cells
+  still ran because shell-magics did not raise. The notebook now auto-detects
+  both `MyDrive/` and `MyDrive/Colab Notebooks/`, copies with `shutil.copytree`,
+  installs requirements with `check=True`, and runs the producer with
+  `check=True`. A missing package now fails at setup instead of spending time
+  on Ollama and failing only at the producer cell.
+- After the path fix, the producer itself returned exit code 1 while the
+  notebook only surfaced a generic `CalledProcessError`. The run cell now
+  streams producer output, writes `/content/v9_schema3_run/producer.log`, and
+  copies that log to the Drive export directory on both success and failure.
+  A future producer failure must be diagnosed from that log rather than from
+  the notebook wrapper traceback.
+
+## 2026-08-04: schema-3 ZIP-backed dashboard build
+
+- `build_v9_dashboard.py` accepts `V9_SCHEMA3_RESULTS_ZIP` and falls back to a
+  repo-root `v9_schema3_results.zip` when the JSON diagnostic is absent. The
+  ZIP publisher requires the exact `v9_schema3_results/` prefix, rejects unsafe,
+  duplicate, and symlink members, verifies the canonical nested bundle
+  manifest and every referenced hash/byte count, then streams verified members
+  into the staged dashboard output.
+- The supplied bundle `3df66ce7d0e5a791345797e7` built successfully with
+  schema-3 partial coverage: 19/20 Hybrid technical explanations and 10/10
+  Baseline community controls, with one recorded shortfall. The generated
+  recovery tree is large (about 4.7 GB) because it preserves the lazy graph,
+  catalog, provenance, and attribution sidecars; do not replace it with the
+  summary manifest alone.
+
+## 2026-08-04: schema-3 explanation graph presentation
+
+- The schema-3 recovery explorer intentionally exposes only published
+  `gnn_explanation` records in its visible case list. Baseline/community-control
+  records remain in the validated manifest for provenance and summary algebra,
+  but are not selectable in this view.
+- Explanation attribution is loaded from verified overlay sidecars and merged
+  into a presentation-only model. The complete as-of community remains the
+  authoritative table; the canvas uses a deterministic 1500-node/4000-edge
+  slice that retains the target and evidence endpoints, and fails closed if
+  mandatory evidence itself cannot fit the bound.
+- Context relations are muted while attributed edges use a single accent whose
+  width/brightness follows unsigned explainer median. This is presentation
+  salience, not a causal claim. The generated dashboard was rebuilt from the
+  supplied schema-3 ZIP and verified over HTTP for the index, data, recovery
+  pointer, manifest, case, community, and both overlay sidecars.

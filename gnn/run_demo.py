@@ -828,7 +828,8 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
          valid_sample=20000, observability=False,
          observability_out_name="hybrid_recovery_explanations_v9.json",
          explanation_limit=None, narrative=True, narrative_runner=None,
-         checkpoint_root=None):
+         checkpoint_root=None, schema_version="2.0", hybrid_detail_limit=20,
+         baseline_control_limit=10, observability_instrumentation=None):
     if observability and (
         gnn_arm != "sage" or tuple(seeds) != (0, 1, 2)
     ):
@@ -839,7 +840,7 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
         raise ValueError(
             "production observability requires validated Gemma narratives"
         )
-    if observability:
+    if observability and str(schema_version) != "3.0":
         preflight_kwargs = {}
         if narrative_runner is not None:
             preflight_kwargs["runner"] = narrative_runner
@@ -1059,6 +1060,10 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
                     seed_level_unique_person_recovery
                 ),
                 explanation_limit=explanation_limit,
+                schema_version=schema_version,
+                hybrid_detail_limit=hybrid_detail_limit,
+                baseline_control_limit=baseline_control_limit,
+                instrumentation=observability_instrumentation,
                 inspections_per_day=5,
                 staging_root=(
                     observability_path.parent
@@ -1071,6 +1076,18 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
                     generate_narrative
                     if narrative_runner is None
                     else partial(generate_narrative, runner=narrative_runner)
+                ),
+                narrative_preflight=(
+                    None
+                    if str(schema_version) != "3.0"
+                    else partial(
+                        preflight_narrative_contract,
+                        **(
+                            {"runner": narrative_runner}
+                            if narrative_runner is not None
+                            else {}
+                        ),
+                    )
                 ),
             )
 
@@ -1110,16 +1127,21 @@ def resume_observability(
     explanation_limit=None,
     narrative=True,
     narrative_runner=None,
+    schema_version="2.0",
+    hybrid_detail_limit=20,
+    baseline_control_limit=10,
+    observability_instrumentation=None,
 ):
     """Generate observability from a verified scoring checkpoint without fitting."""
     if not narrative:
         raise ValueError(
             "production observability requires validated Gemma narratives"
         )
-    preflight_kwargs = {}
-    if narrative_runner is not None:
-        preflight_kwargs["runner"] = narrative_runner
-    preflight_narrative_contract(**preflight_kwargs)
+    if str(schema_version) != "3.0":
+        preflight_kwargs = {}
+        if narrative_runner is not None:
+            preflight_kwargs["runner"] = narrative_runner
+        preflight_narrative_contract(**preflight_kwargs)
 
     metadata = read_demo_checkpoint_metadata(checkpoint_path)
     cd = Path(corpus_dir or metadata["corpus"]["identity"])
@@ -1207,6 +1229,10 @@ def resume_observability(
             explanation_engine=engine,
             seed_level_unique_person_recovery=seed_level,
             explanation_limit=explanation_limit,
+            schema_version=schema_version,
+            hybrid_detail_limit=hybrid_detail_limit,
+            baseline_control_limit=baseline_control_limit,
+            instrumentation=observability_instrumentation,
             inspections_per_day=5,
             staging_root=(
                 observability_path.parent
@@ -1216,6 +1242,18 @@ def resume_observability(
             corpus_identity=str(cd.resolve()),
             recovery_run_identity={"checkpoint_id": loaded.checkpoint_id},
             narrative_builder=narrative_builder,
+            narrative_preflight=(
+                None
+                if str(schema_version) != "3.0"
+                else partial(
+                    preflight_narrative_contract,
+                    **(
+                        {"runner": narrative_runner}
+                        if narrative_runner is not None
+                        else {}
+                    ),
+                )
+            ),
         )
         artifact_holder["artifact"] = artifact
         return artifact
@@ -1224,5 +1262,43 @@ def resume_observability(
     return artifact_holder["artifact"]
 
 
+def _cli(argv=None):
+    """Run the demo, or generate observability from a verified checkpoint.
+
+    Bare invocation keeps the documented `python -m gnn.run_demo` behavior.
+    The `observability` subcommand is the only entry point that can request
+    the balanced schema-3 workspace, which is why it defaults to `3.0`.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="gnn.run_demo")
+    subparsers = parser.add_subparsers(dest="command")
+    observability = subparsers.add_parser(
+        "observability",
+        help="generate recovery observability from a verified checkpoint",
+    )
+    observability.add_argument("checkpoint_path")
+    observability.add_argument("--corpus-dir", default=None)
+    observability.add_argument(
+        "--out-name", default="hybrid_recovery_explanations_v9.json"
+    )
+    observability.add_argument(
+        "--schema-version", choices=("2.0", "3.0"), default="3.0"
+    )
+    observability.add_argument("--hybrid-detail-limit", type=int, default=20)
+    observability.add_argument("--baseline-control-limit", type=int, default=10)
+    args = parser.parse_args(argv)
+    if args.command != "observability":
+        return main()
+    return resume_observability(
+        args.checkpoint_path,
+        corpus_dir=args.corpus_dir,
+        observability_out_name=args.out_name,
+        schema_version=args.schema_version,
+        hybrid_detail_limit=args.hybrid_detail_limit,
+        baseline_control_limit=args.baseline_control_limit,
+    )
+
+
 if __name__ == "__main__":
-    main()
+    _cli()

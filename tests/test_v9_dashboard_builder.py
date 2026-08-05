@@ -6,9 +6,14 @@ import importlib.util
 import json
 import re
 import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
+
+from test_recovery_bundle import _schema3_sidecar_artifact
+from Documents.Data.scripts import v9_recovery_sidecars
 
 
 MODULE_PATH = (
@@ -917,6 +922,125 @@ def test_load_recovery_artifact_fails_closed_for_present_invalid_schema_v2(tmp_p
         BUILDER._load_recovery_artifact(path)
 
 
+def test_load_recovery_artifact_packages_schema3_sidecars(tmp_path, monkeypatch):
+    sidecar_path = (
+        Path(__file__).resolve().parents[1]
+        / "Documents/Data/scripts/v9_recovery_sidecars.py"
+    )
+    sidecar_spec = importlib.util.spec_from_file_location(
+        "v9_recovery_sidecars", sidecar_path
+    )
+    v9_recovery_sidecars = importlib.util.module_from_spec(sidecar_spec)
+    sidecar_spec.loader.exec_module(v9_recovery_sidecars)
+    monkeypatch.setitem(sys.modules, "v9_recovery_sidecars", v9_recovery_sidecars)
+
+    artifact = {"schema_version": "3.0"}
+    path = tmp_path / "hybrid_recovery_explanations_v9.json"
+    path.write_text(json.dumps(artifact))
+    packaged = {"schema_version": "3.0", "packaged": True}
+    monkeypatch.setattr(
+        v9_recovery_sidecars,
+        "package_schema3_sidecars",
+        lambda value, output_dir: packaged,
+    )
+
+    assert BUILDER._load_recovery_artifact(path, output_dir=tmp_path) == packaged
+
+
+def test_load_recovery_artifact_publishes_prepackaged_schema3_manifest(
+    tmp_path, monkeypatch
+):
+    sidecar_path = (
+        Path(__file__).resolve().parents[1]
+        / "Documents/Data/scripts/v9_recovery_sidecars.py"
+    )
+    sidecar_spec = importlib.util.spec_from_file_location(
+        "v9_recovery_sidecars", sidecar_path
+    )
+    v9_recovery_sidecars = importlib.util.module_from_spec(sidecar_spec)
+    sidecar_spec.loader.exec_module(v9_recovery_sidecars)
+    monkeypatch.setitem(sys.modules, "v9_recovery_sidecars", v9_recovery_sidecars)
+
+    artifact = {"schema_version": "3.0", "community_sidecar_index": {}}
+    path = tmp_path / "hybrid_recovery_explanations_v9.json"
+    path.write_text(json.dumps(artifact))
+    packaged = {"schema_version": "3.0", "prepackaged": True}
+    monkeypatch.setattr(
+        v9_recovery_sidecars,
+        "publish_prepackaged_schema3_manifest",
+        lambda value, source_path, output_dir: packaged,
+    )
+
+    assert BUILDER._load_recovery_artifact(path, output_dir=tmp_path) == packaged
+
+
+def test_load_recovery_artifact_publishes_schema3_zip_bundle(tmp_path):
+    archive_path, manifest = _write_schema3_zip(tmp_path)
+
+    published = BUILDER._load_recovery_artifact(
+        archive_path, output_dir=tmp_path / "dashboard"
+    )
+
+    assert published["schema_version"] == "3.0"
+    assert (
+        tmp_path
+        / "dashboard"
+        / "recovery"
+        / manifest["bundle_path"]
+        / "manifest.json"
+    ).is_file()
+
+
+def _write_schema3_zip(tmp_path, prefix="v9_schema3_results", extra_members=()):
+    source_root = tmp_path / "source-recovery"
+    manifest = v9_recovery_sidecars.package_schema3_sidecars(
+        _schema3_sidecar_artifact(), source_root
+    )
+    manifest_path = source_root / "hybrid_recovery_explanations_v9.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    archive_path = tmp_path / "v9_schema3_results.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.write(
+            manifest_path,
+            Path(prefix) / "hybrid_recovery_explanations_v9.json",
+        )
+        for source in (source_root / "bundles").rglob("*"):
+            if source.is_file():
+                archive.write(
+                    source,
+                    Path(prefix)
+                    / "recovery"
+                    / "bundles"
+                    / source.relative_to(source_root / "bundles"),
+                )
+        for info, content in extra_members:
+            archive.writestr(info, content)
+    return archive_path, manifest
+
+
+def test_load_recovery_artifact_rejects_schema3_zip_with_wrong_prefix(tmp_path):
+    archive_path, _ = _write_schema3_zip(tmp_path, prefix="wrong-root")
+
+    with pytest.raises(ValueError, match="v9_schema3_results"):
+        BUILDER._load_recovery_artifact(
+            archive_path, output_dir=tmp_path / "dashboard"
+        )
+
+
+def test_load_recovery_artifact_rejects_unreferenced_schema3_zip_symlink(tmp_path):
+    symlink = zipfile.ZipInfo("v9_schema3_results/unreferenced-link")
+    symlink.create_system = 3
+    symlink.external_attr = (0o120777 << 16) | 0xA000
+    archive_path, _ = _write_schema3_zip(
+        tmp_path, extra_members=((symlink, "target"),)
+    )
+
+    with pytest.raises(ValueError, match="symlink"):
+        BUILDER._load_recovery_artifact(
+            archive_path, output_dir=tmp_path / "dashboard"
+        )
+
+
 def test_load_v9_data_uses_only_separate_recovery_artifact(
     tmp_path, monkeypatch
 ):
@@ -941,11 +1065,43 @@ def test_load_v9_data_uses_only_separate_recovery_artifact(
     monkeypatch.setattr(
         BUILDER, "V9_RECOVERY_EXPLANATIONS", str(artifact_path)
     )
+    monkeypatch.setattr(
+        BUILDER, "V9_RECOVERY_ARCHIVE", str(tmp_path / "missing-results.zip")
+    )
 
     assert BUILDER._load_v9_data()["v9RecoveryExplainer"] == artifact
 
     artifact_path.unlink()
     assert "v9RecoveryExplainer" not in BUILDER._load_v9_data()
+
+
+def test_load_v9_data_falls_back_to_repo_zip_when_json_is_absent(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "dashboard_data.json").write_text(json.dumps({}))
+    _write_csv(tmp_path / "train_valid_test_splits.csv", [
+        {"entity_id": "E1", "split": "test"},
+    ])
+    _write_csv(tmp_path / "crossing_events.csv", [
+        {"event_id": "E1", "event_timestamp_utc": "2025-01-02T03:00:00Z"},
+    ])
+    missing_json = tmp_path / "missing-recovery.json"
+    archive_path = tmp_path / "v9_schema3_results.zip"
+    archive_path.write_bytes(b"zip-placeholder")
+    monkeypatch.setattr(BUILDER, "V9_DATA", str(tmp_path / "dashboard_data.json"))
+    monkeypatch.setattr(BUILDER, "V9_DEMO", str(tmp_path / "missing_demo.json"))
+    monkeypatch.setattr(BUILDER, "V9_CORPUS", str(tmp_path))
+    monkeypatch.setattr(BUILDER, "V9_RECOVERY_EXPLANATIONS", str(missing_json))
+    monkeypatch.setattr(BUILDER, "V9_RECOVERY_ARCHIVE", str(archive_path))
+    monkeypatch.setattr(
+        BUILDER,
+        "_load_recovery_artifact",
+        lambda path, output_dir=None: {"source_path": str(path)},
+    )
+
+    assert BUILDER._load_v9_data()["v9RecoveryExplainer"] == {
+        "source_path": str(archive_path)
+    }
 
 
 def _architecture_artifact(corpus_dir):
@@ -2681,16 +2837,7 @@ def test_generated_dashboard_has_grouped_accessible_navigation_and_hash_state():
 
 
 def test_generated_dashboard_renders_the_overview_tab_exactly_once():
-    """Only the hash-routed bootstrap may perform the initial render.
-
-    The template called ``Tabs.overview.render()`` unconditionally one line below
-    the nav binding that ``_rewrite_nav_js`` replaces. ``switchTab`` guards on
-    ``Tabs[name].rendered`` but that trailing call did not, so after the routed
-    IIFE rendered overview and set the flag, the template rendered it again. The
-    tab renderers append to the tab element rather than replacing its contents,
-    so the duplicate was additive: two metric rows, two outcome funnels and two
-    of each bar chart inside ``#tab-overview`` on every load.
-    """
+    """Only the hash-routed bootstrap may perform the initial render."""
     html = GENERATED_INDEX.read_text()
 
     assert "_navigateTo(n||'overview')" in html

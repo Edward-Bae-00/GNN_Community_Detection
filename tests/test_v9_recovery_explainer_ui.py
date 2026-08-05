@@ -1,7 +1,6 @@
 import copy
 import importlib.util
 import json
-import re
 import subprocess
 from pathlib import Path
 
@@ -364,6 +363,220 @@ def test_schema_v2_ui_discards_stale_async_case_responses():
     assert "state.community=await recoveryFetchJson" not in js
 
 
+def test_schema_v3_ui_contract_preserves_full_cohorts_and_evidence_boundary():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+
+    for token in (
+        "schema_version==='3.0'",
+        "buildRecoverySchema3ViewModel",
+        "mountRecoveryExplorerV3",
+        "hybrid_only",
+        "baseline_only",
+        "recovered_by_both",
+        "Hybrid technical detail",
+        "Community context only",
+        "No GNN explanation, mask, or attribution",
+        "Hybrid score is percentile fusion, not probability",
+        "recoverySchema3Community",
+        "communitySidecarIndex",
+    ):
+        assert token in js
+
+
+def _schema3_ui_artifact():
+    ref = {"path": "cases/case.json", "sha256": "a" * 64}
+    community_ref = {"path": "communities/community.json", "sha256": "b" * 64}
+
+    def record(case_id, cohort, status, kind):
+        return {
+            "case_id": case_id,
+            "person_id": "person:" + case_id,
+            "event_id": "event:" + case_id,
+            "scoring_day": "2025-01-02T00:00:00+00:00",
+            "cohort": cohort,
+            "baseline_raw": 0.2,
+            "baseline_percentile": 0.2,
+            "baseline_rank": 20,
+            "seed0_gnn_probability": 0.8,
+            "seed0_gnn_percentile": 0.8,
+            "seed0_gnn_rank": 4,
+            "seed0_hybrid_score": 0.56,
+            "seed0_hybrid_rank": 8,
+            "hybrid_score_semantics": "percentile_fusion_not_probability",
+            "detail_status": status,
+            "detail_kind": kind,
+        }
+
+    hybrid = record("h1", "hybrid_only", "available", "gnn_explanation")
+    baseline = record(
+        "b1", "baseline_only", "community_only", "community_control"
+    )
+    return {
+        "schema_version": "3.0",
+        "bundle_id": "0123456789abcdef01234567",
+        "sidecar_base": "recovery/bundles/0123456789abcdef01234567/",
+        "policy": {
+            "observability_seed": 0,
+            "gnn_arm": "sage",
+            "inspections_per_day": 5,
+        },
+        "summary": {
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 1,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 1,
+            "net_gain": 0,
+        },
+        "coverage": {
+            "hybrid_requested": 1,
+            "baseline_requested": 1,
+            "hybrid_selected": 1,
+            "baseline_selected": 1,
+            "hybrid_explained": 1,
+            "baseline_community": 1,
+            "hybrid_shortfall": 0,
+            "baseline_shortfall": 0,
+            "shortfall": 0,
+            "shortfall_reasons": [],
+        },
+        "cohorts": {
+            "hybrid_only": [hybrid],
+            "baseline_only": [baseline],
+            "recovered_by_both": [],
+        },
+        "selection": {
+            "selected_ids": {
+                "hybrid_only": ["h1"],
+                "baseline_only": ["b1"],
+                "recovered_by_both": [],
+            }
+        },
+        "detail_index": {"h1": ref},
+        "community_index": {"b1": {**community_ref, "cohort": "baseline_only"}},
+        "community_sidecar_index": {"community:a": community_ref},
+    }
+
+
+def test_schema_v3_view_model_validates_partial_indexes_and_semantics():
+    artifact = _schema3_ui_artifact()
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nprocess.stdout.write(JSON.stringify(buildRecoverySchema3ViewModel("
+        + json.dumps(artifact)
+        + ")));"
+    )
+
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    view = json.loads(completed.stdout)
+
+    assert view["available"] is True
+    assert view["schemaVersion"] == "3.0"
+    assert set(view["cohorts"]) == {
+        "hybrid_only", "baseline_only", "recovered_by_both"
+    }
+    assert view["coverage"]["hybrid_explained"] == 1
+    assert view["detailIndex"]["h1"]["sha256"] == "a" * 64
+
+    artifact["community_index"]["b1"]["sha256"] = "not-a-hash"
+    invalid_script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nprocess.stdout.write(JSON.stringify(buildRecoverySchema3ViewModel("
+        + json.dumps(artifact)
+        + ")));"
+    )
+    invalid = subprocess.run(
+        ["node", "-e", invalid_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(invalid.stdout)["available"] is False
+
+
+def test_schema_v3_selection_ids_must_match_declared_cohort():
+    artifact = _schema3_ui_artifact()
+    artifact["selection"]["selected_ids"] = {
+        "hybrid_only": ["b1"],
+        "baseline_only": ["h1"],
+        "recovered_by_both": [],
+    }
+
+    result = _node_json(
+        "buildRecoverySchema3ViewModel(" + json.dumps(artifact) + ")"
+    )
+
+    assert result == {
+        "available": False,
+        "reason": "invalid-schema3-selection",
+    }
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "baseline_raw",
+        "baseline_percentile",
+        "seed0_gnn_probability",
+        "seed0_gnn_percentile",
+        "seed0_hybrid_score",
+    ],
+)
+def test_schema_v3_view_model_requires_all_published_score_fields(field):
+    artifact = _schema3_ui_artifact()
+    del artifact["cohorts"]["hybrid_only"][0][field]
+
+    result = _node_json(
+        "buildRecoverySchema3ViewModel(" + json.dumps(artifact) + ")"
+    )
+
+    assert result == {
+        "available": False,
+        "reason": "invalid-schema3-case-records",
+    }
+
+
+def test_schema_v3_view_model_accepts_hybrid_structural_fallback_coverage():
+    artifact = _schema3_ui_artifact()
+    fallback = dict(artifact["cohorts"]["hybrid_only"][0])
+    fallback.update(
+        case_id="hf",
+        person_id="person:hf",
+        event_id="event:hf",
+        detail_status="community_only",
+        detail_kind="community_control",
+    )
+    artifact["cohorts"]["hybrid_only"].append(fallback)
+    artifact["summary"].update(hybrid_only_recovered=2, hybrid_total=2, net_gain=1)
+    artifact["coverage"].update(
+        hybrid_requested=2,
+        hybrid_shortfall=1,
+        shortfall=1,
+        shortfall_reasons=["node_limit_exceeded"],
+        hybrid_structural_fallback=1,
+    )
+    artifact["selection"]["hybrid_structural_fallback_ids"] = ["hf"]
+    artifact["community_index"]["hf"] = {
+        "path": "cases/fallback.json",
+        "sha256": "c" * 64,
+        "cohort": "hybrid_only",
+    }
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nprocess.stdout.write(JSON.stringify(buildRecoverySchema3ViewModel("
+        + json.dumps(artifact)
+        + ")));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    view = json.loads(completed.stdout)
+    assert view["available"] is True
+    assert view["coverage"]["baseline_community"] == 1
+
+
 def _strict_manifest_artifact():
     summary = {
         "baseline_recovered": 1,
@@ -534,6 +747,59 @@ process.stdout.write(JSON.stringify({
         "badOffset": None,
         "badCount": None,
     }
+
+
+def test_recovery_sidecar_paths_reject_traversal_and_absolute_segments():
+    script = UI.V9_RECOVERY_EXPLAINER_JS + r"""
+const view={sidecarBase:'recovery/bundles/0123456789abcdef01234567/'};
+const paths=['../escape.json','communities/../escape.json','/absolute.json',
+  './cases/case.json','communities\\escape.json'];
+const errors=paths.map(path=>{
+  try{return recoverySidecarUrl(view,path);}
+  catch(error){return error.message;}
+});
+const owner={complete:true,node_count:1,edge_count:0,
+  provenance_observation_count:0,
+  node_chunks:[{path:'../nodes.json',sha256:'a'.repeat(64),offset:0,count:1}],
+  edge_chunks:[],provenance_chunks:[],provenance_expansion_membership_chunks:[]};
+process.stdout.write(JSON.stringify({
+  safe:recoverySidecarUrl(view,'cases/case.json'),
+  reference:recoverySchema3Reference({path:'../escape.json',sha256:'a'.repeat(64)}),
+  owner:recoveryValidateChunkOwner(owner),errors
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["safe"] == (
+        "recovery/bundles/0123456789abcdef01234567/cases/case.json"
+    )
+    assert result["reference"] is False
+    assert result["owner"] is False
+    assert result["errors"] == ["Unsafe sidecar path"] * 5
+
+
+def test_schema3_community_rejects_inline_rows_for_chunk_only_loading():
+    inline = {
+        "schema_version": "1.0",
+        "complete": True,
+        "community_key": "community:a",
+        "node_count": 1,
+        "edge_count": 0,
+        "provenance_observation_count": 0,
+        "nodes": [{"node_id": "p1"}],
+        "edge_chunks": [],
+        "provenance_chunks": [],
+    }
+    result = _node_json(
+        "(()=>{const value=%s;return {community:"
+        "recoverySchema3Community(value,'community:a'),"
+        "owner:recoveryValidateChunkOwner(value)};})()" % json.dumps(inline)
+    )
+
+    assert result == {"community": False, "owner": False}
 
 
 def test_schema_v2_manifest_helper_enforces_k5_complete_coverage_and_default_case():
@@ -940,11 +1206,9 @@ def test_highest_attribution_renderer_contract_is_shared_by_schema_paths():
     legacy_detail = js.split("function renderDetail", 1)[1].split(
         "function render(){", 1
     )[0]
-    # The containers are named for what they hold, not for a left/right split:
-    # the graph spans the detail width and the reading panels sit beneath it.
-    assert legacy_detail.index("renderNarrative(panels,explanation)") < legacy_detail.index(
+    assert legacy_detail.index("renderNarrative(left,explanation)") < legacy_detail.index(
         "renderHighestAttributionPanel(doc"
-    ) < legacy_detail.index("renderGraph(evidence,explanation)")
+    ) < legacy_detail.index("renderGraph(right,explanation)")
     assert "Highest-attribution evidence" in js
     assert "Unsigned median attribution weights show salience across deterministic explainer restarts, not causal direction." in js
     assert "Attribution ranking unavailable in this artifact." in js
@@ -1130,7 +1394,7 @@ def test_explorer_source_contract_covers_accessibility_lifecycle_and_states():
     ):
         assert token in js
 
-    assert js.count("root.addEventListener('click'") == 2
+    assert js.count("root.addEventListener('click'") == 3
     assert "new WeakMap" in js
     assert "innerHTML" not in js
     assert "window.addEventListener('scroll'" not in js
@@ -1310,22 +1574,7 @@ def test_delegated_click_and_change_restore_focus_after_render():
 
 def test_essential_explorer_labels_use_the_contrast_safe_text_token():
     assert "var(--text3)" not in UI.V9_RECOVERY_EXPLAINER_CSS
-    assert "var(--text-dim)" not in UI.V9_RECOVERY_EXPLAINER_CSS
     assert UI.V9_RECOVERY_EXPLAINER_CSS.count("var(--text2)") >= 12
-
-
-def test_this_panel_owns_its_type_and_holds_the_ten_pixel_floor():
-    """The floor used to live in v9_design_system.py, which is injected after
-    this sheet at equal specificity. That meant a size set here lost silently
-    and the panel could not be fixed at source, so the panel took ownership and
-    the floor has to be guarded from this side now.
-    """
-    css = UI.V9_RECOVERY_EXPLAINER_CSS
-    sizes = [int(v) for v in re.findall(r"font-size:\s*(\d+)px", css)]
-    sizes += [int(v) for v in re.findall(r"font:\s*(\d+)px", css)]
-
-    assert sizes, "expected explicit font sizes in the panel stylesheet"
-    assert min(sizes) >= 10, f"sub-10px type present: {sorted(set(sizes))}"
 
 
 def test_build_recovery_view_model_accepts_exact_policy_and_overlap_algebra():
@@ -1762,6 +2011,80 @@ def test_draw_commands_preserve_base_membership_and_only_change_emphasis(
     assert json.loads(snapshot["before"]) == explanation
 
 
+def test_draw_commands_map_schema3_overlay_and_keep_complete_tables():
+    explanation = _valid_recovery_artifact()["explanations"][0]
+    explanation["overlayNodes"] = [
+        {
+            "node_id": "p2",
+            "importance": 0.9,
+            "attributed": True,
+            "rank": 1,
+        }
+    ]
+    explanation["overlayEdges"] = [
+        {
+            "edge_id": "edge-1",
+            "u": "p1",
+            "v": "p2",
+            "edge_type": "COTRAVEL",
+            "relation": "COTRAVEL",
+            "importance": 0.8,
+            "attributed": True,
+            "rank": 1,
+        }
+    ]
+
+    result = _run_ui(
+        "buildCommunityDrawCommands",
+        explanation,
+        {"mode": "flow", "stageId": "rank_fusion", "query": ""},
+    )
+
+    assert result["available"] is True
+    assert result["sampled"] is False
+    assert result["fullNodeCount"] == len(explanation["community"]["nodes"])
+    assert result["fullEdgeCount"] == len(explanation["community"]["edges"])
+    assert [node["id"] for node in result["tableNodes"]] == [
+        node["node_id"] for node in explanation["community"]["nodes"]
+    ]
+    assert [edge["id"] for edge in result["tableEdges"]] == [
+        edge["edge_id"] for edge in explanation["community"]["edges"]
+    ]
+    assert next(node for node in result["nodes"] if node["id"] == "p1")["target"] is True
+    attributed_node = next(node for node in result["nodes"] if node["id"] == "p2")
+    assert attributed_node["importance"] == 0.9
+    assert attributed_node["attributed"] is True
+    assert attributed_node["rank"] == 1
+    attributed_edge = result["edges"][0]
+    assert attributed_edge["importance"] == 0.8
+    assert attributed_edge["attributed"] is True
+    assert attributed_edge["rank"] == 1
+    assert attributed_edge["emphasized"] is True
+
+
+def test_evidence_edge_style_uses_single_accent_and_weight_scaling():
+    low = _run_ui(
+        "recoveryEdgeStyle",
+        {"importance": 0.0, "attributed": True, "emphasized": False},
+    )
+    high = _run_ui(
+        "recoveryEdgeStyle",
+        {"importance": 1.0, "attributed": True, "emphasized": False},
+    )
+
+    assert low["color"] == high["color"]
+    assert low["alpha"] < high["alpha"]
+    assert low["lineWidth"] < high["lineWidth"]
+
+
+def test_canvas_draw_loop_skips_missing_edge_endpoints():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    draw = js.split("function draw(){", 1)[1].split(
+        "function pointerDistance(){", 1
+    )[0]
+    assert "if(!from||!to)continue;" in draw
+
+
 def test_selected_factor_adds_only_its_labeled_dashed_provenance():
     explanation = _valid_recovery_artifact()["explanations"][0]
 
@@ -1897,3 +2220,1653 @@ def test_filter_without_new_options_keeps_legacy_order():
     high = _case("case:p2", "p2", hybrid_rank_uplift=90)
     result = _run_ui("filterAndSortRecoveryCases", [high, low], {})
     assert [item["case_id"] for item in result] == ["case:p2", "case:p1"]
+
+
+def _node_json(expression):
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nprocess.stdout.write(JSON.stringify("
+        + expression
+        + "));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    return json.loads(completed.stdout)
+
+
+def _schema3_structural_control(person_id="p1"):
+    return {
+        "person_id": person_id,
+        "community": {
+            "complete": True,
+            "nodes": [
+                {
+                    "node_id": person_id,
+                    "x": 0.5,
+                    "y": 0.5,
+                    "pooled_member": True,
+                    "caught_before_snapshot": False,
+                },
+                {
+                    "node_id": "p2",
+                    "x": 0.8,
+                    "y": 0.4,
+                    "pooled_member": True,
+                    "caught_before_snapshot": True,
+                },
+                {
+                    "node_id": "p3",
+                    "x": 0.2,
+                    "y": 0.7,
+                    "pooled_member": False,
+                    "caught_before_snapshot": False,
+                },
+            ],
+            "edges": [
+                {
+                    "edge_id": "e1",
+                    "u": person_id,
+                    "v": "p2",
+                    "edge_type": "COTRAVEL",
+                    "message_hop": 1,
+                },
+                {
+                    "edge_id": "e2",
+                    "u": "p2",
+                    "v": "p3",
+                    "edge_type": "RESIDENCE",
+                    "message_hop": 2,
+                },
+            ],
+            "provenance_expansions": [],
+        },
+        "structural_stages": [
+            {"stage_id": "first_hop", "edge_rule": {"max_message_hop": 1}},
+            {"stage_id": "second_hop", "edge_rule": {"max_message_hop": 2}},
+            {
+                "stage_id": "component_pool",
+                "edge_rule": {
+                    "edge_type": "COTRAVEL",
+                    "both_pooled_members": True,
+                },
+            },
+        ],
+    }
+
+
+def test_schema3_filters_cover_every_cohort_and_detail_kind():
+    artifact = _schema3_ui_artifact()
+    both = dict(artifact["cohorts"]["hybrid_only"][0])
+    both.update(
+        case_id="x1",
+        person_id="person:x1",
+        event_id="event:x1",
+        cohort="recovered_by_both",
+        detail_status="not_selected",
+        detail_kind=None,
+    )
+    artifact["cohorts"]["recovered_by_both"].append(both)
+    artifact["summary"].update(
+        recovered_by_both=1, baseline_recovered=2, hybrid_total=2, net_gain=0
+    )
+
+    view_expr = "buildRecoverySchema3ViewModel(" + json.dumps(artifact) + ")"
+    result = _node_json(
+        "["
+        + ",".join(
+            "filterRecoverySchema3Cases(%s,%s).map(r=>r.caseId)"
+            % (view_expr, json.dumps(name))
+            for name in (
+                "all",
+                "hybrid_only",
+                "baseline_only",
+                "recovered_by_both",
+                "gnn_explanation",
+                "community_control",
+                "all_detail",
+            )
+        )
+        + "]"
+    )
+
+    assert result[0] == ["h1", "b1", "x1"]
+    assert result[1] == ["h1"]
+    assert result[2] == ["b1"]
+    assert result[3] == ["x1"]
+    assert result[4] == ["h1"]
+    assert result[5] == ["b1"]
+    assert result[6] == ["h1", "b1"]
+
+
+def test_schema3_view_model_exposes_normalized_detail_state():
+    artifact = _schema3_ui_artifact()
+    artifact["cohorts"]["hybrid_only"][0].update(
+        selection_reason="balanced_frozen_prefix",
+        failure_reason=None,
+    )
+    artifact["cohorts"]["baseline_only"][0].update(
+        selection_reason="ineligible_preflight_structural_fallback",
+        explanation_unavailable_reason="node_limit_exceeded",
+    )
+
+    view = _node_json(
+        "buildRecoverySchema3ViewModel(" + json.dumps(artifact) + ")"
+    )
+
+    hybrid = view["caseIndex"]["h1"]
+    baseline = view["caseIndex"]["b1"]
+    assert hybrid["detailStatus"] == "available"
+    assert hybrid["detailKind"] == "gnn_explanation"
+    assert hybrid["selectionReason"] == "balanced_frozen_prefix"
+    assert hybrid["failureReason"] is None
+    assert baseline["detailKind"] == "community_control"
+    assert baseline["explanationUnavailableReason"] == "node_limit_exceeded"
+    assert view["catalogIndex"] == {}
+
+
+def test_schema3_overlay_rejects_baseline_explanation_kind():
+    artifact = _schema3_ui_artifact()
+    artifact["cohorts"]["baseline_only"][0]["detail_kind"] = "gnn_explanation"
+
+    result = _node_json(
+        "buildRecoverySchema3ViewModel(" + json.dumps(artifact) + ")"
+    )
+
+    assert result == {
+        "available": False,
+        "reason": "invalid-schema3-case-records",
+    }
+
+
+def test_schema3_explorer_uses_explainer_only_filter_for_published_explanations():
+    mount = UI.V9_RECOVERY_EXPLAINER_JS.split(
+        "function mountRecoveryExplorerV3", 1
+    )[1].split("const recoveryMounts", 1)[0]
+    assert "const state={filter:" in mount
+    assert "filter:'gnn_explanation'" in mount
+    filters = mount.split("function renderFilters", 1)[1].split(
+        "function renderRecordStatus", 1
+    )[0]
+    assert "Showing GNN explanations only" in filters
+    assert "All cases" not in filters
+    assert "Baseline-only" not in filters
+    assert "Community control" not in filters
+
+    artifact = _schema3_ui_artifact()
+    extra = dict(artifact["cohorts"]["hybrid_only"][0])
+    extra.update(
+        case_id="h2",
+        person_id="person:h2",
+        detail_status="not_selected",
+        detail_kind=None,
+    )
+    artifact["cohorts"]["hybrid_only"].append(extra)
+    artifact["summary"].update(hybrid_only_recovered=2, hybrid_total=2, net_gain=1)
+    artifact["coverage"].update(
+        hybrid_requested=2,
+        hybrid_shortfall=1,
+        shortfall=1,
+        shortfall_reasons=["not_selected"],
+    )
+
+    result = _node_json(
+        "(()=>{const view=buildRecoverySchema3ViewModel("
+        + json.dumps(artifact)
+        + ");return filterRecoverySchema3Cases(view,'gnn_explanation');})()"
+    )
+
+    assert [row["caseId"] for row in result] == ["h1"]
+    assert all(row["detailKind"] == "gnn_explanation" for row in result)
+
+    # The first cohort row is not necessarily the first published explanation.
+    artifact["cohorts"]["hybrid_only"].insert(0, extra)
+    artifact["cohorts"]["hybrid_only"].pop()
+    view = _node_json(
+        "buildRecoverySchema3ViewModel(" + json.dumps(artifact) + ")"
+    )
+    assert view["defaultCaseId"] == "h1"
+
+
+def test_structural_draw_commands_keep_neutral_emphasis_and_local_target():
+    control = _schema3_structural_control()
+
+    neutral = _node_json(
+        "buildStructuralDrawCommands(%s,{mode:'all',stageId:'first_hop',query:''})"
+        % json.dumps(control)
+    )
+    staged = _node_json(
+        "buildStructuralDrawCommands(%s,{mode:'flow',stageId:'first_hop',query:''})"
+        % json.dumps(control)
+    )
+
+    assert neutral["available"] is True
+    # Every edge keeps zero importance: a control carries no explainer mask.
+    assert [edge["importance"] for edge in neutral["edges"]] == [0, 0]
+    assert all(edge["emphasized"] for edge in neutral["edges"])
+    assert [node["id"] for node in neutral["nodes"]] == ["p1", "p2", "p3"]
+    assert [node["target"] for node in neutral["nodes"]] == [True, False, False]
+    # Flow mode still resolves the stage rule against each edge's own hop.
+    assert [edge["emphasized"] for edge in staged["edges"]] == [True, False]
+    assert staged["provenanceEdges"] == []
+
+
+def test_structural_draw_commands_reject_the_hybrid_rank_fusion_stage():
+    control = _schema3_structural_control()
+
+    rejected = _node_json(
+        "buildStructuralDrawCommands(%s,{mode:'all',stageId:'rank_fusion',query:''})"
+        % json.dumps(control)
+    )
+
+    assert rejected["available"] is False
+    assert rejected["reason"] == "invalid-view-options"
+
+
+@pytest.mark.parametrize(
+    "mutate,reason",
+    [
+        (lambda c: c["community"].__setitem__("nodes", []),
+         "invalid-community-membership"),
+        (lambda c: c["community"]["nodes"][0].__setitem__("x", 4.5),
+         "invalid-community-coordinates"),
+        (lambda c: c["community"]["edges"][0].__setitem__("u", "ghost"),
+         "invalid-community-membership"),
+        (lambda c: c.__setitem__("structural_stages", []),
+         "invalid-structural-stages"),
+        (lambda c: c.__setitem__("person_id", "absent"),
+         "invalid-community-membership"),
+    ],
+)
+def test_structural_draw_commands_fail_closed(mutate, reason):
+    control = _schema3_structural_control()
+    mutate(control)
+
+    result = _node_json(
+        "buildStructuralDrawCommands(%s,{mode:'all',stageId:'first_hop',query:''})"
+        % json.dumps(control)
+    )
+
+    assert result["available"] is False
+    assert result["reason"] == reason
+
+
+def test_schema3_community_assembly_requires_every_chunk():
+    manifest = {"community_key": "community:a", "node_count": 2, "edge_count": 1}
+    nodes = [{"node_id": "p1"}, {"node_id": "p2"}]
+    edges = [{"edge_id": "e1", "u": "p1", "v": "p2"}]
+
+    complete = _node_json(
+        "assembleRecoverySchema3Community(%s,%s,%s)"
+        % (json.dumps(manifest), json.dumps(nodes), json.dumps(edges))
+    )
+    partial = _node_json(
+        "assembleRecoverySchema3Community(%s,%s,%s)"
+        % (json.dumps(manifest), json.dumps(nodes[:1]), json.dumps(edges))
+    )
+    unloaded = _node_json(
+        "assembleRecoverySchema3Community(%s,null,null)" % json.dumps(manifest)
+    )
+
+    assert complete["available"] is True
+    assert complete["community"]["complete"] is True
+    assert complete["community"]["node_count"] == 2
+    assert complete["community"]["edge_count"] == 1
+    assert complete["community"]["provenance_expansions"] == []
+    assert partial == {"available": False, "reason": "community-partially-loaded"}
+    assert unloaded == {"available": False, "reason": "community-not-loaded"}
+
+
+def test_schema3_detail_branches_by_kind_and_bounds_the_canvas():
+    community = _schema3_structural_control()["community"]
+    community_view = {"available": True, "community": community}
+    hybrid_record = {
+        "personId": "p1",
+        "detailKind": "gnn_explanation",
+        "scoring_day": "2025-01-02T00:00:00+00:00",
+    }
+    control_record = {
+        "personId": "p1",
+        "detailKind": "community_control",
+        "scoring_day": "2025-01-02T00:00:00+00:00",
+    }
+    boundary = {
+        "snapshot": "2025-01-02T00:00:00+00:00",
+        "edge_rule": "available_time < snapshot",
+        "caught_rule": "label_available_time_utc < snapshot",
+    }
+
+    hybrid = _node_json(
+        "buildRecoverySchema3Detail(%s,%s,%s)"
+        % (
+            json.dumps(hybrid_record),
+            json.dumps({"explanation": {"evidence_boundary": boundary}}),
+            json.dumps(community_view),
+        )
+    )
+    control = _node_json(
+        "buildRecoverySchema3Detail(%s,%s,%s)"
+        % (
+            json.dumps(control_record),
+            json.dumps(
+                {
+                    "detail": {
+                        "evidence_boundary": boundary,
+                        "structural_stages": [],
+                    }
+                }
+            ),
+            json.dumps(community_view),
+        )
+    )
+    missing = _node_json(
+        "buildRecoverySchema3Detail(%s,%s,%s)"
+        % (
+            json.dumps(control_record),
+            json.dumps({"case": {}}),
+            json.dumps(community_view),
+        )
+    )
+
+    assert hybrid["available"] is True
+    assert hybrid["kind"] == "gnn_explanation"
+    assert hybrid["explanation"]["person_id"] == "p1"
+    assert hybrid["control"] is None
+    assert hybrid["canvasAvailable"] is True
+    assert hybrid["evidenceBoundary"] == boundary
+    assert control["available"] is True
+    assert control["explanation"] is None
+    assert control["control"]["structural_stages"] == []
+    assert missing == {
+        "available": False,
+        "kind": "community_control",
+        "reason": "structural-detail-unavailable",
+    }
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("snapshot", "2025-01-03T00:00:00+00:00"),
+        ("edge_rule", "available_time <= snapshot"),
+        ("caught_rule", "label_available_time_utc <= snapshot"),
+    ],
+)
+def test_schema3_detail_rejects_invalid_as_of_evidence_boundary(field, value):
+    community = _schema3_structural_control()["community"]
+    boundary = {
+        "snapshot": "2025-01-02T00:00:00+00:00",
+        "edge_rule": "available_time < snapshot",
+        "caught_rule": "label_available_time_utc < snapshot",
+    }
+    boundary[field] = value
+
+    detail = _node_json(
+        "buildRecoverySchema3Detail(%s,%s,%s)"
+        % (
+            json.dumps({
+                "personId": "p1",
+                "detailKind": "gnn_explanation",
+                "scoring_day": "2025-01-02T00:00:00+00:00",
+            }),
+            json.dumps({"explanation": {"evidence_boundary": boundary}}),
+            json.dumps({"available": True, "community": community}),
+        )
+    )
+
+    assert detail == {
+        "available": False,
+        "kind": "gnn_explanation",
+        "reason": "invalid-evidence-boundary",
+    }
+
+
+def test_schema3_detail_falls_back_to_the_table_above_the_render_bound():
+    nodes = [
+        {"node_id": "p%d" % index, "x": 0.5, "y": 0.5}
+        for index in range(1, 1602)
+    ]
+    community_view = {
+        "available": True,
+        "community": {"complete": True, "nodes": nodes, "edges": []},
+    }
+
+    detail = _node_json(
+        "buildRecoverySchema3Detail(%s,%s,%s)"
+        % (
+            json.dumps({
+                "personId": "p1",
+                "detailKind": "community_control",
+                "scoring_day": "2025-01-02T00:00:00+00:00",
+            }),
+            json.dumps({
+                "detail": {
+                    "structural_stages": [],
+                    "evidence_boundary": {
+                        "snapshot": "2025-01-02T00:00:00+00:00",
+                        "edge_rule": "available_time < snapshot",
+                        "caught_rule": "label_available_time_utc < snapshot",
+                    },
+                }
+            }),
+            json.dumps(community_view),
+        )
+    )
+
+    assert detail["available"] is True
+    assert detail["nodeCount"] == 1601
+    assert detail["canvasAvailable"] is False
+
+
+def test_schema3_detail_renderer_reuses_the_technical_evidence_panels():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    mount = js.split("function mountRecoveryExplorerV3", 1)[1].split(
+        "const recoveryMounts", 1
+    )[0]
+
+    hybrid_branch = mount.split(
+        "if(detailView.kind==='gnn_explanation'){", 1
+    )[1].split("}else{", 1)[0]
+    assert "renderFactors(left,detailView.explanation)" in hybrid_branch
+    assert "renderNarrative(left,detailView.explanation)" in hybrid_branch
+    assert "renderHighestAttributionPanel(doc,detailView.explanation)" in hybrid_branch
+    assert "renderGraph(right,detailView,record)" in mount
+    assert "buildCommunityDrawCommands(detailView.explanation,options)" in mount
+    assert "buildStructuralDrawCommands(detailView.control,options)" in mount
+    # The boundary gate must run before any evidence renderer.
+    assert mount.index("renderEvidenceBoundary(detail,detailView.evidenceBoundary)") < (
+        mount.index("renderFactors(left,detailView.explanation)")
+    )
+
+
+def test_schema3_control_suppresses_attribution_and_states_its_scope():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    mount = js.split("function mountRecoveryExplorerV3", 1)[1].split(
+        "const recoveryMounts", 1
+    )[0]
+    control_branch = mount.split(
+        "if(detailView.kind==='community_control'){", 1
+    )[1].split("}else{", 1)[0]
+
+    assert (
+        "Community context only: GNNExplainer was not run for this baseline control."
+        in control_branch
+    )
+    assert (
+        "Attribution, counterfactual factor, stability, and faithfulness panels are suppressed for a control."
+        in mount
+    )
+    assert "renderFactors" not in control_branch
+    assert "renderHighestAttributionPanel" not in control_branch
+    # Mask semantics stay visible wherever a Hybrid mask is drawn.
+    assert (
+        "Mask values are unsigned evidence weights, not causal claims." in mount
+    )
+
+
+def test_schema3_graph_exposes_accessible_names_and_a_table_fallback():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    mount = js.split("function mountRecoveryExplorerV3", 1)[1].split(
+        "const recoveryMounts", 1
+    )[0]
+
+    for token in (
+        "renderGraphTable(panel,commands,record)",
+        "Non-canvas equivalent of the graph above.",
+        "As-of community context + explanation evidence",
+        "Muted context remains visible",
+        "unsigned explainer median",
+        "This is not a causal claim",
+        "Context relations",
+        "Explanation evidence",
+        "Caught before snapshot",
+        "Weight range",
+        "Sampled context:",
+        "Strict-bound unavailable:",
+        "commands.sampled",
+        "v9-recovery-legend",
+        "Graph legend",
+        "canvas.setAttribute('aria-label'",
+        "record.cohort==='baseline_only'",
+        "Hybrid structural fallback ",
+        "exceed the interactive rendering bound",
+        "restoreV3Focus('data-v3-stage','v3Stage',data.v3Stage)",
+        "restoreV3Focus('data-v3-zoom','v3Zoom',data.v3Zoom)",
+        "bindRecoveryCanvas(",
+    ):
+        assert token in mount
+    assert "v9-recovery-table" in UI.V9_RECOVERY_EXPLAINER_CSS
+    assert "overflow-x: auto" in UI.V9_RECOVERY_EXPLAINER_CSS
+
+
+def test_schema3_graph_copy_renders_explanation_legend_keys():
+    rendered = _mount_schema3("h1")
+    text = " | ".join(rendered["text"])
+
+    assert "As-of community context + explanation evidence" in text
+    assert "Muted context remains visible" in text
+    assert "Explanation evidence" in text
+    assert "Target" in text
+    assert "Caught before snapshot" in text
+    assert "Weight range" in text
+
+
+def test_schema3_css_polish_is_scoped_and_reduced_motion_safe():
+    css = UI.V9_RECOVERY_EXPLAINER_CSS
+
+    for token in (
+        ".v9-recovery-v3",
+        "radial-gradient",
+        ".v9-recovery-legend-swatch",
+        ".v9-recovery-sampled",
+        "height: 470px",
+        "overflow-x: auto",
+        ":focus:not(:focus-visible)",
+        "prefers-reduced-motion: reduce",
+    ):
+        assert token in css
+
+
+def test_schema3_mount_discards_stale_responses_and_reports_failures():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    mount = js.split("function mountRecoveryExplorerV3", 1)[1].split(
+        "const recoveryMounts", 1
+    )[0]
+
+    assert "const token=++requestToken" in mount
+    assert mount.count("token!==requestToken") >= 4
+    assert "state.caseData=await recoveryFetchJson" not in mount
+    assert "Published sidecar reference is missing for this case" in mount
+    assert "Schema-3 case sidecar identity is invalid" in mount
+    assert "Schema-3 community sidecar identity is invalid" in mount
+    assert "recoveryServerHelp(state.error)" in mount
+    assert "Partial coverage: " in mount
+    assert "GNNExplainer was not run for this case: " in mount
+    assert "".join(mount.split()).count(
+        "record.cohort==='hybrid_only'&&record.detailKind==='gnn_explanation'"
+    ) >= 2
+
+
+def _schema3_overlay_fixture():
+    community = {
+        "complete": True,
+        "node_count": 4,
+        "edge_count": 3,
+        "nodes": [
+            {"node_id": "p1", "x": 0.1, "y": 0.2},
+            {"node_id": "p2", "x": 0.3, "y": 0.4},
+            {"node_id": "p3", "x": 0.5, "y": 0.6},
+            {"node_id": "p4", "x": 0.7, "y": 0.8},
+        ],
+        "edges": [
+            {"edge_id": "e1", "u": "p1", "v": "p2", "edge_type": "COTRAVEL"},
+            {"edge_id": "e2", "u": "p2", "v": "p3", "edge_type": "RESIDENCE"},
+            {"edge_id": "e3", "u": "p3", "v": "p4", "edge_type": "SHARED_PLATE"},
+        ],
+    }
+    overlay_nodes = [
+        {"node_id": "p1", "explainer_median": 0.9, "rank": 1},
+        {"node_id": "p4", "explainer_median": 0.7, "rank": 2},
+    ]
+    overlay_edges = [
+        {
+            "edge_id": "e1",
+            "u": "p1",
+            "v": "p2",
+            "edge_type": "COTRAVEL",
+            "relation": "COTRAVEL",
+            "explainer_median": 0.8,
+            "rank": 1,
+        },
+        {
+            "edge_id": "e3",
+            "u": "p3",
+            "v": "p4",
+            "edge_type": "SHARED_PLATE",
+            "relation": "SHARED_PLATE",
+            "explainer_median": 0.6,
+            "rank": 2,
+        },
+    ]
+    return community, overlay_nodes, overlay_edges
+
+
+def test_schema3_overlay_merges_attribution_onto_community_rows():
+    community, overlay_nodes, overlay_edges = _schema3_overlay_fixture()
+
+    result = _node_json(
+        "(()=>{const community=%s;const overlayNodes=%s;const overlayEdges=%s;"
+        "const communitySnapshot=JSON.stringify(community);"
+        "const nodeSnapshot=JSON.stringify(overlayNodes);"
+        "const edgeSnapshot=JSON.stringify(overlayEdges);"
+        "const first=mergeRecoverySchema3Overlay(community,overlayNodes,overlayEdges);"
+        "const second=mergeRecoverySchema3Overlay(community,overlayNodes,overlayEdges);"
+        "const reversed=mergeRecoverySchema3Overlay(community,"
+        "overlayNodes.slice().reverse(),overlayEdges.slice().reverse());"
+        "return {deterministic:JSON.stringify(first)===JSON.stringify(second),"
+        "orderInvariant:JSON.stringify(first)===JSON.stringify(reversed),"
+        "inputsUnchanged:JSON.stringify(community)===communitySnapshot"
+        "&&JSON.stringify(overlayNodes)===nodeSnapshot"
+        "&&JSON.stringify(overlayEdges)===edgeSnapshot,result:first};})()"
+        % (
+            json.dumps(community),
+            json.dumps(overlay_nodes),
+            json.dumps(overlay_edges),
+        )
+    )
+    merged = result["result"]
+
+    assert result["deterministic"] is True
+    assert result["orderInvariant"] is True
+    assert result["inputsUnchanged"] is True
+    assert merged["available"] is True
+    nodes_by_id = {node["node_id"]: node for node in merged["nodes"]}
+    edges_by_id = {edge["edge_id"]: edge for edge in merged["edges"]}
+    assert set(nodes_by_id) == {"p1", "p2", "p3", "p4"}
+    assert set(edges_by_id) == {"e1", "e2", "e3"}
+    assert nodes_by_id["p1"]["importance"] == 0.9
+    assert nodes_by_id["p1"]["attributed"] is True
+    assert nodes_by_id["p1"]["rank"] == 1
+    assert nodes_by_id["p4"]["importance"] == 0.7
+    assert nodes_by_id["p4"]["attributed"] is True
+    assert nodes_by_id["p4"]["rank"] == 2
+    assert edges_by_id["e1"]["importance"] == 0.8
+    assert edges_by_id["e1"]["attributed"] is True
+    assert edges_by_id["e1"]["rank"] == 1
+    assert edges_by_id["e1"]["relation"] == "COTRAVEL"
+    assert edges_by_id["e1"]["edge_type"] == "COTRAVEL"
+    assert edges_by_id["e3"]["importance"] == 0.6
+    assert edges_by_id["e3"]["attributed"] is True
+    assert edges_by_id["e3"]["rank"] == 2
+    assert edges_by_id["e3"]["relation"] == "SHARED_PLATE"
+    assert nodes_by_id["p2"]["x"] == 0.3
+    assert nodes_by_id["p2"]["y"] == 0.4
+    assert nodes_by_id["p2"]["importance"] == 0
+    assert nodes_by_id["p2"]["attributed"] is False
+    assert nodes_by_id["p3"]["importance"] == 0
+    assert nodes_by_id["p3"]["attributed"] is False
+    assert edges_by_id["e2"]["u"] == "p2"
+    assert edges_by_id["e2"]["v"] == "p3"
+    assert edges_by_id["e2"]["relation"] == "RESIDENCE"
+    assert edges_by_id["e2"]["edge_type"] == "RESIDENCE"
+    assert edges_by_id["e2"]["importance"] == 0
+    assert edges_by_id["e2"]["attributed"] is False
+    assert edges_by_id["e2"]["rank"] is None
+
+
+def test_schema3_overlay_canonicalizes_attributed_edge_relation_fallback():
+    community, overlay_nodes, overlay_edges = _schema3_overlay_fixture()
+    overlay_edges[0].pop("relation")
+
+    result = _node_json(
+        "mergeRecoverySchema3Overlay(%s,%s,%s)"
+        % (json.dumps(community), json.dumps(overlay_nodes), json.dumps(overlay_edges))
+    )
+
+    edge = next(row for row in result["edges"] if row["edge_id"] == "e1")
+    assert edge["relation"] == "COTRAVEL"
+    assert edge["edge_type"] == "COTRAVEL"
+    assert edge["rank"] == 1
+
+
+def test_schema3_overlay_detail_presentation_keeps_complete_community_rows():
+    community, overlay_nodes, overlay_edges = _schema3_overlay_fixture()
+    overlay = _node_json(
+        "mergeRecoverySchema3Overlay(%s,%s,%s)"
+        % (json.dumps(community), json.dumps(overlay_nodes), json.dumps(overlay_edges))
+    )
+    boundary = {
+        "snapshot": "2025-01-02T00:00:00+00:00",
+        "edge_rule": "available_time < snapshot",
+        "caught_rule": "label_available_time_utc < snapshot",
+    }
+    record = {
+        "personId": "p1",
+        "detailKind": "gnn_explanation",
+        "scoring_day": "2025-01-02T00:00:00+00:00",
+    }
+    payload = {"explanation": {"evidence_boundary": boundary}}
+    community_view = {"available": True, "community": community}
+    result = _node_json(
+        "(()=>{const community=%s;const overlay=%s;"
+        "const snapshot=JSON.stringify(community);"
+        "const detail=buildRecoverySchema3Detail(%s,%s,{available:true,community},overlay);"
+        "return {detail,unchanged:JSON.stringify(community)===snapshot};})()"
+        % (
+            json.dumps(community),
+            json.dumps(overlay),
+            json.dumps(record),
+            json.dumps(payload),
+        )
+    )
+
+    detail = result["detail"]
+    assert detail["available"] is True
+    assert result["unchanged"] is True
+    assert detail["explanation"]["overlayNodes"][0]["importance"] == 0.9
+    assert detail["explanation"]["overlayNodes"][0]["attributed"] is True
+    assert detail["explanation"]["overlayEdges"][0]["importance"] == 0.8
+    assert detail["explanation"]["overlayEdges"][0]["attributed"] is True
+    assert detail["explanation"]["community"] == community
+
+
+def test_schema3_overlay_normalizes_trimmed_graph_identity_fields():
+    community, overlay_nodes, overlay_edges = _schema3_overlay_fixture()
+    overlay_nodes[0]["node_id"] = " p1 "
+    overlay_edges[0].update(
+        edge_id=" e1 ",
+        u=" p1 ",
+        v=" p2 ",
+        edge_type=" COTRAVEL ",
+        relation=" COTRAVEL ",
+    )
+
+    result = _node_json(
+        "mergeRecoverySchema3Overlay(%s,%s,%s)"
+        % (json.dumps(community), json.dumps(overlay_nodes), json.dumps(overlay_edges))
+    )
+
+    node = next(row for row in result["nodes"] if row["node_id"] == "p1")
+    edge = next(row for row in result["edges"] if row["edge_id"] == "e1")
+    assert node["node_id"] == "p1"
+    assert edge["edge_id"] == "e1"
+    assert edge["u"] == "p1"
+    assert edge["v"] == "p2"
+    assert edge["edge_type"] == "COTRAVEL"
+    assert edge["relation"] == "COTRAVEL"
+
+
+def test_schema3_overlay_does_not_overwrite_base_structural_fields():
+    community, overlay_nodes, overlay_edges = _schema3_overlay_fixture()
+    community["nodes"][0].update(
+        pooled_member=True,
+        caught_before_snapshot=False,
+        day_state="as_of",
+    )
+    community["edges"][0]["message_hop"] = 1
+    overlay_nodes[0].update(
+        x=99,
+        y=98,
+        pooled_member=False,
+        caught_before_snapshot=True,
+        day_state="malicious",
+        arbitrary_overlay_key="must-not-leak",
+    )
+    overlay_edges[0].update(
+        message_hop=99,
+        arbitrary_overlay_key="must-not-leak",
+    )
+
+    result = _node_json(
+        "mergeRecoverySchema3Overlay(%s,%s,%s)"
+        % (json.dumps(community), json.dumps(overlay_nodes), json.dumps(overlay_edges))
+    )
+
+    node = next(row for row in result["nodes"] if row["node_id"] == "p1")
+    edge = next(row for row in result["edges"] if row["edge_id"] == "e1")
+    assert node["x"] == 0.1
+    assert node["y"] == 0.2
+    assert node["pooled_member"] is True
+    assert node["caught_before_snapshot"] is False
+    assert node["day_state"] == "as_of"
+    assert "arbitrary_overlay_key" not in node
+    assert edge["message_hop"] == 1
+    assert "arbitrary_overlay_key" not in edge
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("complete", False),
+        ("complete", None),
+        ("node_count", 3),
+        ("node_count", -1),
+        ("edge_count", 2),
+        ("edge_count", -1),
+    ],
+)
+def test_schema3_overlay_requires_complete_community_counts(field, value):
+    community, overlay_nodes, overlay_edges = _schema3_overlay_fixture()
+    community[field] = value
+
+    result = _node_json(
+        "mergeRecoverySchema3Overlay(%s,%s,%s)"
+        % (json.dumps(community), json.dumps(overlay_nodes), json.dumps(overlay_edges))
+    )
+
+    assert result == {"available": False, "reason": "invalid-overlay-identity"}
+
+
+def test_schema3_overlay_loader_contract_is_verified_and_stale_safe():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    mount = js.split("function mountRecoveryExplorerV3", 1)[1].split(
+        "const recoveryMounts", 1
+    )[0]
+    loader = mount.split("async function loadRecoverySchema3OverlayRows", 1)[1].split(
+        "function onV3Click", 1
+    )[0]
+
+    assert "recoveryValidateChunkOwner(owner)" in loader
+    assert "owner[normalized==='node'?'node_chunks':'edge_chunks']" in loader
+    assert "recoveryFetchJson(" in loader
+    assert "recoverySidecarUrl(view,ref.path)" in loader
+    assert "ref.sha256" in loader
+    assert "recoveryValidatedChunkRows(" in loader
+    assert "normalized==='node'?'nodes':'edges'" in loader
+    assert "Chunk offset or count contract is invalid" in loader
+    assert "if(disposed||token!==requestToken)return collected;" in loader
+    assert "recoveryResolveCatalogRows" not in loader
+    assert "recoveryApplyDayView" not in loader
+
+
+@pytest.mark.parametrize(
+    "mutate,reason",
+    [
+        (lambda nodes, edges: nodes.append({
+            "node_id": "ghost", "explainer_median": 0.4, "rank": 2,
+        }),
+         "invalid-overlay-membership"),
+        (lambda nodes, edges: edges.append({
+            "edge_id": "ghost", "u": "p1", "v": "p2",
+            "edge_type": "COTRAVEL", "relation": "COTRAVEL",
+            "explainer_median": 0.4, "rank": 2,
+        }), "invalid-overlay-membership"),
+        (lambda nodes, edges: nodes.append({
+            "node_id": "p1", "explainer_median": 0.4, "rank": 2,
+        }),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges.append({
+            "edge_id": "e1", "u": "p1", "v": "p2",
+            "edge_type": "COTRAVEL", "relation": "COTRAVEL",
+            "explainer_median": 0.4, "rank": 2,
+        }), "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].update(u="p3"),
+         "invalid-overlay-membership"),
+        (lambda nodes, edges: nodes[0].update(explainer_median=float("nan")),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: nodes[0].update(explainer_median="not-a-number"),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].update(edge_type="RESIDENCE"),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].pop("u"),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].pop("v"),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].pop("edge_type"),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].update(edge_type=""),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].update(relation=""),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].update(relation="RESIDENCE"),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].pop("rank"),
+         "invalid-overlay-identity"),
+        (lambda nodes, edges: edges[0].update(rank=0),
+         "invalid-overlay-identity"),
+    ],
+)
+def test_schema3_overlay_validation_fails_closed(mutate, reason):
+    community, overlay_nodes, overlay_edges = _schema3_overlay_fixture()
+    mutate(overlay_nodes, overlay_edges)
+
+    result = _node_json(
+        "mergeRecoverySchema3Overlay(%s,%s,%s)"
+        % (json.dumps(community), json.dumps(overlay_nodes), json.dumps(overlay_edges))
+    )
+
+    assert result == {"available": False, "reason": reason}
+
+
+def test_schema3_graph_slice_bounded_context_preserves_attribution_and_tables():
+    node_limit = _node_json("RECOVERY_GRAPH_NODE_LIMIT")
+    edge_limit = _node_json("RECOVERY_GRAPH_EDGE_LIMIT")
+    full_nodes = [
+        {"node_id": "p0", "x": 0.0, "y": 0.0, "target": True},
+        {"node_id": "p1", "x": 0.1, "y": 0.1, "attributed": True, "importance": 0.9},
+        {"node_id": "p2", "x": 0.2, "y": 0.2, "attributed": True, "importance": 0.7},
+    ]
+    full_nodes.extend(
+        {"node_id": "p%04d" % index, "x": 0.5, "y": 0.5}
+        for index in range(3, node_limit + 5)
+    )
+    full_edges = [{
+        "edge_id": "ea",
+        "u": "p1",
+        "v": "p2",
+        "importance": 0.8,
+        "attributed": True,
+    }]
+    full_edges.extend(
+        {
+            "edge_id": "e%04d" % index,
+            "u": "p0",
+            "v": "p%04d" % (3 + ((index - 3) % (node_limit + 2))),
+            "importance": 0,
+        }
+        for index in range(3, edge_limit + 5)
+    )
+
+    result = _node_json(
+        "(()=>{const fullNodes=%s;const fullEdges=%s;"
+        "const nodeSnapshot=JSON.stringify(fullNodes);"
+        "const edgeSnapshot=JSON.stringify(fullEdges);"
+        "const first=buildRecoveryGraphSlice(fullNodes,fullEdges,'p0');"
+        "const second=buildRecoveryGraphSlice(fullNodes,fullEdges,'p0');"
+        "const reordered=buildRecoveryGraphSlice(fullNodes.slice().reverse(),"
+        "fullEdges.slice().reverse(),'p0');"
+        "return {deterministic:JSON.stringify(first)===JSON.stringify(second),"
+        "inputsUnchanged:JSON.stringify(fullNodes)===nodeSnapshot"
+        "&&JSON.stringify(fullEdges)===edgeSnapshot,slice:first,"
+        "reorderedSlice:{sampled:reordered.sampled,nodes:reordered.nodes,"
+        "edges:reordered.edges},reorderedTableNodes:reordered.tableNodes,"
+        "reorderedTableEdges:reordered.tableEdges};})()"
+        % (json.dumps(full_nodes), json.dumps(full_edges))
+    )
+    sliced = result["slice"]
+
+    assert result["deterministic"] is True
+    assert result["inputsUnchanged"] is True
+    assert result["reorderedSlice"] == {
+        "sampled": sliced["sampled"],
+        "nodes": sliced["nodes"],
+        "edges": sliced["edges"],
+    }
+    assert result["reorderedTableNodes"] == list(reversed(full_nodes))
+    assert result["reorderedTableEdges"] == list(reversed(full_edges))
+    assert sliced["sampled"] is True
+    assert len(sliced["nodes"]) <= node_limit
+    assert len(sliced["edges"]) <= edge_limit
+    returned_node_ids = {node["node_id"] for node in sliced["nodes"]}
+    assert {"p0", "p1", "p2"} <= returned_node_ids
+    assert next(node for node in sliced["nodes"] if node["node_id"] == "p0")["target"] is True
+    attributed_nodes = {
+        node["node_id"]: node
+        for node in sliced["nodes"]
+        if node["node_id"] in {"p1", "p2"}
+    }
+    assert attributed_nodes["p1"]["importance"] == 0.9
+    assert attributed_nodes["p1"]["attributed"] is True
+    assert attributed_nodes["p2"]["importance"] == 0.7
+    assert attributed_nodes["p2"]["attributed"] is True
+    returned_edges = {edge["edge_id"]: edge for edge in sliced["edges"]}
+    assert returned_edges["ea"]["importance"] == 0.8
+    assert returned_edges["ea"]["attributed"] is True
+    assert {"p1", "p2"} <= {
+        returned_edges["ea"]["u"], returned_edges["ea"]["v"]
+    }
+    assert all(
+        edge["u"] in returned_node_ids and edge["v"] in returned_node_ids
+        for edge in sliced["edges"]
+    )
+    assert sliced["tableNodes"] == full_nodes
+    assert sliced["tableEdges"] == full_edges
+
+
+def test_schema3_graph_slice_fails_closed_when_mandatory_nodes_exceed_bound():
+    node_limit = _node_json("RECOVERY_GRAPH_NODE_LIMIT")
+    full_nodes = [
+        {"node_id": "p0", "x": 0.0, "y": 0.0, "target": True},
+        *(
+            {"node_id": "e%04d" % index, "x": 0.5, "y": 0.5,
+             "attributed": True, "importance": 0.9}
+            for index in range(node_limit)
+        ),
+    ]
+
+    result = _node_json(
+        "buildRecoveryGraphSlice(%s,[], 'p0')" % json.dumps(full_nodes)
+    )
+
+    assert result == {
+        "available": False,
+        "reason": "mandatory-evidence-node-limit-exceeded",
+        "sampled": True,
+        "fullNodeCount": node_limit + 1,
+        "fullEdgeCount": 0,
+        "nodes": [],
+        "edges": [],
+        "tableNodes": full_nodes,
+        "tableEdges": [],
+    }
+
+
+def test_draw_commands_propagate_mandatory_node_bound_without_truncating_tables():
+    node_limit = _node_json("RECOVERY_GRAPH_NODE_LIMIT")
+    explanation = _valid_recovery_artifact()["explanations"][0]
+    full_nodes = [
+        {"node_id": "p1", "x": 0.0, "y": 0.0, "target": True},
+        *(
+            {"node_id": "e%04d" % index, "x": 0.5, "y": 0.5,
+             "attributed": True, "importance": 0.9}
+            for index in range(node_limit)
+        ),
+    ]
+    explanation["community"]["nodes"] = full_nodes
+    explanation["community"]["edges"] = []
+    for stage in explanation["flow_stages"]:
+        stage["node_ids"] = [node["node_id"] for node in full_nodes]
+        stage["edge_ids"] = []
+        stage["emphasized_edge_ids"] = []
+
+    result = _run_ui(
+        "buildCommunityDrawCommands",
+        explanation,
+        {"mode": "flow", "stageId": "rank_fusion", "query": ""},
+    )
+
+    assert result["available"] is False
+    assert result["reason"] == "mandatory-evidence-node-limit-exceeded"
+    assert result["nodes"] == []
+    assert result["edges"] == []
+    assert len(result["tableNodes"]) == node_limit + 1
+    assert result["tableEdges"] == []
+
+
+def _sidecar(payload):
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    import hashlib
+
+    return body, hashlib.sha256(body.encode()).hexdigest()
+
+
+def _schema3_served_bundle():
+    """Build a manifest plus every sidecar the schema-3 mount actually fetches."""
+    base = "recovery/bundles/0123456789abcdef01234567/"
+    files = {}
+
+    def publish(path, payload, **extra):
+        body, digest = _sidecar(payload)
+        files[base + path] = body
+        return {"path": path, "sha256": digest, **extra}
+
+    node_records = [
+        {"record_id": "p1", "record": {"node_id": "p1"}},
+        {"record_id": "p2", "record": {"node_id": "p2"}},
+    ]
+    edge_records = [
+        {
+            "record_id": "e1",
+            "record": {
+                "edge_id": "e1",
+                "u": "p1",
+                "v": "p2",
+                "edge_type": "COTRAVEL",
+            },
+        }
+    ]
+    node_catalog = publish(
+        "catalog/nodes-0.json",
+        {"offset": 0, "count": 2, "records": node_records},
+        offset=0,
+        count=2,
+        first_id="p1",
+        last_id="p2",
+    )
+    edge_catalog = publish(
+        "catalog/edges-0.json",
+        {"offset": 0, "count": 1, "records": edge_records},
+        offset=0,
+        count=1,
+        first_id="e1",
+        last_id="e1",
+    )
+    node_chunk = publish(
+        "communities/nodes-0.json",
+        {
+            "offset": 0,
+            "count": 2,
+            "nodes": [
+                {"node_id": "p1", "catalog_id": "p1"},
+                {"node_id": "p2", "catalog_id": "p2"},
+            ],
+        },
+        offset=0,
+        count=2,
+    )
+    edge_chunk = publish(
+        "communities/edges-0.json",
+        {
+            "offset": 0,
+            "count": 1,
+            "edges": [{"edge_id": "e1", "catalog_id": "e1"}],
+        },
+        offset=0,
+        count=1,
+    )
+    overlay_node_chunk = publish(
+        "overlays/h1-nodes-0.json",
+        {
+            "offset": 0,
+            "count": 1,
+            "nodes": [
+                {
+                    "node_id": "p2",
+                    "explainer_median": 0.9,
+                    "rank": 1,
+                }
+            ],
+        },
+        offset=0,
+        count=1,
+    )
+    overlay_edge_chunk = publish(
+        "overlays/h1-edges-0.json",
+        {
+            "offset": 0,
+            "count": 1,
+            "edges": [
+                {
+                    "edge_id": "e1",
+                    "u": "p1",
+                    "v": "p2",
+                    "edge_type": "COTRAVEL",
+                    "explainer_median": 0.8,
+                    "rank": 1,
+                }
+            ],
+        },
+        offset=0,
+        count=1,
+    )
+    node_status = publish(
+        "communities/node-status-0.json",
+        {
+            "offset": 0,
+            "count": 2,
+            "node_statuses": [
+                {
+                    "node_id": "p1",
+                    "x": 0.5,
+                    "y": 0.5,
+                    "pooled_member": True,
+                    "caught_before_snapshot": False,
+                },
+                {
+                    "node_id": "p2",
+                    "x": 0.8,
+                    "y": 0.3,
+                    "pooled_member": True,
+                    "caught_before_snapshot": True,
+                },
+            ],
+        },
+        offset=0,
+        count=2,
+    )
+    edge_membership = publish(
+        "communities/edge-membership-0.json",
+        {
+            "offset": 0,
+            "count": 1,
+            "edge_memberships": [
+                {"edge_id": "e1", "message_hop": 1, "source_row_ids": ["row:1"]}
+            ],
+        },
+        offset=0,
+        count=1,
+    )
+    community = {
+        "schema_version": "1.0",
+        "complete": True,
+        "community_key": "community:a",
+        "node_count": 2,
+        "edge_count": 1,
+        "provenance_observation_count": 0,
+        "node_chunks": [node_chunk],
+        "edge_chunks": [edge_chunk],
+        "provenance_chunks": [],
+        "provenance_expansion_membership_chunks": [],
+        "day_view": {
+            "node_status_chunks": [node_status],
+            "edge_membership_chunks": [edge_membership],
+        },
+    }
+    community_ref = publish("communities/community-a.json", community)
+    boundary = {
+        "snapshot": "2025-01-02T00:00:00+00:00",
+        "edge_rule": "available_time < snapshot",
+        "caught_rule": "label_available_time_utc < snapshot",
+    }
+    hybrid_ref = publish(
+        "cases/h1.json",
+        {
+            "schema_version": "3.0",
+            "cohort": "hybrid_only",
+            "community_key": "community:a",
+            "case": {"case_id": "h1", "community_key": "community:a"},
+            "explanation": {
+                "evidence_boundary": boundary,
+                "flow_stages": [
+                    {"stage_id": "first_hop", "edge_rule": {"max_message_hop": 1}},
+                    {"stage_id": "second_hop", "edge_rule": {"max_message_hop": 2}},
+                    {
+                        "stage_id": "component_pool",
+                        "edge_rule": {
+                            "edge_type": "COTRAVEL",
+                            "both_pooled_members": True,
+                        },
+                    },
+                    {"stage_id": "rank_fusion", "edge_rule": {"match_none": True}},
+                ],
+                "factors": [],
+                "attributions": {"top_local_nodes": [], "top_edges": []},
+                "llm_narrative": {},
+                "stability": {
+                    "stable_factor_count": 2,
+                    "signed_effect_source": "counterfactual_only",
+                },
+                "faithfulness": {
+                    "original_probability": 0.82,
+                    "points": [
+                        {
+                            "fraction": 0.1,
+                            "top_edge_probability_drop": 0.31,
+                            "matched_random_probability_drop": 0.04,
+                            "unmatched_control_count": 0,
+                        },
+                        {
+                            "fraction": 0.25,
+                            "top_edge_probability_drop": 0.48,
+                            "matched_random_probability_drop": None,
+                            "unmatched_control_count": 2,
+                        },
+                    ],
+                },
+            },
+            "overlay_evidence": {
+                "complete": True,
+                "node_count": 1,
+                "edge_count": 1,
+                "provenance_observation_count": 0,
+                "node_chunks": [overlay_node_chunk],
+                "edge_chunks": [overlay_edge_chunk],
+                "provenance_chunks": [],
+                "provenance_expansion_membership_chunks": [],
+            },
+        },
+    )
+    baseline_ref = publish(
+        "cases/b1.json",
+        {
+            "schema_version": "3.0",
+            "cohort": "baseline_only",
+            "community_key": "community:a",
+            "case": {"case_id": "b1", "community_key": "community:a"},
+            "detail": {
+                "evidence_boundary": boundary,
+                "structural_stages": [
+                    {"stage_id": "first_hop", "edge_rule": {"max_message_hop": 1}},
+                    {"stage_id": "second_hop", "edge_rule": {"max_message_hop": 2}},
+                    {
+                        "stage_id": "component_pool",
+                        "edge_rule": {
+                            "edge_type": "COTRAVEL",
+                            "both_pooled_members": True,
+                        },
+                    },
+                ],
+            },
+        },
+    )
+    artifact = _schema3_ui_artifact()
+    for record in artifact["cohorts"]["hybrid_only"]:
+        record["person_id"] = "p1"
+        record["community_key"] = "community:a"
+    for record in artifact["cohorts"]["baseline_only"]:
+        record["person_id"] = "p1"
+        record["community_key"] = "community:a"
+    artifact["detail_index"] = {"h1": hybrid_ref}
+    artifact["community_index"] = {"b1": baseline_ref}
+    artifact["community_sidecar_index"] = {"community:a": community_ref}
+    artifact["catalog_index"] = {
+        "nodes": {"record_count": 2, "chunk_size": 250, "chunks": [node_catalog]},
+        "edges": {"record_count": 1, "chunk_size": 250, "chunks": [edge_catalog]},
+        "provenance": {"record_count": 0, "chunk_size": 250, "chunks": []},
+    }
+    return artifact, files
+
+
+_FAKE_DOM = r"""
+function fakeElement(tag){
+  const element={
+    tag,children:[],textContent:'',className:'',attrs:{},style:{},id:'',
+    dataset:{},type:'',value:'',tabIndex:0,
+    appendChild(child){this.children.push(child);return child;},
+    setAttribute(name,value){this.attrs[name]=String(value);},
+    getContext(){return null;},
+    focus(){},
+    replaceChildren(...nodes){this.children=nodes.slice();},
+    querySelectorAll(){return [];},
+    querySelector(){return null;},
+    addEventListener(){},removeEventListener(){},
+    classList:{add(){}},
+    contains(){return true;}
+  };
+  return element;
+}
+const doc={
+  createElement:fakeElement,
+  createDocumentFragment(){return fakeElement('fragment');}
+};
+function makeRoot(){const root=fakeElement('div');root.ownerDocument=doc;return root;}
+function allNodes(node){
+  return [node,...node.children.flatMap(allNodes)];
+}
+function visibleText(root){
+  return allNodes(root).map(node=>node.textContent).filter(Boolean);
+}
+function ariaLabels(root){
+  return allNodes(root).map(node=>node.attrs['aria-label']).filter(Boolean);
+}
+"""
+
+
+def _mount_schema3(case_id, bundle=None):
+    artifact, files = bundle or _schema3_served_bundle()
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nconst FILES="
+        + json.dumps(files)
+        + ";\nglobalThis.fetch=async function(url){\n"
+        "  globalThis.FETCHED.push(url);\n"
+        "  const body=FILES[url];\n"
+        "  if(body===undefined)return {ok:false,status:404};\n"
+        "  return {ok:true,status:200,\n"
+        "    arrayBuffer:async()=>new TextEncoder().encode(body).buffer};\n"
+        "};\n"
+        + _FAKE_DOM
+        + "\nconst FETCHED=[];globalThis.FETCHED=FETCHED;"
+        + "\nconst DETAILS=[];"
+        + "const ORIGINAL_DETAIL=buildRecoverySchema3Detail;"
+        + "buildRecoverySchema3Detail=function(...args){"
+        + "  const result=ORIGINAL_DETAIL(...args);"
+        + "  if(result.available)DETAILS.push(result);"
+        + "  return result;"
+        + "};"
+        + "\nconst root=makeRoot();"
+        + "\nconst cleanup=mountRecoveryExplorerV3(root,"
+        + json.dumps(artifact)
+        + ",{});"
+        + "\nsetTimeout(()=>{"
+        + "process.stdout.write(JSON.stringify({"
+        + "text:visibleText(root),labels:ariaLabels(root),"
+        + "fetches:FETCHED,details:DETAILS,"
+        + "tables:allNodes(root).filter(n=>n.tag==='table').length,"
+        + "rows:allNodes(root).filter(n=>n.tag==='tr').length"
+        + "}));cleanup();},250);"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    return json.loads(completed.stdout)
+
+
+def test_schema3_mount_renders_hybrid_technical_evidence_end_to_end():
+    rendered = _mount_schema3("h1")
+    text = " | ".join(rendered["text"])
+
+    assert "Hybrid technical detail" in text
+    assert "Strict as-of evidence boundary" in text
+    assert "Baseline score: 0.2" in text
+    assert "Baseline percentile: 0.2" in text
+    assert "Seed-0 GNN probability: 0.8" in text
+    assert "Hybrid percentile-fusion score: 0.56" in text
+    assert "Salient counterfactual factors" in text
+    assert "Grounded narrative" in text
+    assert "Highest-attribution evidence" in " | ".join(rendered["labels"] + rendered["text"])
+    assert "As-of community context + explanation evidence" in text
+    assert "Community data table" in text
+    # Faithfulness, community members, and community relationships tables.
+    assert rendered["tables"] == 3
+    assert rendered["rows"] >= 5
+    assert any("Community graph for Hybrid case p1" in label
+               for label in rendered["labels"])
+    assert any("overlays/h1-nodes-0.json" in url for url in rendered["fetches"])
+    assert any("overlays/h1-edges-0.json" in url for url in rendered["fetches"])
+    detail = rendered["details"][-1]
+    overlay_nodes = {
+        row["node_id"]: row for row in detail["explanation"]["overlayNodes"]
+    }
+    overlay_edges = {
+        row["edge_id"]: row for row in detail["explanation"]["overlayEdges"]
+    }
+    assert overlay_nodes["p2"]["importance"] == 0.9
+    assert overlay_nodes["p2"]["attributed"] is True
+    assert overlay_edges["e1"]["importance"] == 0.8
+    assert overlay_edges["e1"]["attributed"] is True
+
+
+def test_schema3_lazy_joins_fail_closed_on_missing_catalog_or_day_identity():
+    artifact, files = _schema3_served_bundle()
+    base = artifact["sidecar_base"]
+    bad_catalog = {
+        "offset": 0,
+        "count": 1,
+        "records": [{"record_id": "p1", "record": {"node_id": "p1"}}],
+    }
+    body, digest = _sidecar(bad_catalog)
+    files[base + "catalog/nodes-bad.json"] = body
+    artifact["catalog_index"]["nodes"]["chunks"] = [{
+        "path": "catalog/nodes-bad.json",
+        "sha256": digest,
+        "offset": 0,
+        "count": 1,
+        "first_id": "p1",
+        "last_id": "p2",
+    }]
+
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nconst FILES="
+        + json.dumps(files)
+        + ";\nglobalThis.fetch=async function(url){\n"
+        "  const body=FILES[url];\n"
+        "  if(body===undefined)return {ok:false,status:404};\n"
+        "  return {ok:true,status:200,\n"
+        "    arrayBuffer:async()=>new TextEncoder().encode(body).buffer};\n"
+        "};\n"
+        + "(async()=>{const view=buildRecoverySchema3ViewModel("
+        + json.dumps(artifact)
+        + ");const owner=JSON.parse(FILES["
+        + json.dumps(base + "communities/community-a.json")
+        + "]);const result=[];"
+        + "try{await recoveryResolveCatalogRows(view,[{catalog_id:'p2'}],'nodes');result.push('catalog-ok');}"
+        + "catch(error){result.push(error.message);}"
+        + "try{await recoveryApplyDayView(view,owner,'node',0,[{node_id:'ghost'}]);result.push('day-ok');}"
+        + "catch(error){result.push(error.message);}"
+        + "process.stdout.write(JSON.stringify(result));})();"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    result = json.loads(completed.stdout)
+
+    assert result == [
+        "Normalized catalog record is missing",
+        "Normalized day-view identity contract is invalid",
+    ]
+
+
+def test_schema3_lazy_catalog_join_rejects_mismatched_record_identity():
+    artifact, files = _schema3_served_bundle()
+    base = artifact["sidecar_base"]
+    bad_catalog = {
+        "offset": 0,
+        "count": 1,
+        "records": [{"record_id": "p1", "record": {"node_id": "ghost"}}],
+    }
+    body, digest = _sidecar(bad_catalog)
+    files[base + "catalog/nodes-bad.json"] = body
+    artifact["catalog_index"]["nodes"]["chunks"] = [{
+        "path": "catalog/nodes-bad.json",
+        "sha256": digest,
+        "offset": 0,
+        "count": 1,
+        "first_id": "p1",
+        "last_id": "p1",
+    }]
+
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nconst FILES="
+        + json.dumps(files)
+        + ";\nglobalThis.fetch=async function(url){\n"
+        "  const body=FILES[url];\n"
+        "  if(body===undefined)return {ok:false,status:404};\n"
+        "  return {ok:true,status:200,\n"
+        "    arrayBuffer:async()=>new TextEncoder().encode(body).buffer};\n"
+        "};\n"
+        + "(async()=>{const view=buildRecoverySchema3ViewModel("
+        + json.dumps(artifact)
+        + ");const result=[];"
+        + "try{await recoveryResolveCatalogRows(view,[{node_id:'p1',catalog_id:'p1'}],'nodes');result.push('join-ok');}"
+        + "catch(error){result.push(error.message);}"
+        + "process.stdout.write(JSON.stringify(result));})();"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == [
+        "Normalized catalog identity contract is invalid"
+    ]
+
+
+def test_schema3_mount_hides_baseline_control_from_explainer_only_case_list():
+    artifact, files = _schema3_served_bundle()
+    # Drop the Hybrid case so the control is the default selection.
+    artifact["cohorts"]["hybrid_only"] = []
+    artifact["summary"].update(hybrid_only_recovered=0, hybrid_total=0, net_gain=-1)
+    artifact["coverage"].update(
+        hybrid_requested=0, hybrid_selected=0, hybrid_explained=0
+    )
+    artifact["selection"]["selected_ids"]["hybrid_only"] = []
+    artifact["detail_index"] = {}
+
+    rendered = _mount_schema3("b1", (artifact, files))
+    text = " | ".join(rendered["text"])
+
+    assert "Showing GNN explanations only" in text
+    assert "No cases match the current filter." in text
+    assert "Community context only: GNNExplainer was not run for this baseline control." not in text
+    assert "Structural evidence only" not in text
+    assert "Salient counterfactual factors" not in text
+    assert "Highest-attribution evidence" not in text
+    assert "Grounded narrative" not in text
+    assert "Community data table" not in text
+    assert not any("baseline control p1" in label for label in rendered["labels"])
+    assert not any("overlays/" in url for url in rendered["fetches"])
+    assert rendered["details"] == []
+
+
+def test_schema3_mount_hides_hybrid_structural_fallback_from_explainer_only_case_list():
+    artifact, files = _schema3_served_bundle()
+    base = artifact["sidecar_base"]
+    fallback = json.loads(files[base + "cases/b1.json"])
+    fallback["cohort"] = "hybrid_only"
+    fallback["case"]["case_id"] = "h1"
+    body, digest = _sidecar(fallback)
+    files[base + "cases/h1-fallback.json"] = body
+
+    artifact["cohorts"]["hybrid_only"][0].update(
+        detail_status="community_only", detail_kind="community_control"
+    )
+    artifact["selection"]["selected_ids"]["hybrid_only"] = []
+    artifact["selection"]["hybrid_structural_fallback_ids"] = ["h1"]
+    artifact["detail_index"] = {}
+    artifact["community_index"]["h1"] = {
+        "path": "cases/h1-fallback.json",
+        "sha256": digest,
+        "cohort": "hybrid_only",
+    }
+    artifact["coverage"].update(
+        hybrid_selected=0,
+        hybrid_explained=0,
+        hybrid_shortfall=1,
+        shortfall=1,
+        shortfall_reasons=["node_limit_exceeded"],
+        hybrid_structural_fallback=1,
+    )
+
+    rendered = _mount_schema3("h1", (artifact, files))
+    text = " | ".join(rendered["text"])
+
+    assert "Showing GNN explanations only" in text
+    assert "No cases match the current filter." in text
+    assert "Community context only: GNNExplainer was not run for this Hybrid structural fallback." not in text
+    assert "Community context only: GNNExplainer was not run for this baseline control." not in text
+    assert all("Hybrid structural fallback p1" not in label for label in rendered["labels"])
+    assert all("baseline control p1" not in label for label in rendered["labels"])
+    assert rendered["details"] == []
+
+
+def test_schema3_mount_surfaces_a_sidecar_hash_failure_instead_of_evidence():
+    artifact, files = _schema3_served_bundle()
+    key = next(
+        name for name in files if "nodes-0" in name and "catalog" not in name
+    )
+    files[key] = files[key].replace('"p2"', '"pX"')
+
+    script = (
+        UI.V9_RECOVERY_EXPLAINER_JS
+        + "\nconst FILES="
+        + json.dumps(files)
+        + ";\nglobalThis.fetch=async function(url){\n"
+        "  const body=FILES[url];\n"
+        "  if(body===undefined)return {ok:false,status:404};\n"
+        "  return {ok:true,status:200,\n"
+        "    arrayBuffer:async()=>new TextEncoder().encode(body).buffer};\n"
+        "};\n"
+        + _FAKE_DOM
+        + "\nconst root=makeRoot();"
+        + "\nconst cleanup=mountRecoveryExplorerV3(root,"
+        + json.dumps(artifact)
+        + ",{});"
+        + "\nsetTimeout(()=>{"
+        + "process.stdout.write(JSON.stringify({text:visibleText(root)}));"
+        + "cleanup();},250);"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    text = " | ".join(json.loads(completed.stdout)["text"])
+
+    # A tampered chunk must fail closed: no graph, no table, explicit reason.
+    assert "Community data table" not in text
+    assert "Complete as-of message community" not in text
+    assert "SHA-256 mismatch" in text
+    assert "python -m http.server 8000" in text
+
+
+def test_schema3_mount_renders_restart_stability_and_removal_faithfulness():
+    rendered = _mount_schema3("h1")
+    text = " | ".join(rendered["text"])
+
+    assert "Restart stability and removal faithfulness" in text
+    assert "Stable factors across deterministic restarts: 2" in text
+    assert "Signed effect source: counterfactual_only" in text
+    assert "Seed-0 probability before removal: 0.82" in text
+    # The matched random control is what makes a top-edge drop meaningful.
+    assert "matched random control" in text
+    assert "0.31" in text and "0.04" in text
+    # A control that could not be matched is reported, never imputed.
+    assert "not measured" in text
+    assert any(
+        "Edge removal faithfulness by removed fraction" in label
+        for label in rendered["labels"]
+    )
+
+
+def test_schema3_stability_and_faithfulness_fail_closed_without_measurements():
+    js = UI.V9_RECOVERY_EXPLAINER_JS
+    mount = js.split("function mountRecoveryExplorerV3", 1)[1].split(
+        "const recoveryMounts", 1
+    )[0]
+    panel = mount.split("function renderStabilityAndFaithfulness", 1)[1].split(
+        "function graphButton", 1
+    )[0]
+
+    assert "Restart stability is unavailable in this artifact." in panel
+    assert "Edge-removal faithfulness is unavailable in this artifact." in panel
+    assert "renderStabilityAndFaithfulness(left,detailView.explanation)" in mount

@@ -29,17 +29,37 @@ from gnn.recovery_observability import (
 )
 
 
-# Kept in step with MAX_EXPLAINER_INPUT_NODES/EDGES in the schema-3 producer
-# package (v9_observability_colab_schema3/gnn/sage_explainer.py).  The two
-# copies must agree: the producer writes the display projection at its ceiling
-# and this module reads it back, so a lower bound here would silently mean
-# "top among displayed records" rather than top in the explanation.
-MAX_LOCAL_EXPLANATION_NODES = 512
-MAX_LOCAL_EXPLANATION_EDGES = 1024
+MAX_LOCAL_EXPLANATION_NODES = 128
+MAX_LOCAL_EXPLANATION_EDGES = 256
 MAX_LOCAL_SOURCE_ROWS_PER_EDGE = 16
 MAX_NODE_ATTRIBUTION_SOURCE_ROWS = 16
 MAX_NODE_FEATURE_MASK_STATS = 512
 MAX_STRUCTURAL_PROVENANCE_ROWS = 256
+EXPLAINER_RESTART_SEEDS = (0, 1, 2)
+EXPLAINER_EPOCHS = 150
+
+EXPLAINER_ELIGIBLE_STATUS = "eligible"
+EXPLAINER_COMMUNITY_ONLY_STATUS = "community_only"
+EXPLAINER_REASON_ELIGIBLE = "eligible"
+EXPLAINER_REASON_NODE_LIMIT = "node_limit_exceeded"
+EXPLAINER_REASON_EDGE_LIMIT = "edge_limit_exceeded"
+EXPLAINER_REASON_BOTH_LIMITS = "node_and_edge_limits_exceeded"
+
+
+class ExplainerEligibilityError(ValueError):
+    """Stable fail-closed signal for a case outside the explainer policy."""
+
+    def __init__(self, eligibility):
+        if not isinstance(eligibility, Mapping):
+            raise ValueError("eligibility must be a mapping")
+        if eligibility.get("eligible") is not False:
+            raise ValueError("eligibility error requires an ineligible result")
+        self.eligibility = dict(eligibility)
+        self.status = str(eligibility["status"])
+        self.reason_code = str(eligibility["reason_code"])
+        super().__init__(
+            f"{self.status} explanation is ineligible: {self.reason_code}"
+        )
 
 
 _ABLATION_KINDS = frozenset(
@@ -259,117 +279,6 @@ class DaySnapshot:
     caught_before_snapshot: frozenset[str]
 
 
-DISPLAY_LAYOUT_RADIUS = 0.46
-# A ring wider than this many nodes is split across concentric sub-rings.
-DISPLAY_RING_BAND_CAPACITY = 120
-MAX_DISPLAY_RING_BANDS = 4
-
-
-def display_hop_ring_layout(nodes, edges, target_person_id):
-    """Place displayed nodes on hop rings around the target, O(N log N + E).
-
-    The published ``x``/``y`` are the only positions a renderer gets, so they
-    have to carry structure.  The previous layout indexed nodes into a
-    ``sqrt(N)`` grid in sorted ``node_id`` order, which meant position encoded
-    alphabetical rank and every edge became a line between two unrelated cells.
-    It was also sized from the *whole* community while only the bounded display
-    projection is drawn, so the drawn nodes landed in scattered cells of an
-    oversized grid.
-
-    This instead puts the target at the centre, each ``message_distance`` on its
-    own ring, and orders a ring so that a node sits in the arc belonging to its
-    nearest-hop neighbour.  Reading outward from the centre therefore follows
-    the message path that produced the score.  Ordering is fully determined by
-    ``message_distance`` and sorted ``node_id``, so the same community always
-    lays out identically.
-
-    Kept byte-identical to the copy in the schema-3 producer package
-    (v9_observability_colab_schema3/gnn/sage_explainer.py).
-    """
-    if not nodes:
-        return {}
-    positions = {}
-    target = str(target_person_id) if target_person_id is not None else None
-    ring_of = {}
-    for node in nodes:
-        node_id = node["node_id"]
-        if node_id == target:
-            ring_of[node_id] = 0
-            continue
-        # A non-target node at distance 0 would collide with the centre; the
-        # smallest ring that is not the centre is 1.
-        ring_of[node_id] = max(1, int(node["message_distance"]))
-    neighbours = defaultdict(set)
-    for edge in edges:
-        u = edge["u"]
-        v = edge["v"]
-        if u in ring_of and v in ring_of and u != v:
-            neighbours[u].add(v)
-            neighbours[v].add(u)
-
-    by_ring = defaultdict(list)
-    for node_id, ring in ring_of.items():
-        by_ring[ring].append(node_id)
-    max_ring = max(by_ring)
-    angles = {}
-    for node_id in by_ring.get(0, ()):
-        positions[node_id] = (0.5, 0.5)
-        angles[node_id] = 0.0
-
-    for ring in range(1, max_ring + 1):
-        ring_nodes = sorted(by_ring[ring])
-        if not ring_nodes:
-            continue
-        # Group each node under its lowest-id neighbour one ring in, so a hop-2
-        # cluster is drawn in the arc beneath the hop-1 node that connects it.
-        groups = defaultdict(list)
-        orphans = []
-        for node_id in ring_nodes:
-            parents = sorted(
-                neighbour
-                for neighbour in neighbours[node_id]
-                if ring_of.get(neighbour) == ring - 1
-            )
-            if parents:
-                groups[parents[0]].append(node_id)
-            else:
-                orphans.append(node_id)
-        ordered = []
-        for parent in sorted(groups, key=lambda pid: (angles.get(pid, 0.0), pid)):
-            ordered.extend(sorted(groups[parent]))
-        ordered.extend(orphans)
-        # A ring with hundreds of members collapses into a solid band of dots at
-        # a single radius, which is what the 512-node projection produces at hop
-        # 2.  Spread a crowded ring over a few concentric sub-rings instead, and
-        # keep consecutive (same-parent) nodes on one angular slot so a parent's
-        # children read as a short radial spoke rather than an arc of noise.
-        bands = min(
-            MAX_DISPLAY_RING_BANDS,
-            max(
-                1,
-                (len(ordered) + DISPLAY_RING_BAND_CAPACITY - 1)
-                // DISPLAY_RING_BAND_CAPACITY,
-            ),
-        )
-        slots = (len(ordered) + bands - 1) // bands
-        # Even spacing over the whole ring keeps groups from overlapping while
-        # the parent-angle sweep keeps them near their connector.
-        step = 2 * np.pi / slots
-        # The half-ring of headroom is what the outermost band expands into, so
-        # every band still lands inside DISPLAY_LAYOUT_RADIUS.
-        base_radius = DISPLAY_LAYOUT_RADIUS * ring / (max_ring + 0.5)
-        band_step = DISPLAY_LAYOUT_RADIUS * 0.5 / (max_ring + 0.5) / bands
-        for index, node_id in enumerate(ordered):
-            angle = step * (index // bands + 0.5)
-            radius = base_radius + index % bands * band_step
-            angles[node_id] = angle
-            positions[node_id] = (
-                float(0.5 + radius * np.cos(angle)),
-                float(0.5 + radius * np.sin(angle)),
-            )
-    return positions
-
-
 class CaseExplanation(dict):
     """JSON-compatible explanation with a producer-only streaming scope."""
 
@@ -395,12 +304,25 @@ class CommunityScope:
     edge_row_indices: np.ndarray
     edge_group_starts: np.ndarray
     complete: bool = True
+    target_person_id: str | None = None
 
     def __post_init__(self):
         day = _scoring_day(self.scoring_day)
         object.__setattr__(self, "scoring_day", day)
         if tuple(sorted(self.node_ids)) != self.node_ids:
             raise ValueError("community node_ids must be sorted")
+        if self.target_person_id is not None:
+            if (
+                not isinstance(self.target_person_id, str)
+                or not self.target_person_id.strip()
+            ):
+                raise ValueError(
+                    "community target_person_id must be a nonblank string"
+                )
+            if self.target_person_id not in self.node_ids:
+                raise ValueError(
+                    "community target_person_id must belong to node_ids"
+                )
         arrays = {
             "node_indices": (self.node_indices, np.int64),
             "message_distances": (self.message_distances, np.int8),
@@ -454,6 +376,10 @@ class CommunityScope:
             caught_time = self.engine.caught_available_time(person_id)
             yield {
                 "node_id": person_id,
+                "target": (
+                    self.target_person_id is not None
+                    and person_id == self.target_person_id
+                ),
                 "x": float(((position % columns) + 0.5) / columns),
                 "y": float(((position // columns) + 0.5) / rows),
                 "message_distance": int(self.message_distances[position]),
@@ -639,18 +565,6 @@ class CommunityScope:
                 edge["edge_id"],
             ),
         )
-        # Lay the projection out over exactly the nodes and edges that get
-        # drawn.  iter_nodes has to stay a whole-community stream for the
-        # chunked sidecars, so its grid is sized from the full member list; the
-        # display projection is a bounded subset of that and needs its own
-        # positions.  These dicts are shared with nodes_by_id, so updating them
-        # here updates both views.
-        layout = display_hop_ring_layout(nodes, edges, target)
-        for node in nodes:
-            point = layout.get(node["node_id"])
-            if point is not None:
-                node["x"], node["y"] = point
-
         edge_sources = {
             edge["edge_id"]: frozenset(edge["source_row_ids"])
             for edge in edges
@@ -695,7 +609,6 @@ class CommunityScope:
                     "target_then_pooled_caught_salience_then_hop_then_id"
                 ),
                 "edge_order": "target_incident_then_hop_then_id",
-                "node_layout": "hop_rings_around_target",
             },
         }
 
@@ -955,7 +868,7 @@ class Seed0ExplanationEngine:
         self.__rank_state = None
         self.__snapshot_cache: dict[pd.Timestamp, DaySnapshot] = {}
         self.__community_cache: dict[
-            tuple[pd.Timestamp, object], CommunityScope
+            tuple[pd.Timestamp, object, str], CommunityScope
         ] = {}
         self.__counterfactual_cache: dict[str, dict[str, object]] = {}
         self.__faithfulness_cache: dict[str, float] = {}
@@ -1142,7 +1055,7 @@ class Seed0ExplanationEngine:
             if isinstance(component_root, np.generic)
             else component_root
         )
-        cache_key = (day, normalized_root)
+        cache_key = (day, normalized_root, person_id)
         cached = self.__community_cache.get(cache_key)
         if cached is None:
             cached = build_complete_community(self, person_id, day)
@@ -1545,15 +1458,87 @@ def member_subgraph(engine, person_id, scoring_day):
     )
 
 
-def make_gnn_explainer(wrapper, epochs=150):
+def _positive_explainer_limit(value, *, field_name):
+    if (
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value <= 0
+    ):
+        raise ValueError(f"{field_name} must be a positive integer")
+    return int(value)
+
+
+def _fixed_explainer_limit(value, *, field_name, expected):
+    value = _positive_explainer_limit(value, field_name=field_name)
+    if value != expected:
+        raise ValueError(f"{field_name} must be exactly {expected}")
+    return expected
+
+
+def _validated_explainer_epochs(value):
+    if (
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value != EXPLAINER_EPOCHS
+    ):
+        raise ValueError(
+            f"epochs must be exactly {EXPLAINER_EPOCHS}"
+        )
+    return EXPLAINER_EPOCHS
+
+
+def explainability_eligibility(
+    engine,
+    person_id,
+    scoring_day,
+    *,
+    max_nodes=MAX_LOCAL_EXPLANATION_NODES,
+    max_edges=MAX_LOCAL_EXPLANATION_EDGES,
+):
+    """Measure the exact two-hop pre-pool explainer input without pruning."""
+    max_nodes = _fixed_explainer_limit(
+        max_nodes,
+        field_name="max_nodes",
+        expected=MAX_LOCAL_EXPLANATION_NODES,
+    )
+    max_edges = _fixed_explainer_limit(
+        max_edges,
+        field_name="max_edges",
+        expected=MAX_LOCAL_EXPLANATION_EDGES,
+    )
+    local = member_subgraph(engine, person_id, scoring_day)
+    node_count = int(local.x.shape[0])
+    edge_count = int(local.edge_index.shape[1])
+    nodes_over = node_count > max_nodes
+    edges_over = edge_count > max_edges
+    if nodes_over and edges_over:
+        reason_code = EXPLAINER_REASON_BOTH_LIMITS
+    elif nodes_over:
+        reason_code = EXPLAINER_REASON_NODE_LIMIT
+    elif edges_over:
+        reason_code = EXPLAINER_REASON_EDGE_LIMIT
+    else:
+        reason_code = EXPLAINER_REASON_ELIGIBLE
+    eligible = not (nodes_over or edges_over)
+    return {
+        "eligible": eligible,
+        "status": (
+            EXPLAINER_ELIGIBLE_STATUS
+            if eligible
+            else EXPLAINER_COMMUNITY_ONLY_STATUS
+        ),
+        "node_count": node_count,
+        "edge_count": edge_count,
+        "max_nodes": max_nodes,
+        "max_edges": max_edges,
+        "reason_code": reason_code,
+    }
+
+
+def make_gnn_explainer(wrapper, epochs=EXPLAINER_EPOCHS):
     if not isinstance(wrapper, PrePoolSAGELogitWrapper):
         raise ValueError("wrapper must be a PrePoolSAGELogitWrapper")
-    if (
-        not isinstance(epochs, (int, np.integer))
-        or isinstance(epochs, (bool, np.bool_))
-        or epochs <= 0
-    ):
-        raise ValueError("epochs must be a positive integer")
+    epochs = _validated_explainer_epochs(epochs)
     return Explainer(
         model=wrapper,
         algorithm=GNNExplainer(epochs=int(epochs)),
@@ -1589,8 +1574,11 @@ def _validated_restart_seeds(restart_seeds):
     normalized = tuple(int(value) for value in values)
     if len(set(normalized)) != len(normalized):
         raise ValueError("restart_seeds must not contain duplicates")
-    if normalized != (0, 1, 2):
-        raise ValueError("restart_seeds must be exactly (0, 1, 2)")
+    if normalized != EXPLAINER_RESTART_SEEDS:
+        raise ValueError(
+            "restart_seeds must be exactly "
+            f"{EXPLAINER_RESTART_SEEDS}"
+        )
     return normalized
 
 
@@ -1623,12 +1611,18 @@ def run_member_explanation(
     person_id,
     scoring_day,
     *,
-    restart_seeds=(0, 1, 2),
-    epochs=150,
+    restart_seeds=EXPLAINER_RESTART_SEEDS,
+    epochs=EXPLAINER_EPOCHS,
     explainer_factory=make_gnn_explainer,
 ):
     """Explain one pooled member's exact two-hop pre-pool GraphSAGE logit."""
     seeds = _validated_restart_seeds(restart_seeds)
+    epochs = _validated_explainer_epochs(epochs)
+    eligibility = explainability_eligibility(
+        engine, person_id, scoring_day
+    )
+    if not eligibility["eligible"]:
+        raise ExplainerEligibilityError(eligibility)
     local = member_subgraph(engine, person_id, scoring_day)
     wrapper = PrePoolSAGELogitWrapper(engine.explanation_model_copy())
     local_x = local.x
@@ -1683,26 +1677,13 @@ def run_member_explanation(
     }
 
 
-def build_flow_stages(community):
-    if isinstance(community, CommunityScope):
-        return [
-            {"stage_id": "first_hop", "edge_rule": {"max_message_hop": 1}},
-            {"stage_id": "second_hop", "edge_rule": {"max_message_hop": 2}},
-            {
-                "stage_id": "component_pool",
-                "edge_rule": {
-                    "edge_type": "COTRAVEL",
-                    "both_pooled_members": True,
-                },
-            },
-            {"stage_id": "rank_fusion", "edge_rule": {"match_none": True}},
-        ]
-    if not isinstance(community, Mapping):
-        raise ValueError("community must be a mapping")
-    nodes_by_id = community.get("nodes_by_id")
-    edges = community.get("edges")
-    if not isinstance(nodes_by_id, Mapping) or not isinstance(edges, Sequence):
-        raise ValueError("community must contain nodes_by_id and edges")
+def _structural_stage_rules():
+    """Return the structural stage rules the renderer evaluates per edge.
+
+    These are rules, not per-case claims: the renderer resolves them against
+    each edge's own message hop and pooled membership. They carry no scoring
+    or attribution vocabulary, so a community-only control can use them.
+    """
     return [
         {"stage_id": "first_hop", "edge_rule": {"max_message_hop": 1}},
         {"stage_id": "second_hop", "edge_rule": {"max_message_hop": 2}},
@@ -1713,8 +1694,26 @@ def build_flow_stages(community):
                 "both_pooled_members": True,
             },
         },
+    ]
+
+
+def _flow_stage_rules():
+    """Return the full Hybrid stage rules, including the fusion stage."""
+    return _structural_stage_rules() + [
         {"stage_id": "rank_fusion", "edge_rule": {"match_none": True}},
     ]
+
+
+def build_flow_stages(community):
+    if isinstance(community, CommunityScope):
+        return _flow_stage_rules()
+    if not isinstance(community, Mapping):
+        raise ValueError("community must be a mapping")
+    nodes_by_id = community.get("nodes_by_id")
+    edges = community.get("edges")
+    if not isinstance(nodes_by_id, Mapping) or not isinstance(edges, Sequence):
+        raise ValueError("community must contain nodes_by_id and edges")
+    return _flow_stage_rules()
 
 
 def aggregate_restart_masks(masks, top_fraction=0.1):
@@ -2552,7 +2551,442 @@ def build_complete_community(engine, target_person_id, scoring_day):
         pooled_members=pooled_lookup[ordered_indices],
         edge_row_indices=positions,
         edge_group_starts=starts,
+        target_person_id=target_person_id,
     )
+
+
+_STRUCTURAL_FORBIDDEN_TOKENS = frozenset(
+    {
+        "hidden",
+        "future",
+        "caught",
+        "label",
+        "narrative",
+        "mask",
+        "rank",
+        "probability",
+        "score",
+        "organization",
+        "org",
+        "false",
+        "negative",
+        "outcome",
+        "lifetime",
+        "arrest",
+        "seizure",
+    }
+)
+_STRUCTURAL_OBSERVED_NODE_FIELDS = frozenset(
+    {
+        "caught_before_snapshot",
+        "caught_label_available_time",
+    }
+)
+
+
+def _structural_safe_text(value, *, field_name):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a nonblank string")
+    normalized = re.sub(r"[^a-z0-9]+", "", value.casefold())
+    forbidden = sorted(
+        token
+        for token in _STRUCTURAL_FORBIDDEN_TOKENS
+        if token in normalized
+    )
+    if forbidden:
+        raise ValueError(
+            f"forbidden structural token in {field_name}: {forbidden}"
+        )
+    return value
+
+
+def _structural_mapping_keys(value, *, allowed, field_name):
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a mapping")
+    for key in value:
+        if not isinstance(key, str):
+            raise ValueError(f"{field_name} keys must be strings")
+        if key not in _STRUCTURAL_OBSERVED_NODE_FIELDS:
+            _structural_safe_text(key, field_name=f"{field_name} key")
+        if key not in allowed:
+            raise ValueError(f"unsupported structural field: {field_name}.{key}")
+
+
+def _structural_nonnegative_int(value, *, field_name):
+    if (
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value < 0
+    ):
+        raise ValueError(f"{field_name} must be a nonnegative integer")
+    return int(value)
+
+
+def _structural_as_of_timestamp(value, *, scoring_day, field_name):
+    if isinstance(value, str):
+        _structural_safe_text(value, field_name=field_name)
+    timestamp = pd.to_datetime(value, utc=True, errors="raise")
+    if not isinstance(timestamp, pd.Timestamp) or pd.isna(timestamp):
+        raise ValueError(f"{field_name} must be a scalar timestamp")
+    if not timestamp < scoring_day:
+        raise ValueError(f"{field_name} must be strictly before the snapshot")
+    return timestamp
+
+
+def _structural_node_record(node, *, scoring_day, field_name):
+    _structural_mapping_keys(
+        node,
+        allowed={
+            "node_id",
+            "target",
+            "message_distance",
+            "pooled_member",
+            "caught_before_snapshot",
+            "caught_label_available_time",
+        },
+        field_name=field_name,
+    )
+    node_id = _structural_safe_text(node.get("node_id"), field_name=f"{field_name}.node_id")
+    if "message_distance" not in node:
+        raise ValueError(f"{field_name}.message_distance is required")
+    if "pooled_member" not in node or not isinstance(node["pooled_member"], bool):
+        raise ValueError(f"{field_name}.pooled_member must be a boolean")
+    if "target" not in node or not isinstance(node["target"], bool):
+        raise ValueError(f"{field_name}.target must be a boolean")
+    if "caught_before_snapshot" not in node or not isinstance(
+        node["caught_before_snapshot"], bool
+    ):
+        raise ValueError(
+            f"{field_name}.caught_before_snapshot must be a boolean"
+        )
+    if "caught_label_available_time" not in node:
+        raise ValueError(
+            f"{field_name}.caught_label_available_time is required"
+        )
+    caught_before = node["caught_before_snapshot"]
+    label_available_time = node["caught_label_available_time"]
+    if label_available_time is None:
+        if caught_before:
+            raise ValueError(
+                f"{field_name}.caught label availability is required when "
+                "caught_before_snapshot is true"
+            )
+        normalized_label_available_time = None
+    else:
+        if not caught_before:
+            raise ValueError(
+                f"{field_name}.caught label availability requires "
+                "caught_before_snapshot"
+            )
+        normalized_label_available_time = _structural_as_of_timestamp(
+            label_available_time,
+            scoring_day=scoring_day,
+            field_name=f"{field_name}.caught_label_available_time",
+        ).isoformat()
+    return {
+        "node_id": node_id,
+        "target": node["target"],
+        "message_distance": _structural_nonnegative_int(
+            node["message_distance"],
+            field_name=f"{field_name}.message_distance",
+        ),
+        "pooled_member": node["pooled_member"],
+        "caught_before_snapshot": caught_before,
+        "caught_label_available_time": normalized_label_available_time,
+    }
+
+
+def _structural_edge_record(edge, *, field_name):
+    _structural_mapping_keys(
+        edge,
+        allowed={
+            "edge_id",
+            "u",
+            "v",
+            "rel",
+            "edge_type",
+            "message_hop",
+            "source_row_ids",
+            "source_row_count",
+            "observations",
+        },
+        field_name=field_name,
+    )
+    record = {
+        "edge_id": _structural_safe_text(
+            edge.get("edge_id"), field_name=f"{field_name}.edge_id"
+        ),
+        "u": _structural_safe_text(edge.get("u"), field_name=f"{field_name}.u"),
+        "v": _structural_safe_text(edge.get("v"), field_name=f"{field_name}.v"),
+        "edge_type": _structural_safe_text(
+            edge.get("edge_type"), field_name=f"{field_name}.edge_type"
+        ),
+    }
+    source_row_ids = edge.get("source_row_ids")
+    if not isinstance(source_row_ids, list) or not source_row_ids:
+        raise ValueError(f"{field_name}.source_row_ids must be a nonempty list")
+    record["source_row_ids"] = [
+        _structural_safe_text(
+            source_row_id,
+            field_name=f"{field_name}.source_row_ids[{index}]",
+        )
+        for index, source_row_id in enumerate(source_row_ids)
+    ]
+    if len(set(record["source_row_ids"])) != len(record["source_row_ids"]):
+        raise ValueError(f"{field_name}.source_row_ids must be unique")
+    if "source_row_count" not in edge:
+        raise ValueError(f"{field_name}.source_row_count is required")
+    record["source_row_count"] = _structural_nonnegative_int(
+        edge["source_row_count"], field_name=f"{field_name}.source_row_count"
+    )
+    if record["source_row_count"] != len(record["source_row_ids"]):
+        raise ValueError(f"{field_name} has incomplete or truncated source rows")
+    for field in ("rel", "message_hop"):
+        if field in edge:
+            record[field] = _structural_nonnegative_int(
+                edge[field], field_name=f"{field_name}.{field}"
+            )
+    observations = edge.get("observations", [])
+    if not isinstance(observations, list):
+        raise ValueError(f"{field_name}.observations must be a list")
+    return record, observations
+
+
+def build_structural_community_control(community):
+    """Return complete, JSON-safe, strictly as-of structural community data."""
+    if isinstance(community, CommunityScope):
+        scoring_day = community.scoring_day
+        component_id = _structural_safe_text(
+            community.component_id, field_name="component_id"
+        )
+        community_key = _structural_safe_text(
+            community.community_key, field_name="community_key"
+        )
+        if community.complete is not True:
+            raise ValueError("structural community control requires complete evidence")
+        raw_nodes = list(community.iter_nodes())
+        raw_edges = list(community.iter_edges())
+        raw_provenance = list(community.iter_provenance())
+        structural_nodes = [
+            _structural_node_record(
+                {
+                    "node_id": node["node_id"],
+                    "target": node["target"],
+                    "message_distance": node["message_distance"],
+                    "pooled_member": node["pooled_member"],
+                    "caught_before_snapshot": node["caught_before_snapshot"],
+                    "caught_label_available_time": node[
+                        "caught_label_available_time"
+                    ],
+                },
+                scoring_day=scoring_day,
+                field_name=f"nodes[{index}]",
+            )
+            for index, node in enumerate(raw_nodes)
+        ]
+        structural_edges = []
+        edge_observations = []
+        for index, edge in enumerate(raw_edges):
+            record, observations = _structural_edge_record(
+                edge, field_name=f"edges[{index}]"
+            )
+            structural_edges.append(record)
+            if observations:
+                edge_observations.extend(
+                    (record["edge_id"], observation)
+                    for observation in observations
+                )
+    elif isinstance(community, Mapping):
+        _structural_mapping_keys(
+            community,
+            allowed={
+                "complete",
+                "scoring_day",
+                "component_id",
+                "community_key",
+                "nodes",
+                "edges",
+                "provenance_observations",
+            },
+            field_name="community",
+        )
+        if community.get("complete") is not True:
+            raise ValueError("structural community control requires complete evidence")
+        raw_scoring_day = community.get("scoring_day")
+        if isinstance(raw_scoring_day, str):
+            _structural_safe_text(raw_scoring_day, field_name="scoring_day")
+        scoring_day = _scoring_day(raw_scoring_day)
+        component_id = _structural_safe_text(
+            community.get("component_id"), field_name="component_id"
+        )
+        community_key = _structural_safe_text(
+            community.get("community_key"), field_name="community_key"
+        )
+        raw_nodes = community.get("nodes")
+        raw_edges = community.get("edges")
+        raw_provenance = community.get("provenance_observations")
+        if not isinstance(raw_nodes, list) or not isinstance(raw_edges, list):
+            raise ValueError("community nodes and edges must be lists")
+        if not isinstance(raw_provenance, list):
+            raise ValueError("community provenance_observations must be a list")
+        structural_nodes = [
+            _structural_node_record(
+                node,
+                scoring_day=scoring_day,
+                field_name=f"nodes[{index}]",
+            )
+            for index, node in enumerate(raw_nodes)
+        ]
+        structural_edges = []
+        edge_observations = []
+        for index, edge in enumerate(raw_edges):
+            record, observations = _structural_edge_record(
+                edge, field_name=f"edges[{index}]"
+            )
+            structural_edges.append(record)
+            if observations:
+                edge_observations.extend(
+                    (record["edge_id"], observation)
+                    for observation in observations
+                )
+    else:
+        raise ValueError("community must be a CommunityScope or mapping")
+
+    node_ids = [node["node_id"] for node in structural_nodes]
+    if len(set(node_ids)) != len(node_ids):
+        raise ValueError("structural community node IDs must be unique")
+    target_nodes = [node for node in structural_nodes if node["target"]]
+    if len(target_nodes) != 1:
+        raise ValueError(
+            "structural community requires exactly one target node"
+        )
+    edge_ids = [edge["edge_id"] for edge in structural_edges]
+    if len(set(edge_ids)) != len(edge_ids):
+        raise ValueError("structural community edge IDs must be unique")
+    node_id_set = set(node_ids)
+    if any(
+        edge["u"] not in node_id_set or edge["v"] not in node_id_set
+        for edge in structural_edges
+    ):
+        raise ValueError("structural edge endpoint is absent from community nodes")
+    source_row_edge_ids = {}
+    for edge in structural_edges:
+        for source_row_id in edge["source_row_ids"]:
+            previous_edge_id = source_row_edge_ids.get(source_row_id)
+            if previous_edge_id is not None and previous_edge_id != edge["edge_id"]:
+                raise ValueError(
+                    "source_row_id maps to multiple edges: "
+                    f"{source_row_id} ({previous_edge_id}, {edge['edge_id']})"
+                )
+            source_row_edge_ids[source_row_id] = edge["edge_id"]
+
+    provenance_by_key = {}
+
+    def add_provenance(edge_id, observation, *, field_name):
+        if not isinstance(observation, Mapping):
+            raise ValueError(f"{field_name} must be a mapping")
+        allowed = {"edge_id", "source_row_id", "available_time"}
+        if field_name.startswith("edge_observations"):
+            allowed = {"source_row_id", "available_time"}
+        _structural_mapping_keys(observation, allowed=allowed, field_name=field_name)
+        observed_edge_id = edge_id
+        if "edge_id" in observation:
+            observed_edge_id = _structural_safe_text(
+                observation["edge_id"], field_name=f"{field_name}.edge_id"
+            )
+            if observed_edge_id != edge_id:
+                raise ValueError(f"{field_name}.edge_id does not match its edge")
+        observed_edge_id = _structural_safe_text(
+            observed_edge_id, field_name=f"{field_name}.edge_id"
+        )
+        source_row_id = _structural_safe_text(
+            observation.get("source_row_id"),
+            field_name=f"{field_name}.source_row_id",
+        )
+        timestamp = _structural_as_of_timestamp(
+            observation.get("available_time"),
+            scoring_day=scoring_day,
+            field_name=f"{field_name}.available_time",
+        )
+        key = (observed_edge_id, source_row_id)
+        if key in provenance_by_key:
+            raise ValueError(f"duplicate structural provenance: {key}")
+        provenance_by_key[key] = timestamp.isoformat()
+
+    for index, observation in enumerate(raw_provenance):
+        add_provenance(
+            observation.get("edge_id") if isinstance(observation, Mapping) else None,
+            observation,
+            field_name=f"provenance_observations[{index}]",
+        )
+    for index, (edge_id, observation) in enumerate(edge_observations):
+        add_provenance(
+            edge_id,
+            observation,
+            field_name=f"edge_observations[{index}]",
+        )
+
+    expected_keys = {
+        (edge["edge_id"], source_row_id)
+        for edge in structural_edges
+        for source_row_id in edge["source_row_ids"]
+    }
+    if expected_keys:
+        if not provenance_by_key:
+            raise ValueError(
+                "complete structural community requires provenance evidence"
+            )
+        if set(provenance_by_key) != expected_keys:
+            missing = sorted(expected_keys.difference(provenance_by_key))
+            extra = sorted(set(provenance_by_key).difference(expected_keys))
+            raise ValueError(
+                "structural provenance source rows do not match edges; "
+                f"missing={missing}, extra={extra}"
+            )
+        for edge in structural_edges:
+            edge["available_times"] = [
+                provenance_by_key[(edge["edge_id"], source_row_id)]
+                for source_row_id in edge["source_row_ids"]
+            ]
+    elif provenance_by_key:
+        raise ValueError(
+            "structural provenance source rows do not match edges; "
+            f"missing=[], extra={sorted(provenance_by_key)}"
+        )
+
+    payload = {
+        "detail_kind": "community_only",
+        "kind": "community_only",
+        "evidence_kind": "structural_provenance",
+        "complete": True,
+        "scoring_day": scoring_day.isoformat(),
+        "component_id": component_id,
+        "community_key": community_key,
+        "communities": [community_key],
+        "node_count": len(structural_nodes),
+        "edge_count": len(structural_edges),
+        "nodes": structural_nodes,
+        "edges": structural_edges,
+        # Structural stage rules let a Baseline control reuse the graph-stage
+        # controls. They are evaluated per edge by the renderer, so they add
+        # no attribution claim. The Hybrid-only rank-fusion stage is
+        # deliberately absent: a community-only control carries no ranking
+        # evidence at all.
+        "structural_stages": _structural_stage_rules(),
+        "evidence_boundary": {
+            "snapshot": scoring_day.isoformat(),
+            "edge_rule": "available_time < snapshot",
+            "caught_rule": "label_available_time_utc < snapshot",
+        },
+    }
+    safe_payload = json_safe(payload)
+    json.dumps(
+        safe_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return safe_payload
 
 
 def _normalized_layout(graph):
@@ -2846,8 +3280,8 @@ def compose_case_explanation(
     case,
     *,
     member_explainer=None,
-    restart_seeds=(0, 1, 2),
-    explainer_epochs=150,
+    restart_seeds=EXPLAINER_RESTART_SEEDS,
+    explainer_epochs=EXPLAINER_EPOCHS,
     max_explainable_component_size=None,
 ):
     """Compose one deterministic, leak-safe seed-0 explanation payload.
@@ -2859,6 +3293,7 @@ def compose_case_explanation(
         raise ValueError("engine must be a Seed0ExplanationEngine")
     if not isinstance(case, HybridOnlyCase):
         raise ValueError("case must be a HybridOnlyCase")
+    explainer_epochs = _validated_explainer_epochs(explainer_epochs)
     if max_explainable_component_size is not None:
         if (
             not isinstance(max_explainable_component_size, (int, np.integer))
@@ -2949,6 +3384,11 @@ def compose_case_explanation(
         raise ValueError(
             "case rank fields do not match the frozen references"
         )
+    eligibility = explainability_eligibility(
+        engine, case.person_id, case.anchor.scoring_day
+    )
+    if not eligibility["eligible"]:
+        raise ExplainerEligibilityError(eligibility)
     component_root = snapshot.component_roots[target_index]
     member_indices = np.flatnonzero(snapshot.component_roots == component_root)
     member_ids = tuple(

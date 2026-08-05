@@ -205,6 +205,7 @@ class RecoveryBundleWriter:
         manifest = self._read_verified_ref(ref)
         if not isinstance(manifest, Mapping) or manifest.get("complete") is not True:
             raise RecoveryBundleError("cached community manifest is incomplete")
+        base_ids = {}
         for field, row_field, kind in (
             ("node_chunks", "nodes", "nodes"),
             ("edge_chunks", "edges", "edges"),
@@ -214,16 +215,28 @@ class RecoveryBundleWriter:
             refs = manifest.get(field)
             if not isinstance(refs, list):
                 raise RecoveryBundleError(f"cached community lacks {field}")
+            expected_offset = 0
+            ids = []
             for chunk_ref in refs:
                 payload = self._read_verified_ref(chunk_ref)
                 rows = payload.get(row_field) if isinstance(payload, Mapping) else None
-                if not isinstance(rows, list):
+                if (
+                    not isinstance(rows, list)
+                    or payload.get("offset") != expected_offset
+                    or payload.get("count") != len(rows)
+                    or chunk_ref.get("offset") != expected_offset
+                    or chunk_ref.get("count") != len(rows)
+                ):
                     raise RecoveryBundleError(
-                        f"cached community {field} payload is invalid"
+                        f"cached community {field} payload metadata is invalid"
                     )
                 if kind is not None:
                     for row in rows:
-                        catalog_id = row.get("catalog_id") if isinstance(row, Mapping) else None
+                        catalog_id = (
+                            row.get("catalog_id")
+                            if isinstance(row, Mapping)
+                            else None
+                        )
                         if not isinstance(catalog_id, str) or not catalog_id:
                             raise RecoveryBundleError(
                                 f"cached community {field} catalog reference is invalid"
@@ -237,6 +250,22 @@ class RecoveryBundleWriter:
                             raise RecoveryBundleError(
                                 f"cached community {field} catalog reference is missing"
                             )
+                        if kind in {"nodes", "edges"}:
+                            row_id = row.get(
+                                "node_id" if kind == "nodes" else "edge_id"
+                            )
+                            if not isinstance(row_id, str) or not row_id:
+                                raise RecoveryBundleError(
+                                    f"cached community {field} identity is invalid"
+                                )
+                            ids.append(row_id)
+                expected_offset += len(rows)
+            if kind in {"nodes", "edges"}:
+                if len(ids) != len(set(ids)):
+                    raise RecoveryBundleError(
+                        f"cached community {field} identity is invalid"
+                    )
+                base_ids[kind] = ids
         catalogs = manifest.get("catalogs")
         if (
             not isinstance(catalogs, Mapping)
@@ -254,8 +283,43 @@ class RecoveryBundleWriter:
             refs = day_view.get(field)
             if not isinstance(refs, list):
                 raise RecoveryBundleError(f"cached community lacks {field}")
+            row_field = (
+                "node_statuses" if field == "node_status_chunks" else "edge_memberships"
+            )
+            id_field = "node_id" if field == "node_status_chunks" else "edge_id"
+            kind = "nodes" if field == "node_status_chunks" else "edges"
+            expected_offset = 0
+            day_ids = []
             for chunk_ref in refs:
-                self._read_verified_ref(chunk_ref)
+                payload = self._read_verified_ref(chunk_ref)
+                rows = payload.get(row_field) if isinstance(payload, Mapping) else None
+                if (
+                    not isinstance(rows, list)
+                    or payload.get("offset") != expected_offset
+                    or payload.get("count") != len(rows)
+                    or chunk_ref.get("offset") != expected_offset
+                    or chunk_ref.get("count") != len(rows)
+                ):
+                    raise RecoveryBundleError(
+                        f"cached community {field} payload metadata is invalid"
+                    )
+                for row in rows:
+                    row_id = row.get(id_field) if isinstance(row, Mapping) else None
+                    if not isinstance(row_id, str) or not row_id:
+                        raise RecoveryBundleError(
+                            f"cached community {field} identity is invalid"
+                        )
+                    day_ids.append(row_id)
+                expected_offset += len(rows)
+            if day_ids != base_ids.get(kind):
+                raise RecoveryBundleError(
+                    f"cached community {field} identity is invalid"
+                )
+            count_field = "node_count" if kind == "nodes" else "edge_count"
+            if manifest.get(count_field) != expected_offset:
+                raise RecoveryBundleError(
+                    f"cached community {field} count is invalid"
+                )
         return manifest
 
     def _verify_overlay_evidence(self, overlay):
@@ -318,6 +382,19 @@ class RecoveryBundleWriter:
             if overlay is not None or payload.get("explanation") is not None:
                 raise RecoveryBundleError("Baseline-only cache contains explanation evidence")
         elif record.get("cohort") == "hybrid_only":
+            if record.get("detail_kind") == "community_control":
+                detail = payload.get("detail")
+                if (
+                    payload.get("explanation") is not None
+                    or payload.get("validation_metadata") is not None
+                    or overlay is not None
+                    or not isinstance(detail, Mapping)
+                    or detail.get("complete") is not True
+                ):
+                    raise RecoveryBundleError(
+                        "Hybrid structural fallback contains attribution evidence"
+                    )
+                return payload
             explanation = payload.get("explanation")
             if not isinstance(explanation, Mapping):
                 raise RecoveryBundleError("cached Hybrid-only explanation is missing")
@@ -1096,6 +1173,7 @@ class RecoveryBundleWriter:
         explanation=None,
         validation_metadata=None,
         overlay_evidence=None,
+        structural_detail=None,
     ):
         if cohort not in {"hybrid_only", "baseline_only"}:
             raise RecoveryBundleError("case cohort must be hybrid_only or baseline_only")
@@ -1124,42 +1202,81 @@ class RecoveryBundleWriter:
         detached_explanation = None
         validated_metadata = None
         detached_overlay = None
+        detached_structural = None
+        if structural_detail is not None:
+            if not isinstance(structural_detail, Mapping):
+                raise RecoveryBundleError("structural detail must be an object")
+            detached_structural = json.loads(_canonical_bytes(structural_detail))
+            forbidden = {
+                "explanation", "llm_narrative", "overlay", "overlay_evidence",
+                "attributions", "factors", "stability", "faithfulness",
+                "mask", "masks", "node_masks", "edge_masks",
+            }
+
+            def contains_forbidden(value):
+                if isinstance(value, Mapping):
+                    return bool(forbidden.intersection(value)) or any(
+                        contains_forbidden(child) for child in value.values()
+                    )
+                if isinstance(value, list):
+                    return any(contains_forbidden(child) for child in value)
+                return False
+
+            if detached_structural.get("complete") is not True or contains_forbidden(
+                detached_structural
+            ):
+                raise RecoveryBundleError(
+                    "structural detail must be complete and attribution-free"
+                )
         if cohort == "hybrid_only":
-            if not isinstance(explanation, Mapping):
+            if detached_structural is not None:
+                if (
+                    explanation is not None
+                    or validation_metadata is not None
+                    or overlay_evidence is not None
+                ):
+                    raise RecoveryBundleError(
+                        "Hybrid structural fallback cannot carry explanation evidence"
+                    )
+            elif not isinstance(explanation, Mapping):
                 raise RecoveryBundleError("Hybrid-only case requires an explanation")
-            detached_explanation = json.loads(_canonical_bytes(explanation))
-            if "community" in detached_explanation:
+            if detached_structural is not None:
+                detached_explanation = None
+            else:
+                detached_explanation = json.loads(_canonical_bytes(explanation))
+            if detached_explanation is not None and "community" in detached_explanation:
                 raise RecoveryBundleError(
                     "case explanation must reference, not embed, its community"
                 )
-            if (
+            if detached_explanation is not None and (
                 detached_explanation.get("case_id") != case_id
                 or detached_explanation.get("community_key") != community_key
             ):
                 raise RecoveryBundleError("explanation does not match its case")
-            self._validate_case_explanation_identity(
-                detached_case, detached_explanation
-            )
-            validated_metadata = self._validated_llm_metadata(
-                detached_explanation, validation_metadata
-            )
-            if overlay_evidence is None:
-                raise RecoveryBundleError(
-                    "Hybrid-only case requires complete nonempty overlay evidence"
+            if detached_explanation is not None:
+                self._validate_case_explanation_identity(
+                    detached_case, detached_explanation
                 )
-            detached_overlay = self._stream_overlay_evidence(overlay_evidence)
-            edge_count = detached_overlay.get("edge_count", 0)
-            provenance_count = detached_overlay.get(
-                "provenance_observation_count", 0
-            )
-            if (
-                detached_overlay.get("complete") is not True
-                or detached_overlay.get("node_count", 0) < 1
-                or (edge_count == 0) != (provenance_count == 0)
-            ):
-                raise RecoveryBundleError(
-                    "Hybrid-only case requires complete nonempty overlay evidence"
+                validated_metadata = self._validated_llm_metadata(
+                    detached_explanation, validation_metadata
                 )
+                if overlay_evidence is None:
+                    raise RecoveryBundleError(
+                        "Hybrid-only case requires complete nonempty overlay evidence"
+                    )
+                detached_overlay = self._stream_overlay_evidence(overlay_evidence)
+                edge_count = detached_overlay.get("edge_count", 0)
+                provenance_count = detached_overlay.get(
+                    "provenance_observation_count", 0
+                )
+                if (
+                    detached_overlay.get("complete") is not True
+                    or detached_overlay.get("node_count", 0) < 1
+                    or (edge_count == 0) != (provenance_count == 0)
+                ):
+                    raise RecoveryBundleError(
+                        "Hybrid-only case requires complete nonempty overlay evidence"
+                    )
         elif (
             explanation is not None
             or validation_metadata is not None
@@ -1177,6 +1294,10 @@ class RecoveryBundleWriter:
             "explanation": detached_explanation,
             "validation_metadata": validated_metadata,
             "overlay_evidence": detached_overlay,
+            "detail": detached_structural,
+            "detail_kind": (
+                "community_control" if detached_structural is not None else None
+            ),
         }
         ref = self._put_object(payload)
         record = {
@@ -1184,7 +1305,12 @@ class RecoveryBundleWriter:
             "cohort": cohort,
             "community_key": community_key,
             "case": detached_case,
-            "llm_validated": cohort == "hybrid_only",
+            "detail_kind": (
+                "community_control" if detached_structural is not None else (
+                    "gnn_explanation" if cohort == "hybrid_only" else "community_control"
+                )
+            ),
+            "llm_validated": cohort == "hybrid_only" and detached_structural is None,
         }
         prior = self._state["cases"].get(case_id)
         if prior is not None and prior != record:
@@ -1197,6 +1323,20 @@ class RecoveryBundleWriter:
         ]
         self.checkpoint()
         return ref
+
+    def read_case_payload(self, case_id):
+        """Return the verified staged payload for a case, or None if unstaged.
+
+        A resumed run needs the evidence it already produced so a completed
+        case is never re-explained; the reference is re-verified on read so a
+        corrupted staging directory fails loudly instead of being republished.
+        """
+        if not isinstance(case_id, str) or not case_id:
+            raise RecoveryBundleError("case_id must be a non-blank string")
+        record = self._state["cases"].get(case_id)
+        if record is None:
+            return None
+        return self._verify_case_record(case_id, record)
 
     def case_attempt_state(self, case_id):
         if not isinstance(case_id, str) or not case_id:
@@ -1337,6 +1477,263 @@ class RecoveryBundleWriter:
                     for ref in overlay[field]:
                         add(ref)
         return [refs[path] for path in sorted(refs)]
+
+    def finalize_schema3(
+        self,
+        *,
+        selected_hybrid_case_ids,
+        selected_baseline_case_ids,
+        cohorts,
+        policy,
+        coverage,
+        summary,
+        run_fingerprint=None,
+        detail_index=None,
+        community_index=None,
+        hybrid_structural_fallback_case_ids=(),
+    ):
+        """Atomically publish a partial schema-3 selected-case bundle.
+
+        Unlike the legacy schema-2 finalizer, this path keeps the complete
+        lightweight cohort lists in the manifest while requiring sidecars only
+        for selected cases that actually have staged evidence.
+        """
+        self.catalog_store.rollback_pending()
+        selected_hybrid = list(selected_hybrid_case_ids)
+        selected_baseline = list(selected_baseline_case_ids)
+        fallback_hybrid = list(hybrid_structural_fallback_case_ids)
+        hybrid_expected = self._expected_ids(
+            selected_hybrid, "selected_hybrid_case_ids"
+        )
+        baseline_expected = self._expected_ids(
+            selected_baseline, "selected_baseline_case_ids"
+        )
+        fallback_expected = self._expected_ids(
+            fallback_hybrid, "hybrid_structural_fallback_case_ids"
+        )
+        if (hybrid_expected & baseline_expected) or (
+            fallback_expected & (hybrid_expected | baseline_expected)
+        ):
+            raise RecoveryBundleError("schema-3 selected cohorts must be disjoint")
+        if not isinstance(cohorts, Mapping) or set(cohorts) != {
+            "hybrid_only", "baseline_only", "recovered_by_both"
+        }:
+            raise RecoveryBundleError("schema-3 cohorts are incomplete")
+        detached_cohorts = json.loads(_canonical_bytes(cohorts))
+        detached_policy = json.loads(_canonical_bytes(policy))
+        detached_coverage = json.loads(_canonical_bytes(coverage))
+        detached_summary = json.loads(_canonical_bytes(summary))
+        if not all(
+            isinstance(value, dict)
+            for value in (
+                detached_cohorts,
+                detached_policy,
+                detached_coverage,
+                detached_summary,
+            )
+        ):
+            raise RecoveryBundleError("schema-3 manifest fields must be objects")
+
+        selected_ids = {
+            "hybrid_only": selected_hybrid,
+            "baseline_only": selected_baseline,
+            "recovered_by_both": [],
+        }
+        actual_cases = {
+            case_id: record
+            for case_id, record in self._state["cases"].items()
+        }
+        selected_all = hybrid_expected | baseline_expected | fallback_expected
+        if set(actual_cases) - selected_all:
+            raise RecoveryBundleError(
+                "schema-3 staged cases must be selected detail cases only"
+            )
+        failure_ids = {
+            failure.get("case_id")
+            for failure in self._state["failures"]
+            if isinstance(failure, Mapping)
+        }
+        for case_id, cohort in (
+            [(value, "hybrid_only") for value in selected_hybrid]
+            + [(value, "baseline_only") for value in selected_baseline]
+            + [(value, "hybrid_only") for value in fallback_hybrid]
+        ):
+            record = actual_cases.get(case_id)
+            if record is None:
+                if case_id not in failure_ids and case_id not in fallback_expected:
+                    raise RecoveryBundleError(
+                        f"selected schema-3 case {case_id!r} lacks staged evidence"
+                    )
+                continue
+            if record.get("cohort") != cohort:
+                raise RecoveryBundleError(
+                    f"selected schema-3 case {case_id!r} has the wrong cohort"
+                )
+            community_key = record.get("community_key")
+            if community_key not in self._state["communities"]:
+                raise RecoveryBundleError(
+                    f"selected schema-3 case {case_id!r} has no community"
+                )
+            self._verify_community_ref(self._state["communities"][community_key])
+
+        detail_refs = {}
+        structural_refs = {}
+        for case_id in selected_hybrid:
+            record = actual_cases.get(case_id)
+            if record is not None:
+                detail_refs[case_id] = {
+                    **record["ref"],
+                    "cohort": "hybrid_only",
+                    "community_key": record["community_key"],
+                }
+        for case_id in selected_baseline:
+            record = actual_cases.get(case_id)
+            if record is not None:
+                structural_refs[case_id] = {
+                    **record["ref"],
+                    "cohort": "baseline_only",
+                    "community_key": record["community_key"],
+                }
+        for case_id in fallback_hybrid:
+            record = actual_cases.get(case_id)
+            if record is not None:
+                structural_refs[case_id] = {
+                    **record["ref"],
+                    "cohort": "hybrid_only",
+                    "community_key": record["community_key"],
+                }
+        if detail_index is not None:
+            detail_refs = json.loads(_canonical_bytes(detail_index))
+        if community_index is not None:
+            structural_refs = json.loads(_canonical_bytes(community_index))
+        if not isinstance(detail_refs, dict) or not isinstance(structural_refs, dict):
+            raise RecoveryBundleError("schema-3 detail indexes must be objects")
+        if not set(detail_refs) <= hybrid_expected:
+            raise RecoveryBundleError(
+                "schema-3 detail index contains an unselected Hybrid case"
+            )
+        if not set(structural_refs) <= (baseline_expected | fallback_expected):
+            raise RecoveryBundleError(
+                "schema-3 community index contains an unselected structural case"
+            )
+        missing_fallback = fallback_expected - set(structural_refs)
+        if missing_fallback - failure_ids:
+            raise RecoveryBundleError(
+                "selected Hybrid structural fallback lacks staged evidence"
+            )
+
+        def index_reference(value, label):
+            reference = (
+                value.get("ref")
+                if isinstance(value, Mapping) and isinstance(value.get("ref"), Mapping)
+                else value
+            )
+            if not isinstance(reference, Mapping):
+                raise RecoveryBundleError(f"{label} lacks a sidecar reference")
+            self._read_verified_ref(reference)
+            return {
+                field: reference[field]
+                for field in ("path", "sha256", "bytes")
+                if field in reference
+            }
+
+        for case_id, value in detail_refs.items():
+            index_reference(value, f"schema-3 detail {case_id!r}")
+        for case_id, value in structural_refs.items():
+            index_reference(value, f"schema-3 community {case_id!r}")
+
+        catalog_index = self._write_catalog_index()
+        fingerprint = self._state["run_fingerprint"] if run_fingerprint is None else run_fingerprint
+        detached_fingerprint = json.loads(_canonical_bytes(fingerprint))
+        core = {
+            "schema_version": "3.0",
+            "run_fingerprint_sha256": self.run_fingerprint_sha256,
+            "sidecar_prefix": self.sidecar_prefix,
+            "policy": detached_policy,
+            "summary": detached_summary,
+            "coverage": detached_coverage,
+            "cohorts": detached_cohorts,
+            "selection": {
+                "selected_ids": selected_ids,
+                "hybrid_structural_fallback_ids": fallback_hybrid,
+                "no_post_failure_replacement": True,
+            },
+            "detail_index": detail_refs,
+            "community_index": structural_refs,
+            "community_sidecar_index": {
+                key: dict(reference)
+                for key, reference in self._state["communities"].items()
+            },
+            "catalog_index": catalog_index,
+            "run_fingerprint": detached_fingerprint,
+        }
+        bundle_id = _sha256(_canonical_bytes(core))[:24]
+        bundle_path = Path("bundles") / bundle_id
+        manifest = {
+            **core,
+            "bundle_id": bundle_id,
+            "bundle_path": bundle_path.as_posix(),
+            "sidecar_base": (
+                f"{self.sidecar_prefix}/{bundle_path.as_posix()}/"
+                if self.sidecar_prefix
+                else f"{bundle_path.as_posix()}/"
+            ),
+        }
+        manifest_content = _canonical_bytes(manifest)
+        refs = self._all_referenced_objects(catalog_index)
+        refs_by_path = {reference["path"]: reference for reference in refs}
+        for index_name, index in (
+            ("detail_index", detail_refs),
+            ("community_index", structural_refs),
+        ):
+            for case_id, value in index.items():
+                reference = index_reference(value, f"schema-3 {index_name} {case_id!r}")
+                prior = refs_by_path.get(reference["path"])
+                if prior is not None and prior != reference:
+                    raise RecoveryBundleError(
+                        "conflicting schema-3 sidecar reference metadata"
+                    )
+                refs_by_path[reference["path"]] = reference
+        refs = [refs_by_path[path] for path in sorted(refs_by_path)]
+        bundles_root = self.final_root / "bundles"
+        bundles_root.mkdir(parents=True, exist_ok=True)
+        final_bundle = self.final_root / bundle_path
+        if final_bundle.exists():
+            existing = final_bundle / "manifest.json"
+            if not existing.is_file() or existing.read_bytes() != manifest_content:
+                raise RecoveryBundleError("existing schema-3 bundle conflicts")
+        else:
+            if self.staging_root.stat().st_dev != bundles_root.stat().st_dev:
+                raise RecoveryBundleError(
+                    "recovery staging and publication must share a filesystem"
+                )
+            closure = {ref["path"] for ref in refs}
+            objects_root = self.staging_root / "objects"
+            if objects_root.exists():
+                for object_path in objects_root.rglob("*.json"):
+                    relative = object_path.relative_to(self.staging_root).as_posix()
+                    if relative not in closure:
+                        object_path.unlink()
+            _atomic_write(self.staging_root / "manifest.json", manifest_content)
+            for ref in refs:
+                content = (self.staging_root / ref["path"]).read_bytes()
+                if _sha256(content) != ref["sha256"] or len(content) != ref["bytes"]:
+                    raise RecoveryBundleError("staged schema-3 object verification failed")
+            (self.staging_root / self._STATE_FILE).unlink(missing_ok=True)
+            self.catalog_store.remove_files()
+            os.replace(self.staging_root, final_bundle)
+        self._published_bundle_root = final_bundle
+        self._published_manifest = manifest
+        pointer = {
+            "bundle_id": bundle_id,
+            "bundle_path": bundle_path.as_posix(),
+            "manifest_sha256": _sha256(manifest_content),
+        }
+        _atomic_write(self.final_root / "current.json", _canonical_bytes(pointer))
+        if self.staging_root.exists():
+            shutil.rmtree(self.staging_root)
+        self.catalog_store.close()
+        return manifest
 
     def finalize(
         self,

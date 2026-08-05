@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+from contextlib import contextmanager
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import gc
 from itertools import groupby
 import json
@@ -44,13 +45,17 @@ from gnn.observability_artifact import (
 )
 from gnn.recovery_bundle import RecoveryBundleWriter
 from gnn.recovery_observability import (
+    build_recovery_case,
     build_rank_reference,
     recovery_overlap,
+    select_balanced_detail_cases,
     simulate_recovery_run,
 )
 from gnn.run_demo import GNN_ARMS, _build_oracle, load_pool
 from gnn.sage_explainer import (
     CommunityScope,
+    MAX_LOCAL_EXPLANATION_EDGES,
+    MAX_LOCAL_EXPLANATION_NODES,
     Seed0ExplanationEngine,
     compose_case_explanation,
     diagnostic_edge_source_set_probability,
@@ -84,9 +89,16 @@ class BenchmarkContext:
     engine: object
     cases: tuple
     publication_cases: tuple
+    hybrid_recovery_cases: tuple = ()
+    baseline_recovery_cases: tuple = ()
 
 
-def _stage_log(stage, **fields):
+def _stage_log(stage, *, instrumentation=None, started_at=None, **fields):
+    elapsed_seconds = (
+        max(0.0, time.perf_counter() - started_at)
+        if started_at is not None
+        else float(fields.pop("elapsed_seconds", 0.0))
+    )
     details = " ".join(f"{key}={value}" for key, value in sorted(fields.items()))
     suffix = f" {details}" if details else ""
     print(
@@ -94,6 +106,19 @@ def _stage_log(stage, **fields):
         f"peak_rss_bytes={_process_peak_rss_bytes()}{suffix}",
         flush=True,
     )
+    callback = instrumentation
+    if isinstance(instrumentation, Mapping):
+        callback = instrumentation.get("on_stage")
+    if callable(callback):
+        callback(
+            stage,
+            {
+                "stage": stage,
+                "elapsed_seconds": elapsed_seconds,
+                "peak_rss_bytes": _process_peak_rss_bytes(),
+                **fields,
+            },
+        )
 
 
 def _validate_production_metadata(metadata):
@@ -295,6 +320,36 @@ def _load_verified_context(corpus_dir, checkpoint_path) -> BenchmarkContext:
             tuple(("hybrid_only", case) for case in cases)
             + tuple(("baseline_only", case) for case in baseline_cases)
         ),
+        hybrid_recovery_cases=tuple(
+            build_recovery_case(
+                case_id=f"case:{case.person_id}",
+                recovery_cohort="hybrid_only",
+                anchor_event=case.anchor,
+                subject_id=case.person_id,
+                subject_display={},
+                decision_trace=case.decision_trace_jsonable(),
+                recovery_anchor_arm="hybrid",
+                hybrid_blend_weight=reference.blend_weight,
+                relationship_categories=case.relationship_categories,
+                scoring_period=case.scoring_period,
+            )
+            for case in cases
+        ),
+        baseline_recovery_cases=tuple(
+            build_recovery_case(
+                case_id=f"case:{case.person_id}",
+                recovery_cohort="baseline_only",
+                anchor_event=case.anchor,
+                subject_id=case.person_id,
+                subject_display={},
+                decision_trace=case.decision_trace_jsonable(),
+                recovery_anchor_arm="baseline",
+                hybrid_blend_weight=reference.blend_weight,
+                relationship_categories=case.relationship_categories,
+                scoring_period=case.scoring_period,
+            )
+            for case in baseline_cases
+        ),
     )
     del loaded, edges_typed, node_ids, node_feat, pool, valid_pool, rows
     gc.collect()
@@ -313,7 +368,9 @@ def _component_node_count(engine, case) -> int:
     return int(np.count_nonzero(snapshot.component_roots == root))
 
 
-def _select_largest_case_bounded(context, component_size):
+def _select_largest_case_bounded(
+    context, component_size, *, instrumentation=None, started_at=None
+):
     ordered = sorted(
         context.cases,
         key=lambda case: (str(case.anchor.scoring_day), case.person_id),
@@ -344,7 +401,12 @@ def _select_largest_case_bounded(context, component_size):
             del materialized_cases
             gc.collect()
         if day_count == 1 or day_count % 10 == 0:
-            _stage_log("selection_day_released", days_processed=day_count)
+            _stage_log(
+                "selection_day_released",
+                instrumentation=instrumentation,
+                started_at=started_at,
+                days_processed=day_count,
+            )
     selected = next(
         case
         for case in ordered
@@ -352,6 +414,8 @@ def _select_largest_case_bounded(context, component_size):
     )
     _stage_log(
         "selection_complete",
+        instrumentation=instrumentation,
+        started_at=started_at,
         community_nodes=best_size,
         days_processed=day_count,
         person_id=selected.person_id,
@@ -451,13 +515,39 @@ def _run_case_explanation(
             counted_faithfulness
         )
     try:
-        explanation = compose_case_explanation(
-            engine,
-            case,
-            member_explainer=counted_member_explanation,
-            restart_seeds=restart_seeds,
-        )
-        explanation["llm_narrative"] = narrative_builder(explanation)
+        try:
+            explanation = compose_case_explanation(
+                engine,
+                case,
+                member_explainer=counted_member_explanation,
+                restart_seeds=restart_seeds,
+            )
+            explanation["llm_narrative"] = narrative_builder(explanation)
+        except Exception as error:
+            # Preserve measurements when narrative validation or an explainer
+            # restart fails after encoder work. The outer benchmark can then
+            # account for every attempted case instead of summing successes.
+            error.measurement = {
+                "restart_seeds": list(restart_seeds),
+                "local_node_count": int(local.x.shape[0]),
+                "local_edge_count": int(local.edge_index.shape[1]),
+                "salient_factor_count": 0,
+                "factor_scoring_call_count": factor_calls,
+                "factor_scoring_cache_hit_count": factor_cache_hits,
+                "factor_actual_encoder_forward_count": encoder_forwards[
+                    "factor"
+                ],
+                "faithfulness_scoring_call_count": faithfulness_calls,
+                "faithfulness_scoring_cache_hit_count": faithfulness_cache_hits,
+                "faithfulness_actual_encoder_forward_count": encoder_forwards[
+                    "faithfulness"
+                ],
+                "gnnexplainer_encoder_forward_count": encoder_forwards[
+                    "explainer"
+                ],
+                "other_encoder_forward_count": encoder_forwards["other"],
+            }
+            raise
     finally:
         engine.score_counterfactual = original_factor
         globals()["diagnostic_edge_source_set_probability"] = original_faithfulness
@@ -484,6 +574,280 @@ def _run_case_explanation(
         "gnnexplainer_encoder_forward_count": encoder_forwards["explainer"],
         "other_encoder_forward_count": encoder_forwards["other"],
         "explanation": explanation,
+    }
+
+
+def _failed_explanation_measurement(error):
+    measurement = getattr(error, "measurement", None)
+    if not isinstance(measurement, Mapping):
+        return None
+    try:
+        _validate_benchmark_measurement(measurement)
+    except (TypeError, ValueError):
+        return None
+    return measurement
+
+
+def _failed_explanation_forward_count(error):
+    measurement = getattr(error, "measurement", None)
+    if not isinstance(measurement, Mapping):
+        return None
+    value = measurement.get("gnnexplainer_encoder_forward_count")
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+    ):
+        return value
+    return None
+
+
+def _benchmark_exact_preflight(engine, case):
+    from gnn.sage_explainer import explainability_eligibility
+
+    result = explainability_eligibility(
+        engine, case.subject_id, case.anchor_event.scoring_day
+    )
+    return _validate_benchmark_preflight(result)
+
+
+def _validate_benchmark_preflight(result):
+    if not isinstance(result, Mapping):
+        raise ValueError("benchmark preflight result must be an object")
+    required = {
+        "eligible", "status", "node_count", "edge_count", "max_nodes",
+        "max_edges", "reason_code",
+    }
+    if set(result) != required:
+        raise ValueError("benchmark preflight result shape is invalid")
+    if not isinstance(result["eligible"], bool):
+        raise ValueError("benchmark preflight eligibility must be boolean")
+    if (
+        result["max_nodes"] != MAX_LOCAL_EXPLANATION_NODES
+        or result["max_edges"] != MAX_LOCAL_EXPLANATION_EDGES
+    ):
+        raise ValueError(
+            "benchmark preflight limits must match the explainer constants"
+        )
+    if any(
+        not isinstance(result[field], int)
+        or isinstance(result[field], bool)
+        or result[field] < 0
+        for field in ("node_count", "edge_count", "max_nodes", "max_edges")
+    ):
+        raise ValueError("benchmark preflight counts must be non-negative integers")
+    if result["status"] not in {"eligible", "community_only"}:
+        raise ValueError("benchmark preflight status is invalid")
+    if not isinstance(result["reason_code"], str) or not result["reason_code"].strip():
+        raise ValueError("benchmark preflight reason_code is invalid")
+    if result["eligible"] != (
+        result["node_count"] <= MAX_LOCAL_EXPLANATION_NODES
+        and result["edge_count"] <= MAX_LOCAL_EXPLANATION_EDGES
+    ) or (result["eligible"] and result["status"] != "eligible") or (
+        not result["eligible"] and result["status"] != "community_only"
+    ):
+        raise ValueError("benchmark preflight eligibility is inconsistent")
+    return dict(result)
+
+
+@contextmanager
+def _baseline_explainer_monitor(engine):
+    """Measure any explainer work performed while building Baseline controls.
+
+    The count must be measured rather than assumed, otherwise a Baseline
+    control path that silently starts calling GNNExplainer keeps reporting a
+    hard-coded zero.
+    """
+    counts = {"encoder_forwards": 0, "explainer_calls": 0}
+    module = globals()
+    original_member = module["run_member_explanation"]
+    original_compose = module["compose_case_explanation"]
+
+    def counted_member(*args, **kwargs):
+        counts["explainer_calls"] += 1
+        return original_member(*args, **kwargs)
+
+    def counted_compose(*args, **kwargs):
+        counts["explainer_calls"] += 1
+        return original_compose(*args, **kwargs)
+
+    encoder = getattr(
+        getattr(engine, "_Seed0ExplanationEngine__model", None), "enc", None
+    )
+    hook = None
+    if hasattr(encoder, "register_forward_pre_hook"):
+        def count_encoder_forward(_module, _inputs):
+            counts["encoder_forwards"] += 1
+
+        hook = encoder.register_forward_pre_hook(count_encoder_forward)
+    counts["measurement"] = (
+        "model_encoder_forward_hook_and_explainer_entrypoints"
+        if hook is not None
+        else "explainer_entrypoints_only"
+    )
+    module["run_member_explanation"] = counted_member
+    module["compose_case_explanation"] = counted_compose
+    try:
+        yield counts
+    finally:
+        module["run_member_explanation"] = original_member
+        module["compose_case_explanation"] = original_compose
+        if hook is not None:
+            hook.remove()
+
+
+def _benchmark_balanced_controls(
+    context, *, preflight_runner=None, structural_runner=None, instrumentation=None,
+    started_at=None,
+):
+    hybrid_cases = tuple(getattr(context, "hybrid_recovery_cases", ()))
+    baseline_cases = tuple(getattr(context, "baseline_recovery_cases", ()))
+    if not hybrid_cases or not baseline_cases:
+        return None
+    preflight_runner = preflight_runner or _benchmark_exact_preflight
+    preflight = {}
+    eligible = []
+    for case in hybrid_cases:
+        result = _validate_benchmark_preflight(
+            preflight_runner(context.engine, case)
+        )
+        preflight[case.case_id] = result
+        if result["eligible"]:
+            eligible.append(case.case_id)
+    _stage_log(
+        "preflight_complete",
+        instrumentation=instrumentation,
+        started_at=started_at,
+        hybrid_candidates=len(hybrid_cases),
+        eligible_hybrid=len(eligible),
+        ineligible_hybrid=len(hybrid_cases) - len(eligible),
+    )
+    selection = select_balanced_detail_cases(
+        hybrid_cases,
+        baseline_cases,
+        hybrid_limit=20,
+        baseline_limit=10,
+        eligible_hybrid_ids=eligible,
+    )
+    _stage_log(
+        "balanced_selection_frozen",
+        instrumentation=instrumentation,
+        started_at=started_at,
+        hybrid_selected=len(selection.selected_ids["hybrid_only"]),
+        baseline_selected=len(selection.selected_ids["baseline_only"]),
+    )
+    structural_runner = structural_runner or (
+        lambda engine, case: engine.community(
+            case.subject_id, case.anchor_event.scoring_day
+        )
+    )
+    baseline_selected = selection.selected_cases["baseline_only"]
+    baseline_structural = []
+    baseline_failures = []
+    baseline_started = time.perf_counter()
+    with _baseline_explainer_monitor(context.engine) as baseline_counts:
+        for case in baseline_selected:
+            try:
+                structural_runner(context.engine, case)
+            except Exception as error:
+                baseline_failures.append(
+                    {
+                        "case_id": case.case_id,
+                        "reason_code": type(error).__name__,
+                        "message": str(error),
+                    }
+                )
+                continue
+            baseline_structural.append(case.case_id)
+    baseline_wall_seconds = max(0.0, time.perf_counter() - baseline_started)
+    baseline_forwards = int(baseline_counts["encoder_forwards"])
+    baseline_calls = int(baseline_counts["explainer_calls"])
+    if baseline_forwards or baseline_calls:
+        raise ValueError(
+            "Baseline structural controls must not invoke GNNExplainer: measured "
+            f"{baseline_calls} explainer calls and {baseline_forwards} encoder forwards"
+        )
+    _stage_log(
+        "baseline_controls_complete",
+        instrumentation=instrumentation,
+        started_at=started_at,
+        attempted=len(baseline_selected),
+        generated=len(baseline_structural),
+        failed=len(baseline_failures),
+        gnnexplainer_forwards=baseline_forwards,
+    )
+    return {
+        "selection": selection,
+        "preflight": preflight,
+        "eligible_hybrid_ids": eligible,
+        "baseline_structural_case_ids": baseline_structural,
+        "baseline_failures": baseline_failures,
+        "baseline_gnnexplainer_encoder_forward_count": baseline_forwards,
+        "baseline_explainer_call_count": baseline_calls,
+        "baseline_explainer_measurement": baseline_counts["measurement"],
+        "counts": {
+            "hybrid_requested": 20,
+            "baseline_requested": 10,
+            "hybrid_eligible": len(eligible),
+            "hybrid_oversized": sum(
+                result["reason_code"] != "eligible" for result in preflight.values()
+            ),
+            "hybrid_selected": len(selection.selected_ids["hybrid_only"]),
+            "baseline_selected": len(baseline_selected),
+            "hybrid_attempted": 0,
+            "hybrid_generated": 0,
+            "hybrid_fallback": 0,
+            "hybrid_failed": 0,
+            "hybrid_gnnexplainer_encoder_forward_count": 0,
+            "baseline_attempted": len(baseline_selected),
+            "baseline_generated": len(baseline_structural),
+            "baseline_failed": len(baseline_failures),
+            "baseline_controls_wall_seconds": baseline_wall_seconds,
+            "hybrid_explanations_wall_seconds": 0.0,
+        },
+    }
+
+
+def _validate_benchmark_measurement(measured):
+    restart_seeds = measured.get("restart_seeds")
+    if tuple(restart_seeds or ()) != RESTART_SEEDS:
+        raise ValueError("benchmark restart seeds must be exactly [0, 1, 2]")
+    factor_forward_count = measured.get("factor_actual_encoder_forward_count")
+    if (
+        not isinstance(factor_forward_count, int)
+        or isinstance(factor_forward_count, bool)
+        or not 0 <= factor_forward_count <= MAX_FACTOR_ENCODER_FORWARDS
+    ):
+        raise ValueError("benchmark counterfactual forward count exceeds the actual encoder bound of 25")
+    factor_count = measured.get("salient_factor_count")
+    if not isinstance(factor_count, int) or not 0 <= factor_count <= 25:
+        raise ValueError("salient factor count exceeds the constant bound of 25")
+    faithfulness_forward_count = measured.get("faithfulness_actual_encoder_forward_count")
+    if (
+        not isinstance(faithfulness_forward_count, int)
+        or isinstance(faithfulness_forward_count, bool)
+        or not 0 <= faithfulness_forward_count <= MAX_FAITHFULNESS_ENCODER_FORWARDS
+    ):
+        raise ValueError("faithfulness actual encoder forwards exceed bound of 6")
+    diagnostic_forward_count = factor_forward_count + faithfulness_forward_count
+    if diagnostic_forward_count > MAX_DIAGNOSTIC_ENCODER_FORWARDS:
+        raise ValueError("total diagnostic actual encoder forwards exceed bound of 31")
+    if measured.get("other_encoder_forward_count") != 0:
+        raise ValueError("benchmark observed unclassified other encoder forwards")
+    explainer_forward_count = measured.get("gnnexplainer_encoder_forward_count")
+    if (
+        not isinstance(explainer_forward_count, int)
+        or isinstance(explainer_forward_count, bool)
+        or explainer_forward_count <= 0
+    ):
+        raise ValueError("benchmark requires positive GNNExplainer encoder forwards")
+    return {
+        "factor_forward_count": factor_forward_count,
+        "factor_count": factor_count,
+        "faithfulness_forward_count": faithfulness_forward_count,
+        "diagnostic_forward_count": diagnostic_forward_count,
+        "other_forward_count": 0,
+        "explainer_forward_count": explainer_forward_count,
     }
 
 
@@ -1008,18 +1372,146 @@ def _run_benchmark_unprotected(
     component_size: Callable = _component_node_count,
     explanation_runner: Callable = _run_case_explanation,
     publication_estimator: Callable = _estimate_full_publication,
+    instrumentation=None,
+    preflight_runner: Callable | None = None,
+    structural_runner: Callable | None = None,
 ):
     """Verify a checkpoint and benchmark its largest Hybrid-only component."""
     started = time.perf_counter()
-    _stage_log("benchmark_start")
+    _stage_log("benchmark_start", instrumentation=instrumentation, started_at=started)
     context = context_loader(corpus_dir, checkpoint_path)
-    _stage_log("selection_start", candidates=len(context.cases))
-    community_node_count, case = _select_largest_case_bounded(
-        context, component_size
+    balanced = _benchmark_balanced_controls(
+        context,
+        preflight_runner=preflight_runner,
+        structural_runner=structural_runner,
+        instrumentation=instrumentation,
+        started_at=started,
     )
-    _stage_log("explanation_start", person_id=case.person_id)
-    measured = explanation_runner(context.engine, case, RESTART_SEEDS)
-    _stage_log("explanation_complete", person_id=case.person_id)
+    selection_context = context
+    if balanced is not None:
+        selected_ids = set(balanced["selection"].selected_ids["hybrid_only"])
+        selected_cases = tuple(
+            case for case in context.cases if f"case:{case.person_id}" in selected_ids
+        )
+        if not selected_cases:
+            raise ValueError("balanced selection produced no Hybrid benchmark case")
+        missing_ids = sorted(
+            selected_ids - {f"case:{case.person_id}" for case in context.cases}
+        )
+        if missing_ids:
+            raise ValueError(
+                "balanced selection references Hybrid benchmark cases missing from "
+                f"the verified context: {', '.join(missing_ids)}"
+            )
+        selection_context = replace(context, cases=selected_cases)
+    _stage_log(
+        "selection_start", instrumentation=instrumentation, started_at=started, candidates=len(selection_context.cases)
+    )
+    community_node_count, case = _select_largest_case_bounded(
+        selection_context, component_size, instrumentation=instrumentation, started_at=started
+    )
+    balanced_measurements = {}
+    if balanced is not None:
+        counts = balanced["counts"]
+        hybrid_forward_counts = []
+        hybrid_started = time.perf_counter()
+        for candidate in selection_context.cases:
+            _stage_log(
+                "explanation_start",
+                instrumentation=instrumentation,
+                started_at=started,
+                person_id=candidate.person_id,
+            )
+            candidate_measured = None
+            try:
+                candidate_measured = explanation_runner(
+                    context.engine, candidate, RESTART_SEEDS
+                )
+                try:
+                    _validate_benchmark_measurement(candidate_measured)
+                except Exception as validation_error:
+                    if isinstance(candidate_measured, Mapping):
+                        validation_error.measurement = candidate_measured
+                    raise
+                balanced_measurements[candidate.person_id] = candidate_measured
+                hybrid_forward_counts.append(
+                    int(candidate_measured["gnnexplainer_encoder_forward_count"])
+                )
+                counts["hybrid_attempted"] += 1
+                source = (
+                    candidate_measured.get("explanation", {})
+                    .get("llm_narrative", {})
+                    .get("source")
+                )
+                if source == "deterministic_template":
+                    counts["hybrid_fallback"] += 1
+                else:
+                    counts["hybrid_generated"] += 1
+            except Exception as error:
+                failed_measurement = _failed_explanation_measurement(error)
+                if failed_measurement is not None:
+                    hybrid_forward_counts.append(
+                        int(
+                            failed_measurement[
+                                "gnnexplainer_encoder_forward_count"
+                            ]
+                        )
+                    )
+                else:
+                    forward_count = _failed_explanation_forward_count(error)
+                    if forward_count is not None:
+                        hybrid_forward_counts.append(forward_count)
+                counts["hybrid_attempted"] += 1
+                counts["hybrid_failed"] += 1
+            _stage_log(
+                "explanation_complete",
+                instrumentation=instrumentation,
+                started_at=started,
+                person_id=candidate.person_id,
+            )
+        counts["hybrid_explanations_wall_seconds"] = max(
+            0.0, time.perf_counter() - hybrid_started
+        )
+        if not balanced_measurements:
+            raise ValueError("all selected Hybrid benchmark explanations failed")
+        if counts["hybrid_attempted"] != counts["hybrid_selected"]:
+            raise ValueError(
+                "benchmark did not process every selected Hybrid case: attempted "
+                f"{counts['hybrid_attempted']} of {counts['hybrid_selected']}"
+            )
+        if counts["baseline_attempted"] != counts["baseline_selected"]:
+            raise ValueError(
+                "benchmark did not process every selected Baseline control: attempted "
+                f"{counts['baseline_attempted']} of {counts['baseline_selected']}"
+            )
+        counts["hybrid_gnnexplainer_encoder_forward_count"] = sum(
+            hybrid_forward_counts
+        )
+        if case.person_id not in balanced_measurements:
+            case = max(
+                (candidate for candidate in selection_context.cases if candidate.person_id in balanced_measurements),
+                key=lambda candidate: int(component_size(context.engine, candidate)),
+            )
+            community_node_count = int(component_size(context.engine, case))
+        measured = balanced_measurements[case.person_id]
+        _stage_log(
+            "hybrid_explanations_complete",
+            instrumentation=instrumentation,
+            started_at=started,
+            requested=counts["hybrid_requested"],
+            attempted=counts["hybrid_attempted"],
+            generated=counts["hybrid_generated"],
+            fallback=counts["hybrid_fallback"],
+            failed=counts["hybrid_failed"],
+        )
+    else:
+        _stage_log(
+            "explanation_start", instrumentation=instrumentation, started_at=started, person_id=case.person_id
+        )
+        measured = explanation_runner(context.engine, case, RESTART_SEEDS)
+        _stage_log(
+            "explanation_complete", instrumentation=instrumentation, started_at=started, person_id=case.person_id
+        )
 
     restart_seeds = measured.get("restart_seeds")
     if tuple(restart_seeds or ()) != RESTART_SEEDS:
@@ -1119,10 +1611,35 @@ def _run_benchmark_unprotected(
         "process_peak_rss_bytes": _process_peak_rss_bytes(),
         "process_peak_rss_scope": "process_lifetime_high_water_mark",
         "process_peak_rss_source": "resource.getrusage(RUSAGE_SELF).ru_maxrss",
+        "counts": None if balanced is None else dict(balanced["counts"]),
+        "balanced_selection": None
+        if balanced is None
+        else {
+            "hybrid_limit": 20,
+            "baseline_limit": 10,
+            "eligible_hybrid_ids": list(balanced["eligible_hybrid_ids"]),
+            "selected_ids": {
+                cohort: list(ids)
+                for cohort, ids in balanced["selection"].selected_ids.items()
+            },
+            "preflight": balanced["preflight"],
+            "baseline_structural_case_ids": balanced["baseline_structural_case_ids"],
+            "baseline_failures": list(balanced["baseline_failures"]),
+            "baseline_gnnexplainer_encoder_forward_count": balanced[
+                "baseline_gnnexplainer_encoder_forward_count"
+            ],
+            "baseline_explainer_call_count": balanced["baseline_explainer_call_count"],
+            "baseline_explainer_measurement": balanced[
+                "baseline_explainer_measurement"
+            ],
+            "counts": dict(balanced["counts"]),
+        },
         **publication,
     }
     _atomic_write(output_path, result)
-    _stage_log("benchmark_complete", output=Path(output_path))
+    _stage_log(
+        "benchmark_complete", instrumentation=instrumentation, started_at=started, output=Path(output_path)
+    )
     return result
 
 
@@ -1135,6 +1652,9 @@ def run_benchmark(
     component_size: Callable = _component_node_count,
     explanation_runner: Callable = _run_case_explanation,
     publication_estimator: Callable = _estimate_full_publication,
+    instrumentation=None,
+    preflight_runner: Callable | None = None,
+    structural_runner: Callable | None = None,
 ):
     holder = {}
 
@@ -1152,6 +1672,9 @@ def run_benchmark(
             component_size=component_size,
             explanation_runner=explanation_runner,
             publication_estimator=publication_estimator,
+            instrumentation=instrumentation,
+            preflight_runner=preflight_runner,
+            structural_runner=structural_runner,
         )
     finally:
         context = holder.get("context")

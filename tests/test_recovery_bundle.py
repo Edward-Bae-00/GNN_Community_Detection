@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 
@@ -98,6 +99,393 @@ def _explanation(case_id):
             ],
         },
     }
+
+
+def _schema3_sidecar_artifact():
+    hybrid = {**_case("case:h"), "cohort": "hybrid_only", "detail_status": "available", "detail_kind": "gnn_explanation"}
+    baseline = {**_case("case:b"), "cohort": "baseline_only", "detail_status": "community_only", "detail_kind": "community_control"}
+    return {
+        "schema_version": "3.0",
+        "policy": {"observability_seed": 0, "gnn_arm": "sage", "inspections_per_day": 5},
+        "summary": {
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 1,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 1,
+            "net_gain": 0,
+        },
+        "coverage": {
+            "hybrid_requested": 1,
+            "baseline_requested": 1,
+            "hybrid_selected": 1,
+            "baseline_selected": 1,
+            "hybrid_explained": 1,
+            "baseline_community": 1,
+            "shortfall": 0,
+            "hybrid_shortfall": 0,
+            "baseline_shortfall": 0,
+            "shortfall_reasons": [],
+        },
+        "cohorts": {
+            "hybrid_only": [hybrid],
+            "baseline_only": [baseline],
+            "recovered_by_both": [],
+        },
+        "selection": {
+            "selected_ids": {
+                "hybrid_only": ["case:h"],
+                "baseline_only": ["case:b"],
+                "recovered_by_both": [],
+            },
+            "hybrid_structural_fallback_ids": [],
+        },
+        "detail_index": {"case:h": {**hybrid, "explanation": {"case_id": "case:h"}}},
+        "community_index": {
+            "case:b": {
+                "cohort": "baseline_only",
+                "community_key": "community:a",
+                "target_person_id": "b",
+                "structural_evidence": {"complete": True},
+            }
+        },
+        "communities": {"community:a": _community()},
+    }
+
+
+def test_schema3_sidecar_validator_accepts_partial_selected_detail():
+    artifact = _schema3_sidecar_artifact()
+    assert v9_recovery_sidecars._validate_schema3_artifact(artifact) is None
+
+
+def test_schema3_sidecar_validator_rejects_baseline_attribution_overlay():
+    artifact = _schema3_sidecar_artifact()
+    artifact["community_index"]["case:b"]["structural_evidence"]["overlay_evidence"] = {}
+    with pytest.raises(ValueError, match="Baseline"):
+        v9_recovery_sidecars._validate_schema3_artifact(artifact)
+
+
+def test_schema3_sidecar_validator_accepts_hybrid_structural_fallback():
+    artifact = _schema3_sidecar_artifact()
+    fallback = {
+        **artifact["cohorts"]["hybrid_only"][0],
+        "case_id": "case:fallback",
+        "person_id": "fallback",
+        "event_id": "event:fallback",
+        "cohort": "hybrid_only",
+        "detail_status": "community_only",
+        "detail_kind": "community_control",
+        "selection_reason": "ineligible_preflight_structural_fallback",
+        "failure_reason": None,
+        "community_key": "community:a",
+        "target_person_id": "fallback",
+    }
+    fallback.pop("attributions", None)
+    fallback.pop("llm_narrative", None)
+    artifact["cohorts"]["hybrid_only"].append(fallback)
+    artifact["summary"].update(hybrid_only_recovered=2, hybrid_total=2, net_gain=1)
+    artifact["coverage"].update(
+        hybrid_requested=2,
+        hybrid_shortfall=1,
+        shortfall=1,
+        shortfall_reasons=["node_limit_exceeded"],
+    )
+    artifact["selection"]["hybrid_structural_fallback_ids"] = ["case:fallback"]
+    artifact["community_index"]["case:fallback"] = {
+        "cohort": "hybrid_only",
+        "community_key": "community:a",
+        "target_person_id": "fallback",
+        "structural_evidence": {"complete": True},
+    }
+
+    assert v9_recovery_sidecars._validate_schema3_artifact(artifact) is None
+
+
+def test_schema3_sidecar_package_preserves_partial_indexes_and_lazy_refs(tmp_path):
+    artifact = _schema3_sidecar_artifact()
+    manifest = v9_recovery_sidecars.package_schema3_sidecars(
+        artifact, tmp_path / "recovery"
+    )
+
+    assert manifest["schema_version"] == "3.0"
+    assert manifest["detail_index"]["case:h"]["path"]
+    assert manifest["community_index"]["case:b"]["path"]
+    bundle_root = tmp_path / "recovery" / manifest["bundle_path"]
+    assert (bundle_root / "manifest.json").is_file()
+    assert (tmp_path / "recovery" / "current.json").is_file()
+
+
+def test_schema3_sidecar_bundle_identity_includes_published_detail(tmp_path):
+    first = _schema3_sidecar_artifact()
+    first_manifest = v9_recovery_sidecars.package_schema3_sidecars(
+        first, tmp_path / "recovery"
+    )
+    second = _schema3_sidecar_artifact()
+    second["detail_index"]["case:h"]["explanation"]["changed"] = True
+    second_manifest = v9_recovery_sidecars.package_schema3_sidecars(
+        second, tmp_path / "recovery"
+    )
+
+    assert first_manifest["bundle_id"] != second_manifest["bundle_id"]
+
+
+def test_schema3_sidecar_repackage_rejects_corrupt_existing_bundle(tmp_path):
+    artifact = _schema3_sidecar_artifact()
+    manifest = v9_recovery_sidecars.package_schema3_sidecars(
+        artifact, tmp_path / "recovery"
+    )
+    case_ref = manifest["detail_index"]["case:h"]
+    case_path = tmp_path / "recovery" / manifest["bundle_path"] / case_ref["path"]
+    case_path.write_text("{}")
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        v9_recovery_sidecars.package_schema3_sidecars(
+            artifact, tmp_path / "recovery"
+        )
+
+
+def test_recovery_bundle_finalize_schema3_allows_partial_selected_cases(tmp_path):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published", run_fingerprint={"seed": 0}
+    )
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+
+    manifest = writer.finalize_schema3(
+        selected_hybrid_case_ids=[],
+        selected_baseline_case_ids=["case:b"],
+        cohorts={
+            "hybrid_only": [],
+            "baseline_only": [{**_case("case:b"), "cohort": "baseline_only"}],
+            "recovered_by_both": [],
+        },
+        policy={"observability_seed": 0},
+        coverage={
+            "hybrid_requested": 1,
+            "baseline_requested": 1,
+            "hybrid_shortfall": 1,
+            "baseline_shortfall": 0,
+            "shortfall": 1,
+            "shortfall_reasons": ["no_hybrid_detail"],
+        },
+        summary={
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 0,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 0,
+            "net_gain": -1,
+        },
+    )
+
+    assert manifest["schema_version"] == "3.0"
+    assert manifest["selection"]["selected_ids"]["baseline_only"] == ["case:b"]
+    assert manifest["coverage"]["shortfall"] == 1
+    assert (tmp_path / "published" / manifest["bundle_path"] / "manifest.json").is_file()
+
+
+def test_recovery_bundle_finalize_schema3_publishes_hybrid_structural_fallback(tmp_path):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "published", run_fingerprint={"seed": 0}
+    )
+    writer.write_community(_community())
+    fallback = {**_case("case:fallback"), "cohort": "hybrid_only"}
+    writer.write_case(
+        "hybrid_only",
+        fallback,
+        structural_detail={
+            "complete": True,
+            "community_key": "community:a",
+            "target_person_id": "fallback",
+        },
+    )
+
+    manifest = writer.finalize_schema3(
+        selected_hybrid_case_ids=[],
+        selected_baseline_case_ids=[],
+        hybrid_structural_fallback_case_ids=["case:fallback"],
+        cohorts={
+            "hybrid_only": [{**fallback, "detail_status": "community_only", "detail_kind": "community_control"}],
+            "baseline_only": [],
+            "recovered_by_both": [],
+        },
+        policy={"observability_seed": 0},
+        coverage={
+            "hybrid_requested": 1,
+            "baseline_requested": 0,
+            "hybrid_shortfall": 1,
+            "baseline_shortfall": 0,
+            "shortfall": 1,
+            "shortfall_reasons": ["node_limit_exceeded"],
+        },
+        summary={
+            "baseline_recovered": 0,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 1,
+            "baseline_only_recovered": 0,
+            "hybrid_total": 1,
+            "net_gain": 1,
+        },
+    )
+
+    assert manifest["selection"]["hybrid_structural_fallback_ids"] == [
+        "case:fallback"
+    ]
+    assert manifest["community_index"]["case:fallback"]["cohort"] == "hybrid_only"
+
+
+def test_schema3_finalizer_manifest_can_be_published_as_prepackaged_bundle(tmp_path):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "recovery", run_fingerprint={"seed": 0},
+        sidecar_prefix="recovery",
+    )
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+    manifest = writer.finalize_schema3(
+        selected_hybrid_case_ids=[],
+        selected_baseline_case_ids=["case:b"],
+        cohorts={
+            "hybrid_only": [],
+            "baseline_only": [{**_case("case:b"), "cohort": "baseline_only"}],
+            "recovered_by_both": [],
+        },
+        policy={"observability_seed": 0},
+        coverage={"hybrid_requested": 0, "baseline_requested": 1},
+        summary={
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 0,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 0,
+            "net_gain": -1,
+        },
+    )
+    source = tmp_path / "artifact.json"
+    source.write_text(json.dumps(manifest))
+
+    published = v9_recovery_sidecars.publish_prepackaged_schema3_manifest(
+        manifest, source, tmp_path / "dashboard-recovery"
+    )
+
+    assert published["schema_version"] == "3.0"
+    assert (
+        tmp_path / "dashboard-recovery" / manifest["bundle_path"] / "manifest.json"
+    ).is_file()
+
+
+def test_schema3_publisher_rejects_rehashed_day_view_identity_tampering(tmp_path):
+    writer = RecoveryBundleWriter(
+        tmp_path / "stage", tmp_path / "recovery", run_fingerprint={"seed": 0},
+        sidecar_prefix="recovery",
+    )
+    writer.write_community(_community())
+    writer.write_case("baseline_only", _case("case:b"))
+    manifest = writer.finalize_schema3(
+        selected_hybrid_case_ids=[],
+        selected_baseline_case_ids=["case:b"],
+        cohorts={
+            "hybrid_only": [],
+            "baseline_only": [{**_case("case:b"), "cohort": "baseline_only"}],
+            "recovered_by_both": [],
+        },
+        policy={"observability_seed": 0},
+        coverage={"hybrid_requested": 0, "baseline_requested": 1},
+        summary={
+            "baseline_recovered": 1,
+            "recovered_by_both": 0,
+            "hybrid_only_recovered": 0,
+            "baseline_only_recovered": 1,
+            "hybrid_total": 0,
+            "net_gain": -1,
+        },
+    )
+    source = tmp_path / "artifact.json"
+    source.write_text(json.dumps(manifest))
+    bundle_root = tmp_path / "recovery" / manifest["bundle_path"]
+    community_ref = manifest["community_sidecar_index"]["community:a"]
+    community_path = bundle_root / community_ref["path"]
+    community = json.loads(community_path.read_text())
+    day_ref = community["day_view"]["node_status_chunks"][0]
+    day_path = bundle_root / day_ref["path"]
+    day_payload = json.loads(day_path.read_text())
+    day_payload["node_statuses"][0]["node_id"] = "ghost"
+    day_body = json.dumps(day_payload, sort_keys=True, separators=(",", ":")).encode()
+    day_path.write_bytes(day_body)
+    day_ref.update(sha256=hashlib.sha256(day_body).hexdigest(), bytes=len(day_body))
+    community_body = json.dumps(community, sort_keys=True, separators=(",", ":")).encode()
+    community_path.write_bytes(community_body)
+    community_ref.update(
+        sha256=hashlib.sha256(community_body).hexdigest(), bytes=len(community_body)
+    )
+    (bundle_root / "manifest.json").write_bytes(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    )
+    source.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="day_view node_status_chunks identity"):
+        v9_recovery_sidecars.publish_prepackaged_schema3_manifest(
+            manifest, source, tmp_path / "dashboard-recovery"
+        )
+
+
+def test_schema3_sidecar_verifier_rejects_day_view_identity_mismatch(tmp_path):
+    def write_ref(name, payload, *, count):
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+        return {
+            "path": name,
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "bytes": len(body),
+            "offset": 0,
+            "count": count,
+        }
+
+    node_ref = write_ref(
+        "nodes.json",
+        {"offset": 0, "count": 1, "nodes": [{"node_id": "p1"}]},
+        count=1,
+    )
+    edge_ref = write_ref(
+        "edges.json",
+        {"offset": 0, "count": 1, "edges": [{"edge_id": "e1"}]},
+        count=1,
+    )
+    node_day_ref = write_ref(
+        "node-status.json",
+        {
+            "offset": 0,
+            "count": 1,
+            "node_statuses": [{"node_id": "ghost"}],
+        },
+        count=1,
+    )
+    edge_day_ref = write_ref(
+        "edge-membership.json",
+        {
+            "offset": 0,
+            "count": 1,
+            "edge_memberships": [{"edge_id": "e1"}],
+        },
+        count=1,
+    )
+    community = {
+        "complete": True,
+        "node_count": 1,
+        "edge_count": 1,
+        "node_chunks": [node_ref],
+        "edge_chunks": [edge_ref],
+        "day_view": {
+            "node_status_chunks": [node_day_ref],
+            "edge_membership_chunks": [edge_day_ref],
+        },
+    }
+
+    with pytest.raises(ValueError, match="day_view node_status_chunks identity"):
+        v9_recovery_sidecars._verify_schema3_day_view_chunks(
+            tmp_path, community, "community:a"
+        )
 
 
 def test_community_objects_are_content_deduplicated_and_provenance_is_separate(tmp_path):
