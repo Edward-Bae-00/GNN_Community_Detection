@@ -74,14 +74,14 @@ EXPLORER_JS = r"""explorer:{rendered:false,render(){
 
   // ---- metrics + framing note ----
   makeMetrics(el,[
-    {l:'People shown',v:F.n(E.meta.sampled_nodes),s:'of '+F.k(E.meta.total_people)+' — role holders, their neighbors, and complete communities'},
+    {l:'People shown',v:F.n(E.meta.sampled_nodes),s:'of '+F.k(E.meta.total_people)+': role holders, their neighbors, and complete communities'},
     {l:'Contraband carriers',v:F.n(E.meta.n_carried),s:F.n(E.meta.n_undetected)+' never caught'},
     {l:'Arrested',v:F.n(E.meta.n_arrested),s:F.n(E.meta.n_seized)+' seizures'},
     {l:'Linked to a smuggler',v:F.n(E.meta.n_neighbor_smug)},
     {l:'Linked to an arrest',v:F.n(E.meta.n_neighbor_arr)},
   ]);
   const intro=makeSection(el,'Community Explorer');
-  makeNote(intro,'Each node is a person; links are real associations, shared family, address, vehicle, business, or co-travel — phones are deliberately excluded. Colour = community type. Rings mark role. Use the filters to isolate smugglers (including those never caught), the people who were arrested or had seizures, and everyone connected to them. Click a node to inspect it and drill into its community.');
+  makeNote(intro,'Each node is a person; links are real associations, shared family, address, vehicle, business, or co-travel. Phones are deliberately excluded. Colour = community type. Rings mark role. Use the filters to isolate smugglers (including those never caught), the people who were arrested or had seizures, and everyone connected to them. Click a node to inspect it and drill into its community.');
 
   // ---- toolbar ----
   const tools=document.createElement('div');tools.className='xp-tools';intro.appendChild(tools);
@@ -115,7 +115,7 @@ EXPLORER_JS = r"""explorer:{rendered:false,render(){
   // communities not in the dropdown, e.g. when the drill button is clicked).
   let drillCommId='';
   const commG=group('Jump to community');const commSel=document.createElement('select');commSel.className='xp-select';
-  commSel.innerHTML='<option value="">— pick —</option>'+E.communities.map(c=>{const lbl=c.id+'  ('+c.size+'p'+(c.carried?', '+c.carried+'⚠':'')+(c.arrested?', '+c.arrested+'×':'')+')';return '<option value="'+esc(c.id)+'">'+esc(lbl)+'</option>';}).join('');
+  commSel.innerHTML='<option value="">Pick a community</option>'+E.communities.map(c=>{const lbl=c.id+'  ('+c.size+'p'+(c.carried?', '+c.carried+'⚠':'')+(c.arrested?', '+c.arrested+'×':'')+')';return '<option value="'+esc(c.id)+'">'+esc(lbl)+'</option>';}).join('');
   commG.appendChild(commSel);commSel.addEventListener('change',()=>{drillCommId=commSel.value;selectedNode=null;apply();});
   const drillLabel=document.createElement('div');drillLabel.className='xp-label';drillLabel.style.cssText='font-size:10px;color:var(--accent);margin-top:4px;display:none';commG.appendChild(drillLabel);
 
@@ -136,7 +136,7 @@ EXPLORER_JS = r"""explorer:{rendered:false,render(){
   const shell=document.createElement('div');shell.className='xp-shell';el.appendChild(shell);
   const canvas=document.createElement('div');canvas.className='xp-canvas';shell.appendChild(canvas);
   const side=document.createElement('div');side.className='xp-side';shell.appendChild(side);
-  side.innerHTML='<div class="xp-empty">Click any person to inspect their roles, community, and connections — then drill into the community around them.</div>';
+  side.innerHTML='<div class="xp-empty">Click any person to inspect their roles, community, and connections, then drill into the community around them.</div>';
 
   const status=document.createElement('div');status.className='xp-status';canvas.appendChild(status);
 

@@ -643,6 +643,7 @@ def test_community_scope_retains_compact_state_for_more_than_100k_display_edges(
         "max_source_rows_per_edge": se.MAX_LOCAL_SOURCE_ROWS_PER_EDGE,
         "node_order": "target_then_pooled_caught_salience_then_hop_then_id",
         "edge_order": "target_incident_then_hop_then_id",
+        "node_layout": "hop_rings_around_target",
     }
 
 

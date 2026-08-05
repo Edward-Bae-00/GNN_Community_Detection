@@ -719,7 +719,20 @@ def _rewrite_nav_js(html):
         "if(n)_navigateTo(n);});\n"
         "(function(){const n=_tabFromHash();_navigateTo(n||'overview');})();"
     )
-    return html.replace(old_bind, new_js, 1)
+    # The template also bootstraps the overview tab directly, one line below the
+    # binding replaced above. ``switchTab`` guards on ``Tabs[name].rendered`` but
+    # this call does not, so once the hash-routed IIFE has rendered overview and
+    # set the flag, this line renders it a second time. ``makeMetrics`` and
+    # ``makeSection`` append to the tab element instead of replacing its
+    # contents, so the duplicate is additive: every visitor landed on an overview
+    # tab carrying two metric rows, two outcome funnels and two of each bar
+    # chart. The IIFE above now owns the initial render for every entry point,
+    # including a deep link like ``#seizures``, so the unguarded call is removed.
+    # Absence is not an error: a template that never bootstrapped overview has
+    # nothing to de-duplicate, and the routed IIFE covers it either way.
+    old_bootstrap = "Tabs.overview.render();Tabs.overview.rendered=true;\n"
+    html = html.replace(old_bind, new_js, 1)
+    return html.replace(old_bootstrap, "", 1)
 
 
 def _apply_grouped_accessible_nav(html):

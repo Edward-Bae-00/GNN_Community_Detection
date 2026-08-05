@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -939,9 +940,11 @@ def test_highest_attribution_renderer_contract_is_shared_by_schema_paths():
     legacy_detail = js.split("function renderDetail", 1)[1].split(
         "function render(){", 1
     )[0]
-    assert legacy_detail.index("renderNarrative(left,explanation)") < legacy_detail.index(
+    # The containers are named for what they hold, not for a left/right split:
+    # the graph spans the detail width and the reading panels sit beneath it.
+    assert legacy_detail.index("renderNarrative(panels,explanation)") < legacy_detail.index(
         "renderHighestAttributionPanel(doc"
-    ) < legacy_detail.index("renderGraph(right,explanation)")
+    ) < legacy_detail.index("renderGraph(evidence,explanation)")
     assert "Highest-attribution evidence" in js
     assert "Unsigned median attribution weights show salience across deterministic explainer restarts, not causal direction." in js
     assert "Attribution ranking unavailable in this artifact." in js
@@ -1307,7 +1310,22 @@ def test_delegated_click_and_change_restore_focus_after_render():
 
 def test_essential_explorer_labels_use_the_contrast_safe_text_token():
     assert "var(--text3)" not in UI.V9_RECOVERY_EXPLAINER_CSS
+    assert "var(--text-dim)" not in UI.V9_RECOVERY_EXPLAINER_CSS
     assert UI.V9_RECOVERY_EXPLAINER_CSS.count("var(--text2)") >= 12
+
+
+def test_this_panel_owns_its_type_and_holds_the_ten_pixel_floor():
+    """The floor used to live in v9_design_system.py, which is injected after
+    this sheet at equal specificity. That meant a size set here lost silently
+    and the panel could not be fixed at source, so the panel took ownership and
+    the floor has to be guarded from this side now.
+    """
+    css = UI.V9_RECOVERY_EXPLAINER_CSS
+    sizes = [int(v) for v in re.findall(r"font-size:\s*(\d+)px", css)]
+    sizes += [int(v) for v in re.findall(r"font:\s*(\d+)px", css)]
+
+    assert sizes, "expected explicit font sizes in the panel stylesheet"
+    assert min(sizes) >= 10, f"sub-10px type present: {sorted(set(sizes))}"
 
 
 def test_build_recovery_view_model_accepts_exact_policy_and_overlap_algebra():
