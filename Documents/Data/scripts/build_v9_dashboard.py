@@ -622,6 +622,76 @@ function hideTip(){tip.style.opacity='0'}"""
     return html.replace(old, new, 1)
 
 
+def _balanced_brace_end(source: str, brace: int, limit: int | None = None) -> int:
+    """Return the closing brace for ``brace`` using a small JS lexer."""
+    if limit is None:
+        limit = len(source)
+    depth = 0
+    quote = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    i = brace
+    while i < limit:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < limit else ""
+        if line_comment:
+            if ch == "\n":
+                line_comment = False
+            i += 1
+            continue
+        if block_comment:
+            if ch == "*" and nxt == "/":
+                block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            block_comment = True
+            i += 2
+            continue
+        if ch in "'\"`":
+            quote = ch
+            i += 1
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise ValueError("dashboard JavaScript object is unterminated")
+
+
+def _replace_dashboard_renderer(html: str, name: str, replacement: str) -> str:
+    """Replace one renderer object without touching adjacent Tabs entries."""
+    anchor = f"{name}:{{rendered:false,render(){{"
+    matches = list(re.finditer(re.escape(anchor), html))
+    if len(matches) != 1:
+        raise ValueError(f"dashboard {name} renderer anchor must occur exactly once")
+    start = matches[0].start()
+    brace = html.find("{", start)
+    end = _balanced_brace_end(html, brace) + 1
+    if html.startswith(",", end):
+        end += 1
+    return html[:start] + replacement + html[end:]
+
+
 def _inject_dashboard_tab_scripts(html, helper_js, renderer_js):
     """Place helpers before ``Tabs`` and renderers inside its object literal."""
     tabs_marker = "const Tabs={"
@@ -857,6 +927,11 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
         UNSUP_AD_VIEW_MODEL_JS,
         UNSUP_AD_CHART_JS,
     )
+    from v9_summary_page import (
+        SUMMARY_PAGE_CSS,
+        SUMMARY_PAGE_RENDERER_JS,
+        SUMMARY_PAGE_RUNTIME_JS,
+    )
     from v9_recovery_explainer_ui import (
         V9_RECOVERY_EXPLAINER_CSS,
         V9_RECOVERY_EXPLAINER_JS,
@@ -866,6 +941,15 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
         GNN_ARCHITECTURE_UI_JS,
         GNN_ARCHITECTURE_CSS,
     )
+
+    summary_renderer = ""
+    if "overview:{rendered:false,render(){" in html:
+        html = _replace_dashboard_renderer(html, "overview", SUMMARY_PAGE_RENDERER_JS)
+    else:
+        # Small builder fixtures may intentionally omit the base Overview tab;
+        # keep those fixtures valid while still injecting the route when the
+        # template exposes the registry.
+        summary_renderer = SUMMARY_PAGE_RENDERER_JS
 
     html = _inject_v9_nav_and_sections(
         html,
@@ -879,14 +963,15 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
     )
     html = _inject_dashboard_tab_scripts(
         html,
-        GNN_ARCHITECTURE_VIEW_MODEL_JS + GNN_ARCHITECTURE_UI_JS + "\n"
+        SUMMARY_PAGE_RUNTIME_JS + "\n"
+        + GNN_ARCHITECTURE_VIEW_MODEL_JS + GNN_ARCHITECTURE_UI_JS + "\n"
         + UNSUP_AD_VIEW_MODEL_JS + UNSUP_AD_CHART_JS,
-        V9_RESULTS_JS + UNSUP_AD_JS,
+        summary_renderer + V9_RESULTS_JS + UNSUP_AD_JS,
     )
     html = _validate_recovery_explorer_mount(html)
     html = html.replace(
         "</style>",
-        V9_RESULTS_CSS + "\n" + GNN_ARCHITECTURE_CSS + "\n"
+        SUMMARY_PAGE_CSS + "\n" + V9_RESULTS_CSS + "\n" + GNN_ARCHITECTURE_CSS + "\n"
         + UNSUP_AD_CSS + "\n</style>",
         1,
     )
