@@ -35,6 +35,7 @@ V9_RECOVERY_EXPLANATIONS = os.path.join(
     "diagnostics",
     "hybrid_recovery_explanations_v9.json",
 )
+V9_RECOVERY_ARCHIVE = os.path.join(REPO_ROOT, "v9_schema3_results.zip")
 V9_UNSUPERVISED_ARTIFACT = "unsupervised_ad_results_v9.json"
 GENERIC_UNSUPERVISED_ARTIFACT = "unsupervised_ad_results.json"
 V9_CORPUS_NAME = "synthetic_cbp_graph_corpus_v9"
@@ -123,6 +124,21 @@ def _load_recovery_artifact(path, output_dir=None):
     if not os.path.exists(path):
         p(f"[v9-dashboard] WARNING: {path} not found; case evidence unavailable.")
         return None
+    if os.fspath(path).lower().endswith(".zip"):
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        from v9_recovery_sidecars import publish_prepackaged_schema3_zip
+
+        try:
+            dashboard_output = OUT_DIR if output_dir is None else output_dir
+            return publish_prepackaged_schema3_zip(
+                path,
+                os.path.join(dashboard_output, "recovery"),
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"invalid schema-3 recovery ZIP artifact: {error}"
+            ) from error
     try:
         with open(path) as handle:
             artifact = json.load(handle)
@@ -132,6 +148,30 @@ def _load_recovery_artifact(path, output_dir=None):
     if not isinstance(artifact, dict):
         p("[v9-dashboard] WARNING: unsupported recovery artifact schema.")
         return None
+    if artifact.get("schema_version") == "3.0":
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        from v9_recovery_sidecars import (
+            package_schema3_sidecars,
+            publish_prepackaged_schema3_manifest,
+        )
+
+        try:
+            dashboard_output = OUT_DIR if output_dir is None else output_dir
+            if isinstance(artifact.get("community_sidecar_index"), dict):
+                return publish_prepackaged_schema3_manifest(
+                    artifact,
+                    path,
+                    os.path.join(dashboard_output, "recovery"),
+                )
+            return package_schema3_sidecars(
+                artifact,
+                os.path.join(dashboard_output, "recovery"),
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"invalid schema-3 recovery artifact: {error}"
+            ) from error
     if artifact.get("schema_version") == "2.0":
         if HERE not in sys.path:
             sys.path.insert(0, HERE)
@@ -160,6 +200,18 @@ def _load_recovery_artifact(path, output_dir=None):
         p("[v9-dashboard] WARNING: unsupported recovery artifact schema.")
         return None
     return artifact
+
+
+def _recovery_artifact_path():
+    """Choose an explicit artifact, legacy JSON, or the repo-root ZIP fallback."""
+    configured = os.environ.get("V9_SCHEMA3_RESULTS_ZIP")
+    if configured:
+        return configured
+    if os.path.exists(V9_RECOVERY_EXPLANATIONS):
+        return V9_RECOVERY_EXPLANATIONS
+    if os.path.exists(V9_RECOVERY_ARCHIVE):
+        return V9_RECOVERY_ARCHIVE
+    return V9_RECOVERY_EXPLANATIONS
 
 
 def _load_v9_unsupervised_artifact(diagnostics_dir):
@@ -549,7 +601,7 @@ def _load_v9_data(output_dir=None) -> dict:
 
     data.pop("v9RecoveryExplainer", None)
     recovery_artifact = _load_recovery_artifact(
-        V9_RECOVERY_EXPLANATIONS, output_dir=output_dir
+        _recovery_artifact_path(), output_dir=output_dir
     )
     if recovery_artifact is not None:
         data["v9RecoveryExplainer"] = recovery_artifact

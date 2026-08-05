@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from types import MappingProxyType
 
 import numpy as np
@@ -15,14 +15,27 @@ from gnn.observability_artifact import (
     explain_representatives,
 )
 from gnn.recovery_observability import (
+    RecoveryCase,
     HybridOnlyCase,
     RecoveryAnchor,
+    DailyPoolTrace,
+    RecoveryRun,
     RecoveryOverlap,
     build_decision_trace,
+    build_recovery_case,
     build_rank_reference,
+    choose_earliest_recovery_anchor,
+    materialize_recovered_by_both_case,
+    partition_recovery_cohorts,
+    recovery_cohort_counts,
     recovery_overlap,
     representative_attempt_order,
+    select_frozen_recovery_prefix,
+    select_balanced_detail_cases,
+    finalize_recovery_publication,
     simulate_recovery_run,
+    recovery_case_explainer_boundary,
+    validate_recovery_case_anchor,
 )
 from gnn.recovery_bundle import RecoveryBundleError, RecoveryBundleWriter
 from gnn.run_demo import _rank_fuse
@@ -1168,6 +1181,86 @@ def test_overlap_rejects_unequal_budgets() -> None:
         recovery_overlap(baseline, hybrid)
 
 
+def test_strict_overlap_rejects_arm_and_shared_provenance_mismatches() -> None:
+    pool = _pool(["e1"], ["p1"], ["2025-01-01T01:00:00Z"])
+    baseline = simulate_recovery_run(
+        pool,
+        [0.5],
+        arm="baseline",
+        daily_budget=1,
+        official_caught_times={},
+        run_identity="run-1",
+        as_of_identity="asof-1",
+    )
+    hybrid = simulate_recovery_run(
+        pool,
+        [0.5],
+        arm="hybrid_seed0",
+        daily_budget=1,
+        official_caught_times={},
+        run_identity="run-2",
+        as_of_identity="asof-1",
+    )
+
+    with pytest.raises(ValueError, match="run_identity"):
+        recovery_overlap(baseline, hybrid, strict=True)
+    with pytest.raises(ValueError, match="baseline arm"):
+        recovery_overlap(
+            replace(baseline, arm="hybrid"),
+            replace(hybrid, run_identity="run-1"),
+            strict=True,
+        )
+
+
+def test_strict_overlap_rejects_missing_identity_mismatched_as_of_and_bad_hybrid_arm() -> None:
+    pool = _pool(["e1"], ["p1"], ["2025-01-01T01:00:00Z"])
+    kwargs = {
+        "daily_budget": 1,
+        "official_caught_times": {},
+        "run_identity": "run-1",
+        "as_of_identity": "asof-1",
+    }
+    baseline = simulate_recovery_run(pool, [0.5], arm="baseline", **kwargs)
+    hybrid = simulate_recovery_run(
+        pool, [0.5], arm="hybrid_seed0", **kwargs
+    )
+
+    with pytest.raises(ValueError, match="run_identity"):
+        recovery_overlap(
+            replace(baseline, run_identity=None), hybrid, strict=True
+        )
+    with pytest.raises(ValueError, match="as_of_identity"):
+        recovery_overlap(
+            baseline, replace(hybrid, as_of_identity="asof-2"), strict=True
+        )
+    with pytest.raises(ValueError, match="as_of_identity"):
+        recovery_overlap(
+            baseline, replace(hybrid, as_of_identity=None), strict=True
+        )
+    with pytest.raises(ValueError, match="hybrid arm"):
+        recovery_overlap(
+            baseline, replace(hybrid, arm="baseline"), strict=True
+        )
+
+
+def test_strict_overlap_accepts_normalized_hybrid_arm_and_shared_provenance() -> None:
+    pool = _pool(["e1"], ["p1"], ["2025-01-01T01:00:00Z"])
+    kwargs = {
+        "daily_budget": 1,
+        "official_caught_times": {},
+        "run_identity": "run-1",
+        "as_of_identity": "asof-1",
+    }
+    baseline = simulate_recovery_run(pool, [0.5], arm="baseline", **kwargs)
+    hybrid = simulate_recovery_run(
+        pool, [0.5], arm="hybrid_seed0", **kwargs
+    )
+
+    assert recovery_overlap(baseline, hybrid, strict=True).both_ids == frozenset(
+        {"p1"}
+    )
+
+
 @pytest.mark.parametrize(
     ("field_name", "bad_ids"),
     [
@@ -1781,3 +1874,1157 @@ def test_explanation_limit_counts_successes_not_failed_attempts() -> None:
         "fail",
         "success",
     ]
+
+
+def _recovery_case(
+    case_id: str,
+    cohort: str,
+    *,
+    anchor_day: str = "2025-01-01T00:00:00Z",
+    baseline_rank: int = 1,
+    hybrid_rank: int = 1,
+    anchor_arm: str | None = None,
+    relationship_categories: tuple[str, ...] = (),
+    scoring_period: str = "",
+) -> RecoveryCase:
+    person_id = case_id.split(":", 1)[-1]
+    return RecoveryCase(
+        case_id=case_id,
+        recovery_cohort=cohort,
+        recovery_anchor_arm=anchor_arm,
+        anchor_event=RecoveryAnchor(
+            person_id=person_id,
+            event_id=f"event:{person_id}",
+            row_index=baseline_rank,
+            scoring_day=pd.Timestamp(anchor_day),
+            inspected_rank=1,
+        ),
+        subject_id=person_id,
+        subject_display={"display_name": f"Display {person_id}"},
+        baseline_raw=0.1 + baseline_rank / 100.0,
+        baseline_percentile=1.0 - baseline_rank / 100.0,
+        baseline_rank=baseline_rank,
+        seed0_gnn_probability=0.2 + (hybrid_rank % 50) / 100.0,
+        seed0_gnn_percentile=1.0 - hybrid_rank / 100.0,
+        seed0_gnn_rank=hybrid_rank,
+        seed0_hybrid_score=(
+            0.25 * (1.0 - baseline_rank / 100.0)
+            + 0.75 * (1.0 - hybrid_rank / 100.0)
+        ),
+        seed0_hybrid_rank=hybrid_rank,
+        hybrid_blend_weight=0.75,
+        relationship_categories=relationship_categories,
+        scoring_period=scoring_period,
+    )
+
+
+def test_recovery_case_preserves_score_probability_and_display_fields() -> None:
+    case = _recovery_case(
+        "case:p1",
+        "hybrid_only",
+        baseline_rank=41,
+        hybrid_rank=7,
+        anchor_arm="hybrid",
+    )
+
+    assert case.case_id == "case:p1"
+    assert case.recovery_cohort == "hybrid_only"
+    assert case.recovery_anchor_arm == "hybrid"
+    assert case.anchor_event.event_id == "event:p1"
+    assert case.subject_id == "p1"
+    assert case.subject_display["display_name"] == "Display p1"
+    assert case.baseline_raw == pytest.approx(0.51)
+    assert case.baseline_percentile == pytest.approx(0.59)
+    assert case.baseline_rank == 41
+    assert case.seed0_gnn_probability == pytest.approx(0.27)
+    assert case.seed0_gnn_percentile == pytest.approx(0.93)
+    assert case.seed0_gnn_rank == 7
+    assert case.seed0_hybrid_score == pytest.approx(0.845)
+    assert case.seed0_hybrid_rank == 7
+    assert case.seed0_hybrid_score != case.seed0_gnn_probability
+
+
+def test_recovery_case_is_frozen_and_deep_detaches_subject_display() -> None:
+    display = {"display_name": "Original"}
+    case = RecoveryCase(
+        case_id="case:p1",
+        recovery_cohort="hybrid_only",
+        anchor_event=RecoveryAnchor(
+            "p1", "e1", 0, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+        ),
+        subject_id="p1",
+        subject_display=display,
+        baseline_raw=0.1,
+        baseline_percentile=0.2,
+        baseline_rank=2,
+        seed0_gnn_probability=0.3,
+        seed0_gnn_percentile=0.4,
+        seed0_gnn_rank=3,
+        seed0_hybrid_score=0.35,
+        seed0_hybrid_rank=2,
+        hybrid_blend_weight=0.75,
+    )
+
+    display["display_name"] = "Mutated"
+    assert case.subject_display["display_name"] == "Original"
+    with pytest.raises(TypeError):
+        case.subject_display["new"] = "value"  # type: ignore[index]
+    with pytest.raises(FrozenInstanceError):
+        case.subject_id = "changed"  # type: ignore[misc]
+
+
+def test_build_recovery_case_reads_explicit_trace_fields() -> None:
+    anchor = RecoveryAnchor(
+        "p1",
+        "e1",
+        0,
+        pd.Timestamp("2025-01-01T00:00:00Z"),
+        inspected_rank=1,
+    )
+    case = build_recovery_case(
+        case_id="case:p1",
+        recovery_cohort="baseline_only",
+        recovery_anchor_arm="baseline",
+        anchor_event=anchor,
+        subject_id="p1",
+        subject_display={"display_name": "Display p1"},
+        decision_trace={
+            "baseline_raw": 0.81,
+            "baseline_percentile": 0.71,
+            "baseline_rank": 4,
+            "seed0_gnn_probability": 0.23,
+            "seed0_gnn_percentile": 0.63,
+            "seed0_gnn_rank": 9,
+            "seed0_hybrid_score": 0.67,
+            "seed0_hybrid_rank": 8,
+        },
+        hybrid_blend_weight=0.5,
+    )
+
+    assert case.baseline_raw == pytest.approx(0.81)
+    assert case.seed0_gnn_probability == pytest.approx(0.23)
+    assert case.seed0_hybrid_score == pytest.approx(0.67)
+    assert case.seed0_hybrid_score != case.seed0_gnn_probability
+    assert case.hybrid_score_kind == "percentile_fusion"
+    assert case.hybrid_blend_weight == pytest.approx(0.5)
+
+
+def test_recovery_case_rejects_wrong_percentile_fusion_score() -> None:
+    with pytest.raises(ValueError, match="does not match percentile fusion"):
+        RecoveryCase(
+            case_id="case:p1",
+            recovery_cohort="hybrid_only",
+            anchor_event=RecoveryAnchor(
+                "p1", "e1", 0, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+            ),
+            subject_id="p1",
+            subject_display={},
+            baseline_raw=0.1,
+            baseline_percentile=0.2,
+            baseline_rank=2,
+            seed0_gnn_probability=0.3,
+            seed0_gnn_percentile=0.8,
+            seed0_gnn_rank=3,
+            seed0_hybrid_score=0.9,
+            seed0_hybrid_rank=2,
+            hybrid_blend_weight=0.5,
+        )
+
+
+def test_recovery_cohort_algebra_partitions_sets_and_counts() -> None:
+    partition = partition_recovery_cohorts(
+        baseline_ids={"both-1", "baseline-1", "baseline-2"},
+        hybrid_ids={"both-1", "hybrid-1"},
+    )
+
+    assert partition.both_ids == frozenset({"both-1"})
+    assert partition.hybrid_only_ids == frozenset({"hybrid-1"})
+    assert partition.baseline_only_ids == frozenset({"baseline-1", "baseline-2"})
+    assert recovery_cohort_counts(partition) == {
+        "baseline_recovered": 3,
+        "recovered_by_both": 1,
+        "hybrid_only_recovered": 1,
+        "baseline_only_recovered": 2,
+        "hybrid_total": 2,
+        "net_gain": -1,
+    }
+
+
+def test_frozen_recovery_prefix_uses_separate_quotas_and_excludes_both() -> None:
+    cases = [
+        _recovery_case(f"case:h{index:02d}", "hybrid_only", hybrid_rank=index + 1)
+        for index in range(25)
+    ] + [
+        _recovery_case(
+            f"case:b{index:02d}",
+            "baseline_only",
+            baseline_rank=index + 1,
+            hybrid_rank=100 - index,
+        )
+        for index in range(15)
+    ]
+
+    first = select_frozen_recovery_prefix(cases)
+    second = select_frozen_recovery_prefix(list(reversed(cases)))
+
+    expected_hybrid = tuple(f"case:h{index:02d}" for index in range(20))
+    expected_baseline = tuple(f"case:b{index:02d}" for index in range(10))
+    assert first.selected_ids == {
+        "hybrid_only": expected_hybrid,
+        "baseline_only": expected_baseline,
+        "recovered_by_both": (),
+    }
+    assert second.selected_ids == first.selected_ids
+    assert first.counts["selected_hybrid_only"] == 20
+    assert first.counts["selected_baseline_only"] == 10
+    assert first.counts["selected_recovered_by_both"] == 0
+    assert first.counts["recovered_by_both"] == 0
+    assert first.status["selection"] == "frozen"
+    assert first.published_ids == {
+        "hybrid_only": (),
+        "baseline_only": (),
+        "recovered_by_both": (),
+    }
+    assert all(
+        first.detail_status[case_id] == "selected"
+        for case_id in expected_hybrid
+    )
+
+
+def test_frozen_selection_precedes_explanations_and_failures_do_not_replace_ids() -> None:
+    cases = [
+        _recovery_case(f"case:h{index}", "hybrid_only", hybrid_rank=index + 1)
+        for index in range(3)
+    ]
+    events: list[str] = []
+
+    def explain(case: RecoveryCase) -> None:
+        events.append(case.case_id)
+        raise AssertionError("compatibility selection must not execute callbacks")
+
+    result = select_frozen_recovery_prefix(
+        cases,
+        max_hybrid=2,
+        max_baseline=0,
+        hybrid_explain_case=explain,
+    )
+
+    assert result.selected_ids["hybrid_only"] == ("case:h0", "case:h1")
+    assert events == []
+    assert result.failed_ids == ()
+    assert result.explained_ids == ()
+    assert result.counts["selected_hybrid_only"] == 2
+    assert result.counts["published_hybrid_only"] == 0
+    assert result.counts["failed"] == 0
+    assert result.published_ids["hybrid_only"] == ()
+    assert result.selected_ids["hybrid_only"] == ("case:h0", "case:h1")
+    assert result.detail_status["case:h0"] == "selected"
+    assert result.detail_status["case:h1"] == "selected"
+    assert result.status["explainability"] == "not_requested"
+
+    finalized = finalize_recovery_publication(
+        result,
+        published_ids={"hybrid_only": ("case:h1",)},
+        failures=({"case_id": "case:h0", "reason_code": "planned"},),
+    )
+    assert finalized.selected_ids["hybrid_only"] == ("case:h0", "case:h1")
+    assert finalized.published_ids["hybrid_only"] == ("case:h1",)
+    assert finalized.detail_status["case:h0"] == "failed"
+    assert finalized.status["publication_hybrid_only"] == "partial"
+
+
+def test_selector_rejects_distinct_case_ids_for_one_subject() -> None:
+    hybrid_case = replace(
+        _recovery_case("case:p1", "hybrid_only"), case_id="case:p1-hybrid"
+    )
+    baseline_case = replace(
+        _recovery_case("case:p1", "baseline_only"), case_id="case:p1-baseline"
+    )
+
+    with pytest.raises(ValueError, match="subject-disjoint"):
+        select_frozen_recovery_prefix([hybrid_case, baseline_case])
+
+
+def test_selector_callback_is_hybrid_only_and_both_is_not_detail_published() -> None:
+    baseline_source = _recovery_case(
+        "case:p1", "baseline_only", anchor_day="2025-01-02T00:00:00Z"
+    )
+    hybrid_source = _recovery_case(
+        "case:p1", "hybrid_only", anchor_day="2025-01-01T00:00:00Z"
+    )
+    both = materialize_recovered_by_both_case(baseline_source, hybrid_source)
+    baseline_control = _recovery_case("case:b", "baseline_only")
+    hybrid_detail = _recovery_case("case:h", "hybrid_only")
+    callbacks: list[str] = []
+
+    result = select_frozen_recovery_prefix(
+        [both, baseline_control, hybrid_detail],
+        hybrid_explain_case=lambda case: callbacks.append(case.case_id),
+    )
+
+    assert callbacks == []
+    assert result.selected_ids["baseline_only"] == ("case:b",)
+    assert result.published_ids["baseline_only"] == ()
+    assert result.selected_ids["recovered_by_both"] == ()
+    assert result.published_ids["recovered_by_both"] == ()
+    assert result.aggregate_ids == ("case:p1",)
+    assert result.counts["attempted"] == 0
+    assert result.counts["published_baseline_only"] == 0
+    assert result.counts["published_recovered_by_both"] == 0
+    finalized = finalize_recovery_publication(
+        result,
+        published_ids={"baseline_only": ("case:b",), "hybrid_only": ("case:h",)},
+    )
+    assert finalized.status["publication_baseline_only"] == "community_only"
+    assert finalized.status["publication_hybrid_only"] == "technical_available"
+
+
+def test_materialized_both_is_aggregate_only_and_uses_earliest_anchor() -> None:
+    baseline_source = _recovery_case(
+        "case:p1",
+        "baseline_only",
+        anchor_day="2025-01-03T00:00:00Z",
+        baseline_rank=4,
+    )
+    hybrid_source = _recovery_case(
+        "case:p1",
+        "hybrid_only",
+        anchor_day="2025-01-01T00:00:00Z",
+        hybrid_rank=9,
+    )
+    both = materialize_recovered_by_both_case(baseline_source, hybrid_source)
+    cases = [both, _recovery_case("case:h", "hybrid_only"), _recovery_case("case:b", "baseline_only")]
+
+    result = select_frozen_recovery_prefix(
+        cases,
+        max_hybrid=1,
+        max_baseline=1,
+    )
+
+    assert result.selected_ids["hybrid_only"] == ("case:h",)
+    assert result.selected_ids["baseline_only"] == ("case:b",)
+    assert result.selected_ids["recovered_by_both"] == ()
+    assert result.aggregate_ids == ("case:p1",)
+    assert result.aggregate_cases[0].recovery_anchor_arm == "hybrid"
+    assert result.counts["selected_hybrid_only"] == 1
+    assert result.counts["selected_baseline_only"] == 1
+    assert result.counts["selected_recovered_by_both"] == 0
+    assert result.counts["aggregate_recovered_by_both"] == 1
+    assert result.published_ids["recovered_by_both"] == ()
+
+
+def test_compatibility_wrapper_delegates_balanced_priority_before_date() -> None:
+    early = _recovery_case(
+        "case:early",
+        "hybrid_only",
+        anchor_day="2025-01-01T00:00:00Z",
+        hybrid_rank=99,
+    )
+    late = _recovery_case(
+        "case:late",
+        "hybrid_only",
+        anchor_day="2025-01-02T00:00:00Z",
+        hybrid_rank=1,
+    )
+
+    result = select_frozen_recovery_prefix(
+        [late, early], max_hybrid=1, max_baseline=0
+    )
+
+    assert result.selected_ids["hybrid_only"] == ("case:late",)
+
+
+def test_compatibility_wrapper_uses_balanced_tiebreaks() -> None:
+    day = pd.Timestamp("2025-01-01T00:00:00Z")
+    cases = []
+    for case_id, person_id, row_index, event_id, inspected_rank in (
+        ("case:row-late", "row-late", 2, "event-a", 1),
+        ("case:row-early", "row-early", 1, "event-z", 1),
+        ("case:event-z", "event-z", 1, "event-z", 1),
+        ("case:event-a-z", "event-a-z", 1, "event-a", 1),
+        ("case:event-a-a", "event-a-a", 1, "event-a", 1),
+        ("case:rank-late", "rank-late", 1, "event-a", 2),
+        ("case:rank-early", "rank-early", 1, "event-a", 1),
+    ):
+        case = _recovery_case(case_id, "hybrid_only", hybrid_rank=99)
+        cases.append(
+            replace(
+                case,
+                anchor_event=RecoveryAnchor(
+                    person_id,
+                    event_id,
+                    row_index,
+                    day,
+                    inspected_rank=inspected_rank,
+                ),
+            )
+        )
+
+    result = select_frozen_recovery_prefix(cases, max_hybrid=7, max_baseline=0)
+
+    assert result.selected_ids["hybrid_only"] == (
+        "case:event-a-a",
+        "case:event-a-z",
+        "case:event-z",
+        "case:rank-early",
+        "case:rank-late",
+        "case:row-early",
+        "case:row-late",
+    )
+
+
+def test_earliest_anchor_uses_arm_as_final_deterministic_tiebreak() -> None:
+    timestamp = pd.Timestamp("2025-01-01T00:00:00Z")
+    baseline_anchor = RecoveryAnchor("p1", "event-same", 4, timestamp, 2)
+    hybrid_anchor = RecoveryAnchor("p1", "event-same", 4, timestamp, 2)
+
+    anchor, arm = choose_earliest_recovery_anchor(
+        baseline_anchor, hybrid_anchor
+    )
+
+    assert anchor == baseline_anchor
+    assert arm == "baseline"
+
+
+def test_earliest_anchor_orders_event_before_row_index() -> None:
+    timestamp = pd.Timestamp("2025-01-01T00:00:00Z")
+    baseline_anchor = RecoveryAnchor("p1", "event-z", 0, timestamp, 1)
+    hybrid_anchor = RecoveryAnchor("p1", "event-a", 99, timestamp, 1)
+
+    anchor, arm = choose_earliest_recovery_anchor(
+        baseline_anchor, hybrid_anchor
+    )
+
+    assert anchor == hybrid_anchor
+    assert arm == "hybrid"
+
+
+def test_both_materialization_chooses_earlier_subject_arm_anchor() -> None:
+    baseline_case = _recovery_case(
+        "case:p1",
+        "baseline_only",
+        anchor_day="2025-01-02T00:00:00Z",
+        baseline_rank=4,
+    )
+    hybrid_case = _recovery_case(
+        "case:p1",
+        "hybrid_only",
+        anchor_day="2025-01-01T00:00:00Z",
+        hybrid_rank=9,
+    )
+
+    both = materialize_recovered_by_both_case(baseline_case, hybrid_case)
+
+    assert both.recovery_cohort == "recovered_by_both"
+    assert both.recovery_anchor_arm == "hybrid"
+    assert both.anchor_event == hybrid_case.anchor_event
+
+
+def test_recovery_case_rejects_materialized_both_without_anchor_arm() -> None:
+    with pytest.raises(ValueError, match="recovery_anchor_arm"):
+        _recovery_case(
+            "case:both",
+            "recovered_by_both",
+            anchor_arm=None,
+        )
+
+
+def _manual_recovery_run(
+    arm: str,
+    anchor: RecoveryAnchor,
+    *,
+    daily_budget: int = 1,
+    candidate_row_indices: tuple[int, ...] | None = None,
+    inspected_row_indices: tuple[int, ...] | None = None,
+    run_identity: str | None = "fixture-run",
+    as_of_identity: str | None = "fixture-as-of",
+) -> RecoveryRun:
+    day = anchor.scoring_day
+    trace = DailyPoolTrace(
+        scoring_day=day,
+        candidate_row_indices=(
+            (anchor.row_index,)
+            if candidate_row_indices is None
+            else candidate_row_indices
+        ),
+        inspected_row_indices=(
+            (anchor.row_index,)
+            if inspected_row_indices is None
+            else inspected_row_indices
+        ),
+    )
+    return RecoveryRun(
+        arm=arm,
+        daily_budget=daily_budget,
+        recovered_ids={anchor.person_id},
+        first_recovery={anchor.person_id: anchor},
+        days={day: trace},
+        run_identity=run_identity,
+        as_of_identity=as_of_identity,
+    )
+
+
+@pytest.mark.parametrize("daily_budget", [0, -1, True])
+def test_recovery_run_rejects_non_positive_or_boolean_budget(
+    daily_budget,
+) -> None:
+    anchor = RecoveryAnchor(
+        "p1", "e1", 0, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+    )
+
+    with pytest.raises(ValueError, match="daily_budget must be positive"):
+        _manual_recovery_run("hybrid_seed0", anchor, daily_budget=daily_budget)
+
+
+def test_recovery_case_anchor_validation_rejects_later_competing_anchor() -> None:
+    first_anchor = RecoveryAnchor(
+        "p1", "e-first", 0, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+    )
+    later_anchor = RecoveryAnchor(
+        "p1", "e-later", 1, pd.Timestamp("2025-01-02T00:00:00Z"), 1
+    )
+    run = _manual_recovery_run("hybrid_seed0", first_anchor)
+    valid_case = _recovery_case("case:p1", "hybrid_only")
+    valid_case = replace(valid_case, anchor_event=first_anchor)
+    invalid_case = replace(valid_case, anchor_event=later_anchor)
+
+    validate_recovery_case_anchor(run, valid_case)
+    with pytest.raises(ValueError, match="first_recovery anchor"):
+        validate_recovery_case_anchor(run, invalid_case)
+
+    wrong_rank_case = replace(
+        valid_case,
+        anchor_event=replace(first_anchor, inspected_rank=2),
+    )
+    with pytest.raises(ValueError, match="inspected_rank"):
+        validate_recovery_case_anchor(run, wrong_rank_case)
+
+
+def test_recovery_case_anchor_validation_checks_day_trace_membership() -> None:
+    anchor = RecoveryAnchor(
+        "p1", "e-first", 0, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+    )
+    run = _manual_recovery_run(
+        "hybrid_seed0", anchor, candidate_row_indices=(1,), inspected_row_indices=(1,)
+    )
+    case = replace(_recovery_case("case:p1", "hybrid_only"), anchor_event=anchor)
+
+    with pytest.raises(ValueError, match="candidate"):
+        validate_recovery_case_anchor(run, case)
+
+
+def test_recovery_case_anchor_validation_rejects_uninspected_candidate() -> None:
+    anchor = RecoveryAnchor(
+        "p1", "e-first", 0, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+    )
+    run = _manual_recovery_run(
+        "hybrid_seed0", anchor, candidate_row_indices=(0, 1), inspected_row_indices=(1,)
+    )
+    case = replace(_recovery_case("case:p1", "hybrid_only"), anchor_event=anchor)
+
+    with pytest.raises(ValueError, match="inspected rows"):
+        validate_recovery_case_anchor(run, case)
+
+
+def test_both_anchor_validation_uses_earlier_arm_anchor() -> None:
+    baseline_anchor = RecoveryAnchor(
+        "p1", "e-baseline", 0, pd.Timestamp("2025-01-02T00:00:00Z"), 1
+    )
+    hybrid_anchor = RecoveryAnchor(
+        "p1", "e-hybrid", 1, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+    )
+    baseline_run = _manual_recovery_run("baseline", baseline_anchor)
+    hybrid_run = _manual_recovery_run("hybrid_seed0", hybrid_anchor)
+    both = replace(
+        _recovery_case("case:p1", "recovered_by_both", anchor_arm="hybrid"),
+        anchor_event=hybrid_anchor,
+    )
+
+    validate_recovery_case_anchor(
+        baseline_run,
+        both,
+        hybrid_run=hybrid_run,
+    )
+
+    with pytest.raises(ValueError, match="earlier"):
+        validate_recovery_case_anchor(
+            baseline_run,
+            replace(both, anchor_event=baseline_anchor, recovery_anchor_arm="baseline"),
+            baseline_run=baseline_run,
+            hybrid_run=hybrid_run,
+        )
+
+
+def test_recovery_case_priority_properties_are_explicit() -> None:
+    case = _recovery_case(
+        "case:p1",
+        "hybrid_only",
+        baseline_rank=20,
+        hybrid_rank=3,
+    )
+
+    assert case.hybrid_rank_uplift == 17
+    assert case.gnn_percentile_uplift == pytest.approx(0.17)
+
+
+def test_balanced_detail_selector_round_robins_buckets_and_freezes_policy() -> None:
+    hybrid_cases = [
+        _recovery_case(
+            "case:h1",
+            "hybrid_only",
+            baseline_rank=30,
+            hybrid_rank=5,
+            relationship_categories=("COTRAVEL",),
+            scoring_period="2025-01",
+        ),
+        _recovery_case(
+            "case:h2",
+            "hybrid_only",
+            baseline_rank=20,
+            hybrid_rank=10,
+            relationship_categories=("COTRAVEL",),
+            scoring_period="2025-01",
+        ),
+        _recovery_case(
+            "case:h3",
+            "hybrid_only",
+            baseline_rank=40,
+            hybrid_rank=1,
+            relationship_categories=("RESIDENCE",),
+            scoring_period="2025-01",
+        ),
+        _recovery_case(
+            "case:h4",
+            "hybrid_only",
+            baseline_rank=10,
+            hybrid_rank=9,
+            relationship_categories=("RESIDENCE",),
+            scoring_period="2025-02",
+        ),
+    ]
+    baseline_cases = [
+        _recovery_case(
+            "case:b1",
+            "baseline_only",
+            baseline_rank=1,
+            hybrid_rank=40,
+            relationship_categories=("COTRAVEL",),
+            scoring_period="2025-01",
+        ),
+        _recovery_case(
+            "case:b2",
+            "baseline_only",
+            baseline_rank=2,
+            hybrid_rank=20,
+            relationship_categories=("COTRAVEL",),
+            scoring_period="2025-01",
+        ),
+        _recovery_case(
+            "case:b3",
+            "baseline_only",
+            baseline_rank=3,
+            hybrid_rank=30,
+            relationship_categories=("RESIDENCE",),
+            scoring_period="2025-01",
+        ),
+    ]
+
+    selection = select_balanced_detail_cases(
+        hybrid_cases,
+        baseline_cases,
+        hybrid_limit=3,
+        baseline_limit=3,
+        eligible_hybrid_ids={"case:h1", "case:h3", "case:h4"},
+    )
+
+    assert selection.selected_ids == {
+        "hybrid_only": ("case:h3", "case:h1", "case:h4"),
+        "baseline_only": ("case:b1", "case:b3", "case:b2"),
+        "recovered_by_both": (),
+    }
+    assert selection.published_ids["hybrid_only"] == ()
+    assert selection.published_ids["baseline_only"] == ()
+    policy = selection.policy_jsonable()
+    assert policy["policy_version"] == "balanced_detail_v1"
+    assert policy["quotas"] == {"hybrid_only": 3, "baseline_only": 3}
+    assert policy["eligible_hybrid_ids"] == ["case:h1", "case:h3", "case:h4"]
+    assert policy["eligible_ordered_prefix"] == [
+        "case:h3",
+        "case:h1",
+        "case:h4",
+    ]
+    assert policy["selected_ids"] == {
+        "hybrid_only": ["case:h3", "case:h1", "case:h4"],
+        "baseline_only": ["case:b1", "case:b3", "case:b2"],
+        "recovered_by_both": [],
+    }
+    json.dumps(policy, allow_nan=False)
+
+
+def test_balanced_detail_selector_rejects_duplicate_subjects_across_inputs() -> None:
+    hybrid = replace(
+        _recovery_case("case:p1", "hybrid_only"), case_id="case:p1-hybrid"
+    )
+    baseline = replace(
+        _recovery_case("case:p1", "baseline_only"), case_id="case:p1-baseline"
+    )
+
+    with pytest.raises(ValueError, match="subject-disjoint"):
+        select_balanced_detail_cases([hybrid], [baseline])
+
+
+def test_selection_has_no_confirmed_publication_until_explicit_finalize() -> None:
+    hybrid = _recovery_case(
+        "case:h1",
+        "hybrid_only",
+        relationship_categories=("ZZ",),
+        scoring_period="2025-01",
+    )
+    baseline = _recovery_case("case:b1", "baseline_only")
+
+    selection = select_balanced_detail_cases([hybrid], [baseline])
+
+    assert selection.published_ids == {
+        "hybrid_only": (),
+        "baseline_only": (),
+        "recovered_by_both": (),
+    }
+    assert selection.counts["published_count"] == 0
+    assert selection.detail_status == {
+        "case:h1": "selected",
+        "case:b1": "selected",
+    }
+
+    finalized = finalize_recovery_publication(
+        selection,
+        published_ids={"hybrid_only": ("case:h1",)},
+    )
+
+    assert finalized.selected_ids == selection.selected_ids
+    assert finalized.published_ids["hybrid_only"] == ("case:h1",)
+    assert finalized.published_ids["baseline_only"] == ()
+    assert finalized.detail_status["case:h1"] == "technical_available"
+    assert finalized.counts["published_count"] == 1
+    assert finalized.status["publication"] == "partial"
+
+
+def test_publication_failure_retains_selected_id_without_replacement() -> None:
+    cases = [
+        _recovery_case(f"case:h{index}", "hybrid_only", hybrid_rank=index + 1)
+        for index in range(2)
+    ]
+    selection = select_balanced_detail_cases(cases, [], hybrid_limit=1)
+
+    finalized = finalize_recovery_publication(
+        selection,
+        published_ids={},
+        failures=({"case_id": "case:h0", "reason_code": "write_error"},),
+    )
+
+    assert finalized.selected_ids["hybrid_only"] == ("case:h0",)
+    assert finalized.published_ids["hybrid_only"] == ()
+    assert finalized.detail_status["case:h0"] == "failed"
+    assert finalized.failed_ids == ("case:h0",)
+    assert finalized.counts["published_count"] == 0
+    assert finalized.status["publication"] == "failed"
+
+
+def test_publication_finalization_is_cumulative_and_cohort_specific() -> None:
+    hybrid_cases = [
+        _recovery_case("case:h0", "hybrid_only", hybrid_rank=1),
+        _recovery_case("case:h1", "hybrid_only", hybrid_rank=2),
+    ]
+    baseline = _recovery_case("case:b1", "baseline_only")
+    selection = select_balanced_detail_cases(hybrid_cases, [baseline])
+
+    first = finalize_recovery_publication(
+        selection,
+        published_ids={},
+        failures=({"case_id": "case:h0", "reason_code": "write_error"},),
+    )
+    second = finalize_recovery_publication(
+        first,
+        published_ids={
+            "hybrid_only": ("case:h1",),
+            "baseline_only": ("case:b1",),
+        },
+    )
+
+    assert second.failed_ids == ("case:h0",)
+    assert second.failures == first.failures
+    assert second.detail_status["case:h0"] == "failed"
+    assert second.detail_status["case:h1"] == "technical_available"
+    assert second.detail_status["case:b1"] == "community_only"
+    assert second.published_ids["hybrid_only"] == ("case:h1",)
+    assert second.published_ids["baseline_only"] == ("case:b1",)
+    assert second.status["publication_hybrid_only"] == "partial"
+    assert second.status["publication_baseline_only"] == "community_only"
+    assert second.status["publication"] == "partial"
+
+
+def test_publication_finalization_classifies_all_failed_and_confirmed_hybrid() -> None:
+    all_failed = select_balanced_detail_cases(
+        [_recovery_case("case:failed", "hybrid_only")], [], hybrid_limit=1
+    )
+    failed = finalize_recovery_publication(
+        all_failed,
+        published_ids={},
+        failures=({"case_id": "case:failed", "reason_code": "write_error"},),
+    )
+    assert failed.status["publication_hybrid_only"] == "failed"
+    assert failed.status["publication"] == "failed"
+
+    confirmed = select_balanced_detail_cases(
+        [_recovery_case("case:confirmed", "hybrid_only")], [], hybrid_limit=1
+    )
+    published = finalize_recovery_publication(
+        confirmed,
+        published_ids={"hybrid_only": ("case:confirmed",)},
+    )
+    assert published.status["publication_hybrid_only"] == "technical_available"
+    assert published.status["publication"] == "confirmed"
+
+
+def test_finalize_publication_rejects_unselected_ids() -> None:
+    selection = select_balanced_detail_cases(
+        [_recovery_case("case:h1", "hybrid_only")], [], hybrid_limit=1
+    )
+
+    with pytest.raises(ValueError, match="not selected"):
+        finalize_recovery_publication(
+            selection,
+            published_ids={"hybrid_only": ("case:not-selected",)},
+        )
+
+
+def test_frozen_selection_rejects_cross_field_phantoms_and_overlap_ids() -> None:
+    selection = select_balanced_detail_cases(
+        [_recovery_case("case:h1", "hybrid_only")],
+        [_recovery_case("case:b1", "baseline_only")],
+    )
+
+    with pytest.raises(ValueError, match="selected_ids.*selected_cases"):
+        replace(
+            selection,
+            selected_ids={
+                "hybrid_only": ("case:phantom",),
+                "baseline_only": ("case:b1",),
+                "recovered_by_both": (),
+            },
+        )
+    with pytest.raises(ValueError, match="aggregate.*cohort"):
+        replace(
+            selection,
+            aggregate_ids=("case:h1",),
+            aggregate_cases=selection.selected_cases["hybrid_only"],
+        )
+
+
+def test_frozen_selection_rejects_published_ids_with_wrong_detail_states() -> None:
+    selection = select_balanced_detail_cases(
+        [_recovery_case("case:h1", "hybrid_only")],
+        [_recovery_case("case:b1", "baseline_only")],
+    )
+    published_ids = {
+        "hybrid_only": ("case:h1",),
+        "baseline_only": ("case:b1",),
+        "recovered_by_both": (),
+    }
+    counts = dict(selection.counts)
+    counts.update(
+        {
+            "published_hybrid_only": 1,
+            "published_baseline_only": 1,
+            "published_count": 2,
+        }
+    )
+
+    with pytest.raises(ValueError, match="technical_available"):
+        replace(selection, published_ids=published_ids, counts=counts)
+
+    with pytest.raises(ValueError, match="community_only"):
+        replace(
+            selection,
+            published_ids=published_ids,
+            counts=counts,
+            detail_status={
+                "case:h1": "technical_available",
+                "case:b1": "selected",
+            },
+        )
+
+
+def test_frozen_selection_rejects_unpublished_publication_states() -> None:
+    selection = select_balanced_detail_cases(
+        [_recovery_case("case:h1", "hybrid_only")],
+        [_recovery_case("case:b1", "baseline_only")],
+    )
+
+    with pytest.raises(ValueError, match="technical_available.*published"):
+        replace(
+            selection,
+            detail_status={
+                "case:h1": "technical_available",
+                "case:b1": "selected",
+            },
+        )
+    with pytest.raises(ValueError, match="community_only.*published"):
+        replace(
+            selection,
+            detail_status={
+                "case:h1": "selected",
+                "case:b1": "community_only",
+            },
+        )
+    with pytest.raises(ValueError, match="failed.*failed ID"):
+        replace(
+            selection,
+            detail_status={
+                "case:h1": "failed",
+                "case:b1": "selected",
+            },
+        )
+
+
+def test_frozen_selection_rejects_failed_id_without_failed_detail_state() -> None:
+    selection = select_balanced_detail_cases(
+        [_recovery_case("case:h1", "hybrid_only")], [], hybrid_limit=1
+    )
+    counts = dict(selection.counts)
+    counts["failed"] = 1
+
+    with pytest.raises(ValueError, match="failed"):
+        replace(
+            selection,
+            counts=counts,
+            failed_ids=("case:h1",),
+            failures=({"case_id": "case:h1", "reason_code": "write_error"},),
+        )
+
+
+def test_frozen_selection_rejects_global_case_id_collision_with_aggregate() -> None:
+    detail = _recovery_case("case:h1", "hybrid_only")
+    baseline_source = _recovery_case("case:p1", "baseline_only")
+    hybrid_source = _recovery_case("case:p1", "hybrid_only")
+    both = materialize_recovered_by_both_case(baseline_source, hybrid_source)
+    selection = select_frozen_recovery_prefix([detail, both], max_baseline=0)
+    duplicate = replace(both, case_id="case:h1")
+
+    with pytest.raises(ValueError, match="case ID.*unique|duplicate"):
+        replace(
+            selection,
+            aggregate_ids=("case:h1",),
+            aggregate_cases=(duplicate,),
+        )
+
+
+def test_frozen_selection_rejects_global_subject_collision_with_aggregate() -> None:
+    detail = _recovery_case("case:h1", "hybrid_only")
+    baseline_source = _recovery_case("case:p1", "baseline_only")
+    hybrid_source = _recovery_case("case:p1", "hybrid_only")
+    both = materialize_recovered_by_both_case(baseline_source, hybrid_source)
+    selection = select_frozen_recovery_prefix([detail, both], max_baseline=0)
+    duplicate_subject = replace(
+        both,
+        case_id="case:aggregate",
+        subject_id="h1",
+        anchor_event=replace(both.anchor_event, person_id="h1"),
+    )
+
+    with pytest.raises(ValueError, match="subject.*disjoint|duplicate"):
+        replace(
+            selection,
+            aggregate_ids=("case:aggregate",),
+            aggregate_cases=(duplicate_subject,),
+        )
+
+
+def test_finalize_rejects_duplicate_failure_records() -> None:
+    selection = select_balanced_detail_cases(
+        [_recovery_case("case:h1", "hybrid_only")], [], hybrid_limit=1
+    )
+
+    with pytest.raises(ValueError, match="duplicate failure"):
+        finalize_recovery_publication(
+            selection,
+            published_ids={},
+            failures=(
+                {"case_id": "case:h1", "reason_code": "first"},
+                {"case_id": "case:h1", "reason_code": "second"},
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "eligible_ids",
+    [
+        ("case:h1", "case:h1"),
+        ("case:missing",),
+        (1,),
+        ("",),
+    ],
+)
+def test_balanced_selector_validates_eligible_hybrid_ids(eligible_ids) -> None:
+    hybrid = [_recovery_case("case:h1", "hybrid_only")]
+
+    with pytest.raises(ValueError, match="eligible_hybrid_ids"):
+        select_balanced_detail_cases(
+            hybrid, [], eligible_hybrid_ids=eligible_ids
+        )
+
+
+def test_recovery_case_validates_numeric_fields_before_fusion() -> None:
+    case = _recovery_case("case:p1", "hybrid_only")
+
+    with pytest.raises(ValueError, match="baseline_percentile"):
+        replace(case, baseline_percentile=None)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "baseline_raw",
+        "baseline_percentile",
+        "baseline_rank",
+        "seed0_gnn_probability",
+        "seed0_gnn_percentile",
+        "seed0_gnn_rank",
+        "seed0_hybrid_score",
+        "seed0_hybrid_rank",
+    ],
+)
+def test_recovery_case_rejects_boolean_numeric_fields(field_name: str) -> None:
+    case = _recovery_case("case:p1", "hybrid_only")
+
+    with pytest.raises(ValueError, match=field_name):
+        replace(case, **{field_name: True})
+
+
+def test_recovery_case_has_no_duplicate_subject_display_name_field() -> None:
+    case = _recovery_case("case:p1", "hybrid_only")
+
+    assert not hasattr(case, "subject_display_name")
+
+
+def test_balanced_bucket_priority_precedes_alphabetic_bucket_order() -> None:
+    weaker_alphabetic = _recovery_case(
+        "case:weak",
+        "hybrid_only",
+        baseline_rank=10,
+        hybrid_rank=9,
+        relationship_categories=("AAA",),
+        scoring_period="2025-01",
+    )
+    stronger_later = _recovery_case(
+        "case:strong",
+        "hybrid_only",
+        baseline_rank=50,
+        hybrid_rank=1,
+        relationship_categories=("ZZZ",),
+        scoring_period="2025-01",
+    )
+
+    selection = select_balanced_detail_cases(
+        [weaker_alphabetic, stronger_later], [], hybrid_limit=1
+    )
+
+    assert selection.selected_ids["hybrid_only"] == ("case:strong",)
+
+
+def test_subject_display_rejects_prohibited_fields() -> None:
+    case = _recovery_case("case:p1", "hybrid_only")
+
+    with pytest.raises(ValueError, match="subject_display field"):
+        replace(case, subject_display={"false_negative_flag": True})
+
+
+def test_both_anchor_validation_rejects_swapped_runs_and_budget_mismatch() -> None:
+    baseline_anchor = RecoveryAnchor(
+        "p1", "e-baseline", 0, pd.Timestamp("2025-01-02T00:00:00Z"), 1
+    )
+    hybrid_anchor = RecoveryAnchor(
+        "p1", "e-hybrid", 1, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+    )
+    baseline_run = _manual_recovery_run("baseline", baseline_anchor)
+    hybrid_run = _manual_recovery_run("hybrid_seed0", hybrid_anchor)
+    both = replace(
+        _recovery_case("case:p1", "recovered_by_both", anchor_arm="hybrid"),
+        anchor_event=hybrid_anchor,
+    )
+
+    with pytest.raises(ValueError, match="baseline_run.*baseline|hybrid_run.*hybrid"):
+        validate_recovery_case_anchor(
+            baseline_run,
+            both,
+            baseline_run=hybrid_run,
+            hybrid_run=baseline_run,
+        )
+    with pytest.raises(ValueError, match="daily budgets"):
+        validate_recovery_case_anchor(
+            baseline_run,
+            both,
+            hybrid_run=replace(hybrid_run, daily_budget=2),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (("run_identity", "other-run"), ("as_of_identity", "other-as-of")),
+)
+def test_both_anchor_validation_rejects_shared_provenance_mismatch(
+    field: str, replacement: str
+) -> None:
+    baseline_anchor = RecoveryAnchor(
+        "p1", "e-baseline", 0, pd.Timestamp("2025-01-02T00:00:00Z"), 1
+    )
+    hybrid_anchor = RecoveryAnchor(
+        "p1", "e-hybrid", 1, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+    )
+    baseline_run = _manual_recovery_run("baseline", baseline_anchor)
+    hybrid_run = _manual_recovery_run("hybrid_seed0", hybrid_anchor)
+    both = replace(
+        _recovery_case("case:p1", "recovered_by_both", anchor_arm="hybrid"),
+        anchor_event=hybrid_anchor,
+    )
+
+    mismatched = replace(hybrid_run, **{field: replacement})
+    with pytest.raises(ValueError, match=field):
+        validate_recovery_case_anchor(
+            baseline_run,
+            both,
+            baseline_run=baseline_run,
+            hybrid_run=mismatched,
+        )
+
+
+def test_both_anchor_validation_rejects_missing_shared_provenance_identity() -> None:
+    baseline_anchor = RecoveryAnchor(
+        "p1", "e-baseline", 0, pd.Timestamp("2025-01-02T00:00:00Z"), 1
+    )
+    hybrid_anchor = RecoveryAnchor(
+        "p1", "e-hybrid", 1, pd.Timestamp("2025-01-01T00:00:00Z"), 1
+    )
+    baseline_run = _manual_recovery_run("baseline", baseline_anchor)
+    hybrid_run = _manual_recovery_run(
+        "hybrid_seed0", hybrid_anchor, run_identity=None
+    )
+    both = replace(
+        _recovery_case("case:p1", "recovered_by_both", anchor_arm="hybrid"),
+        anchor_event=hybrid_anchor,
+    )
+
+    with pytest.raises(ValueError, match="run_identity"):
+        validate_recovery_case_anchor(
+            baseline_run,
+            both,
+            baseline_run=baseline_run,
+            hybrid_run=hybrid_run,
+        )
+
+
+def test_recovery_case_explainer_boundary_retains_legacy_case_contract() -> None:
+    boundary = recovery_case_explainer_boundary()
+
+    assert boundary["artifact_case"] == "RecoveryCase"
+    assert boundary["technical_explainer_case"] == "HybridOnlyCase"
+    assert "candidate-row" in boundary["producer_requirement"]

@@ -1,6 +1,7 @@
 """End-to-end smoke of the V9 baseline-vs-GNN demo on the tiny v9dev corpus.
 See tasks/v9_demo_corpus_plan.md (Task 10)."""
 from dataclasses import FrozenInstanceError
+import inspect
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,73 @@ from gnn import learned_cell as lc
 
 CD = pathlib.Path(__file__).resolve().parents[1] / \
     "Documents/Data/synthetic_cbp_graph_corpus_v9dev"
+
+
+def test_run_demo_exposes_schema3_observability_controls_with_legacy_defaults():
+    main_params = inspect.signature(rd.main).parameters
+    resume_params = inspect.signature(rd.resume_observability).parameters
+
+    assert main_params["schema_version"].default == "2.0"
+    assert main_params["hybrid_detail_limit"].default == 20
+    assert main_params["baseline_control_limit"].default == 10
+    assert resume_params["schema_version"].default == "2.0"
+    assert resume_params["hybrid_detail_limit"].default == 20
+    assert resume_params["baseline_control_limit"].default == 10
+
+
+def test_cli_without_arguments_still_runs_the_demo(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rd, "main", lambda: calls.append("main") or "demo")
+    monkeypatch.setattr(
+        rd,
+        "resume_observability",
+        lambda *args, **kwargs: pytest.fail("bare CLI must not resume"),
+    )
+
+    assert rd._cli([]) == "demo"
+    assert calls == ["main"]
+
+
+def test_cli_observability_subcommand_requests_schema3_by_default(monkeypatch):
+    captured = {}
+
+    def fake_resume(checkpoint_path, **kwargs):
+        captured["checkpoint_path"] = checkpoint_path
+        captured.update(kwargs)
+        return "artifact"
+
+    monkeypatch.setattr(rd, "resume_observability", fake_resume)
+    monkeypatch.setattr(rd, "main", lambda: pytest.fail("must not refit"))
+
+    assert rd._cli(["observability", "checkpoints/abc"]) == "artifact"
+    assert captured["checkpoint_path"] == "checkpoints/abc"
+    assert captured["schema_version"] == "3.0"
+    assert captured["hybrid_detail_limit"] == 20
+    assert captured["baseline_control_limit"] == 10
+
+
+def test_cli_observability_subcommand_accepts_explicit_limits(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        rd, "resume_observability", lambda path, **kwargs: captured.update(kwargs)
+    )
+
+    rd._cli(
+        [
+            "observability",
+            "checkpoints/abc",
+            "--schema-version",
+            "2.0",
+            "--hybrid-detail-limit",
+            "5",
+            "--baseline-control-limit",
+            "3",
+        ]
+    )
+
+    assert captured["schema_version"] == "2.0"
+    assert captured["hybrid_detail_limit"] == 5
+    assert captured["baseline_control_limit"] == 3
 
 
 def _write_cutoff_corpus(corpus):
@@ -812,6 +880,9 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
         observability=True,
         observability_out_name="observability.json",
         narrative=True,
+        schema_version="3.0",
+        hybrid_detail_limit=20,
+        baseline_control_limit=10,
     )
 
     assert without == with_observability
@@ -823,6 +894,9 @@ def test_observability_generation_is_separate_and_comparison_is_byte_identical(
     assert captured["gnn_arm"] == "sage"
     assert captured["surrounding_seeds"] == (0, 1, 2)
     assert captured["inspections_per_day"] == 5
+    assert captured["schema_version"] == "3.0"
+    assert captured["hybrid_detail_limit"] == 20
+    assert captured["baseline_control_limit"] == 10
     assert captured["staging_root"] == tmp_path / ".observability.recovery-stage"
     assert captured["final_root"] == tmp_path / "recovery"
     assert captured["corpus_identity"] == str(CD.resolve())

@@ -95,6 +95,27 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
 #tab-v9Results .v9-recovery-v2-panel h5 { margin: 0 0 7px; color: var(--text1); }
 #tab-v9Results .v9-recovery-v2-panel pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text2); font: 9px/1.5 var(--font-mono); }
 #tab-v9Results .v9-recovery-progress { color: var(--text2); font: 9px/1.5 var(--font-mono); }
+#tab-v9Results .v9-recovery-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+#tab-v9Results .v9-recovery-legend-item { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font-size: 10px; line-height: 1.25; }
+#tab-v9Results .v9-recovery-legend-swatch { display: inline-block; flex: 0 0 auto; width: 18px; height: 8px; border-radius: 999px; background: #7f8798; box-shadow: 0 0 0 1px rgba(255,255,255,.2); }
+#tab-v9Results .v9-recovery-legend-swatch.is-context { opacity: .45; }
+#tab-v9Results .v9-recovery-legend-swatch.is-evidence { height: 10px; background: #fbbf24; box-shadow: 0 0 8px rgba(251,191,36,.55); }
+#tab-v9Results .v9-recovery-legend-swatch.is-target { width: 10px; height: 10px; border: 2px solid #34d399; border-radius: 50%; background: transparent; }
+#tab-v9Results .v9-recovery-legend-swatch.is-caught { width: 10px; height: 10px; border-radius: 50%; background: #60a5fa; }
+#tab-v9Results .v9-recovery-legend-swatch.is-weight { background: linear-gradient(90deg, rgba(251,191,36,.35), #fbbf24); }
+#tab-v9Results .v9-recovery-sampled { display: inline-block; margin: 8px 9px 0; padding: 4px 8px; border: 1px solid rgba(251,191,36,.42); border-radius: 999px; background: rgba(251,191,36,.1); color: #fbbf24; font-size: 9px; font-weight: 700; line-height: 1.35; }
+#tab-v9Results .v9-recovery-v3 .v9-recovery-canvas-wrap { height: 470px; min-height: 360px; background: radial-gradient(circle at 18% 0%, rgba(52,211,153,.16), transparent 42%), radial-gradient(circle at 84% 100%, rgba(96,165,250,.12), transparent 48%), linear-gradient(145deg, #071018, #0b1019 58%, #111827); }
+#tab-v9Results .v9-recovery-v3 .v9-recovery-canvas { background: transparent; }
+#tab-v9Results .v9-recovery-v3 .v9-recovery-legend { padding: 4px 9px; border-top: 1px solid rgba(255,255,255,.08); border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(5,10,16,.62); }
+#tab-v9Results .v9-recovery-v3 .v9-recovery-legend-item { border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.05); color: #d5d9e2; }
+#tab-v9Results .v9-recovery-v3 button:focus:not(:focus-visible), #tab-v9Results .v9-recovery-v3 input:focus:not(:focus-visible), #tab-v9Results .v9-recovery-v3 select:focus:not(:focus-visible), #tab-v9Results .v9-recovery-v3 canvas:focus:not(:focus-visible) { outline: none; }
+#tab-v9Results .v9-recovery-table-wrap { margin-top: 12px; overflow-x: auto; }
+#tab-v9Results .v9-recovery-table-wrap h6 { margin: 0 0 4px; color: var(--text1); font-size: 11px; }
+#tab-v9Results .v9-recovery-table { width: 100%; border-collapse: collapse; color: var(--text2); font-size: 10px; }
+#tab-v9Results .v9-recovery-table th, #tab-v9Results .v9-recovery-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+#tab-v9Results .v9-recovery-table th { color: var(--text1); font-weight: 600; }
+#tab-v9Results .v9-recovery-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 14px; color: var(--text2); font-size: 10px; }
+#tab-v9Results .v9-recovery-pager .v9-recovery-button { min-height: 44px; }
 @media(max-width:900px){
   #tab-v9Results .v9-recovery-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #tab-v9Results .v9-recovery-workspace { grid-template-columns: 1fr; }
@@ -115,6 +136,10 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
   #tab-v9Results .v9-recovery-toolgroup { flex: 0 0 auto; }
   #tab-v9Results .v9-recovery-button, #tab-v9Results .v9-recovery-toolbar .v9-recovery-select, #tab-v9Results .v9-recovery-search { min-height: 44px; }
   #tab-v9Results .v9-recovery-canvas-wrap { height: 340px; }
+  #tab-v9Results .v9-recovery-v3 .v9-recovery-canvas-wrap { height: 340px; min-height: 300px; }
+}
+@media(prefers-reduced-motion: reduce){
+  #tab-v9Results .v9-recovery-v3 *, #tab-v9Results .v9-recovery-v3 *::before, #tab-v9Results .v9-recovery-v3 *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
 """
 
@@ -566,6 +591,90 @@ function recoveryStageEmphasizes(stage,edge,nodesById){
   return false;
 }
 
+function buildRecoveryGraphSlice(fullNodes,fullEdges,personId){
+  const tableNodes=Array.isArray(fullNodes)?fullNodes.slice():[];
+  const tableEdges=Array.isArray(fullEdges)?fullEdges.slice():[];
+  const nodeId=row=>recoveryNonBlankString(row&&row.node_id)
+    ?row.node_id:recoveryNonBlankString(row&&row.id)?row.id:null;
+  const edgeId=row=>recoveryNonBlankString(row&&row.edge_id)
+    ?row.edge_id:recoveryNonBlankString(row&&row.id)?row.id:null;
+  const endpoint=row=>recoveryNonBlankString(row)?row:null;
+  const sortedNodes=tableNodes.slice().sort((left,right)=>
+    recoveryCompareId(String(nodeId(left)||''),String(nodeId(right)||'')));
+  const sortedEdges=tableEdges.slice().sort((left,right)=>
+    recoveryCompareId(String(edgeId(left)||''),String(edgeId(right)||'')));
+  const selectedNodeIds=new Set();
+  const attributedNodeIds=new Set();
+  for(const node of tableNodes){
+    const id=nodeId(node);
+    if(!id)continue;
+    if(id===personId)selectedNodeIds.add(id);
+    if(node&&node.attributed===true){
+      attributedNodeIds.add(id);selectedNodeIds.add(id);
+    }
+  }
+  const attributedEdgeIds=new Set();
+  for(const edge of tableEdges){
+    if(!edge||edge.attributed!==true)continue;
+    const id=edgeId(edge);
+    if(id)attributedEdgeIds.add(id);
+    const left=endpoint(edge.u);const right=endpoint(edge.v);
+    if(left)selectedNodeIds.add(left);
+    if(right)selectedNodeIds.add(right);
+  }
+  const sampled=tableNodes.length>RECOVERY_GRAPH_NODE_LIMIT
+    ||tableEdges.length>RECOVERY_GRAPH_EDGE_LIMIT;
+  if(selectedNodeIds.size>RECOVERY_GRAPH_NODE_LIMIT){
+    return {
+      available:false,
+      reason:'mandatory-evidence-node-limit-exceeded',
+      sampled,
+      fullNodeCount:tableNodes.length,
+      fullEdgeCount:tableEdges.length,
+      nodes:[],
+      edges:[],
+      tableNodes,
+      tableEdges
+    };
+  }
+  for(const node of sortedNodes){
+    if(selectedNodeIds.size>=RECOVERY_GRAPH_NODE_LIMIT)break;
+    const id=nodeId(node);
+    if(id)selectedNodeIds.add(id);
+  }
+  const visibleNodes=sortedNodes.filter(node=>selectedNodeIds.has(nodeId(node)));
+  const visibleNodeIds=new Set(visibleNodes.map(node=>nodeId(node)));
+  const selectedEdgeIds=new Set();
+  for(const edge of sortedEdges){
+    const id=edgeId(edge);
+    if(!id)continue;
+    const attributed=attributedEdgeIds.has(id);
+    if(attributed&&visibleNodeIds.has(edge.u)&&visibleNodeIds.has(edge.v)
+        &&selectedEdgeIds.size<RECOVERY_GRAPH_EDGE_LIMIT){
+      selectedEdgeIds.add(id);
+    }
+  }
+  for(const edge of sortedEdges){
+    if(selectedEdgeIds.size>=RECOVERY_GRAPH_EDGE_LIMIT)break;
+    const id=edgeId(edge);
+    if(!id||attributedEdgeIds.has(id)
+        ||!visibleNodeIds.has(edge&&edge.u)
+        ||!visibleNodeIds.has(edge&&edge.v))continue;
+    selectedEdgeIds.add(id);
+  }
+  const visibleEdges=sortedEdges.filter(edge=>selectedEdgeIds.has(edgeId(edge)));
+  return {
+    available:true,
+    sampled,
+    fullNodeCount:tableNodes.length,
+    fullEdgeCount:tableEdges.length,
+    nodes:visibleNodes,
+    edges:visibleEdges,
+    tableNodes,
+    tableEdges
+  };
+}
+
 function buildCommunityDrawCommands(explanation,options){
   const stageView=buildCommunityStageView(explanation,options);
   if(!stageView.available) return stageView;
@@ -593,29 +702,56 @@ function buildCommunityDrawCommands(explanation,options){
   }
   const selectedStage=stagesById.get(stageView.stageId);
   const nodesById=new Map(community.nodes.map(node=>[node.node_id,node]));
+  const overlayNodes=Array.isArray(explanation.overlayNodes)
+    ?explanation.overlayNodes:[];
+  const overlayEdges=Array.isArray(explanation.overlayEdges)
+    ?explanation.overlayEdges:[];
+  const overlayNodesById=new Map(overlayNodes.map(node=>[
+    node&&node.node_id,node
+  ]));
+  const overlayEdgesById=new Map(overlayEdges.map(edge=>[
+    edge&&edge.edge_id,edge
+  ]));
   const query=stageView.query.trim().toLowerCase();
-  const nodes=community.nodes.slice().sort((a,b)=>
-    recoveryCompareId(a.node_id,b.node_id)).map(node=>({
+  const importanceFor=row=>recoveryFiniteUnit(row&&row.importance)
+    ?row.importance:recoveryFiniteUnit(row&&row.explainer_median)
+      ?row.explainer_median:0;
+  const nodes=community.nodes.map(node=>{
+    const overlay=overlayNodesById.get(node.node_id);
+    return {
+      node_id:node.node_id,
       id:node.node_id,
       x:node.x,
       y:node.y,
-      target:node.target===true,
+      target:node.node_id===explanation.person_id,
       pooledMember:node.pooled_member===true,
       caughtBeforeSnapshot:node.caught_before_snapshot===true,
+      importance:importanceFor(overlay||node),
+      attributed:overlay?overlay.attributed===true:node.attributed===true,
+      rank:overlay&&Number.isSafeInteger(overlay.rank)?overlay.rank
+        :(Number.isSafeInteger(node.rank)?node.rank:null),
       matched:query.length>0&&node.node_id.toLowerCase().includes(query)
-    }));
-  const edges=community.edges.slice().sort((a,b)=>
-    recoveryCompareId(a.edge_id,b.edge_id)).map(edge=>({
+    };
+  });
+  const edges=community.edges.map(edge=>{
+    const overlay=overlayEdgesById.get(edge.edge_id);
+    const attributed=overlay?overlay.attributed===true:edge.attributed===true;
+    return {
+      edge_id:edge.edge_id,
       id:edge.edge_id,
       u:edge.u,
       v:edge.v,
       relation:recoveryNonBlankString(edge.edge_type)?edge.edge_type:'RELATION',
-      importance:typeof edge.explainer_median==='number'
-        &&Number.isFinite(edge.explainer_median)
-        ?Math.max(0,Math.min(1,edge.explainer_median)):0,
-      emphasized:stageView.mode==='all'
+      importance:importanceFor(overlay||edge),
+      attributed,
+      rank:overlay&&Number.isSafeInteger(overlay.rank)?overlay.rank
+        :(Number.isSafeInteger(edge.rank)?edge.rank:null),
+      emphasized:stageView.mode==='all'||attributed
         ||recoveryStageEmphasizes(selectedStage,edge,nodesById)
-    }));
+    };
+  });
+  const slice=buildRecoveryGraphSlice(nodes,edges,explanation.person_id);
+  if(!slice.available) return slice;
 
   const provenanceNodes=[];
   const provenanceEdges=[];
@@ -701,8 +837,13 @@ function buildCommunityDrawCommands(explanation,options){
     available:true,
     mode:stageView.mode,
     stageId:stageView.stageId,
-    nodes,
-    edges,
+    nodes:slice.nodes,
+    edges:slice.edges,
+    tableNodes:slice.tableNodes,
+    tableEdges:slice.tableEdges,
+    sampled:slice.sampled,
+    fullNodeCount:slice.fullNodeCount,
+    fullEdgeCount:slice.fullEdgeCount,
     provenanceNodes,
     provenanceEdges
   };
@@ -805,6 +946,13 @@ function recoveryEdgeStyle(edge){
   const importance=typeof edge.importance==='number'
     &&Number.isFinite(edge.importance)
     ?Math.max(0,Math.min(1,edge.importance)):0;
+  if(edge.attributed===true){
+    return {
+      alpha:0.45+0.5*importance,
+      lineWidth:1.5+3*importance,
+      color:'#fbbf24'
+    };
+  }
   return edge.emphasized
     ?{alpha:0.45+0.5*importance,lineWidth:1.5+3*importance}
     :{alpha:0.18+0.12*importance,lineWidth:0.85+0.65*importance};
@@ -845,24 +993,26 @@ function bindRecoveryCanvas(canvas,commands,state){
     for(const edge of commands.edges){
       const from=positionById.get(edge.u);
       const to=positionById.get(edge.v);
+      if(!from||!to)continue;
       const color=recoveryRelationColor(edge.relation);
       const style=recoveryEdgeStyle(edge);
       context.beginPath();
       context.setLineDash([]);
       context.moveTo(from.x,from.y);
       context.lineTo(to.x,to.y);
-      context.strokeStyle=color;
+      context.strokeStyle=style.color||color;
       context.globalAlpha=style.alpha;
       context.lineWidth=style.lineWidth;
       context.stroke();
       if(commands.mode==='flow'&&edge.emphasized){
         context.globalAlpha=.95;
-        recoveryDrawArrow(context,from,to,color);
+        recoveryDrawArrow(context,from,to,style.color||color);
       }
     }
     for(const edge of commands.provenanceEdges){
       const from=positionById.get(edge.u);
       const to=positionById.get(edge.v);
+      if(!from||!to)continue;
       context.beginPath();
       context.setLineDash([6,5]);
       context.moveTo(from.x,from.y);
@@ -888,12 +1038,28 @@ function bindRecoveryCanvas(canvas,commands,state){
       .flatMap(edge=>[edge.u,edge.v]));
     for(const node of commands.nodes){
       const point=positionById.get(node.id);
+      if(!point)continue;
       const radius=node.target?8:(node.pooledMember?6:4.5);
+      if(node.attributed){
+        context.beginPath();
+        context.arc(point.x,point.y,radius+3+2*node.importance,0,Math.PI*2);
+        context.strokeStyle='#fbbf24';
+        context.globalAlpha=.65+.3*node.importance;
+        context.lineWidth=2+node.importance;
+        context.stroke();
+      }
       context.beginPath();
       context.arc(point.x,point.y,radius,0,Math.PI*2);
+      context.globalAlpha=1;
       context.fillStyle=node.target?'#34d399':(node.caughtBeforeSnapshot?'#60a5fa':'#8b8b96');
       context.fill();
-      if(node.matched){
+      if(node.target){
+        context.beginPath();
+        context.arc(point.x,point.y,radius+5,0,Math.PI*2);
+        context.strokeStyle='#34d399';
+        context.lineWidth=2.5;
+        context.stroke();
+      }else if(node.matched){
         context.beginPath();
         context.arc(point.x,point.y,radius+4,0,Math.PI*2);
         context.strokeStyle='#fbbf24';
@@ -1079,8 +1245,551 @@ function buildRecoveryManifestViewModel(artifact){
 }
 
 function recoverySidecarUrl(view,path){
+  if(!recoverySafeSidecarPath(path))throw new Error('Unsafe sidecar path');
   const base=view.sidecarBase.endsWith('/')?view.sidecarBase:view.sidecarBase+'/';
-  return base+String(path).replace(/^\/+/, '');
+  return base+path;
+}
+
+function recoverySafeSidecarPath(value){
+  if(!recoveryNonBlankString(value)||value!==value.trim()
+      ||value.startsWith('/')||value.includes('\\'))return false;
+  const segments=value.split('/');
+  return segments.length>0&&segments.every(segment=>
+    segment.length>0&&segment!=='.'&&segment!=='..'
+      &&/^[A-Za-z0-9._-]+$/.test(segment));
+}
+
+function recoverySchema3Reference(value){
+  return recoveryIsRecord(value)&&recoverySafeSidecarPath(value.path)
+    &&typeof value.sha256==='string'&&/^[0-9a-f]{64}$/.test(value.sha256);
+}
+
+function recoverySchema3Community(value,key){
+  if(!recoveryIsRecord(value)||value.schema_version!=='1.0'
+      ||value.complete!==true||value.community_key!==key
+      ||!recoverySafeInteger(value.node_count,false)
+      ||!recoverySafeInteger(value.edge_count,false)
+      ||!recoverySafeInteger(value.provenance_observation_count,false)){
+    return false;
+  }
+  return recoveryValidateChunkOwner(value);
+}
+
+function recoverySchema3SummaryRecord(item,cohort){
+  const statuses=['not_selected','selected','available','community_only',
+    'unavailable','failed'];
+  const kinds=['gnn_explanation','community_control',null];
+  const scoreFields=['baseline_raw','baseline_percentile',
+    'seed0_gnn_probability','seed0_gnn_percentile','seed0_hybrid_score'];
+  const rankFields=['baseline_rank','seed0_gnn_rank','seed0_hybrid_rank'];
+  const detailKindAllowed=recoveryIsRecord(item)
+    &&(item.detail_kind===null
+      ||(item.detail_kind==='gnn_explanation'&&cohort==='hybrid_only')
+      ||(item.detail_kind==='community_control'
+        &&(cohort==='baseline_only'||cohort==='hybrid_only')));
+  return recoveryIsRecord(item)&&item.cohort===cohort
+    &&recoveryNonBlankString(item.case_id)
+    &&recoveryNonBlankString(item.person_id)
+    &&recoveryNonBlankString(item.event_id)
+    &&recoveryNonBlankString(item.scoring_day)
+    &&statuses.includes(item.detail_status)&&kinds.includes(item.detail_kind)
+    &&detailKindAllowed
+    &&scoreFields.every(key=>recoveryFiniteUnit(item[key]))
+    &&rankFields.every(key=>recoverySafeInteger(item[key],false)&&item[key]>0)
+    &&item.hybrid_score_semantics==='percentile_fusion_not_probability';
+}
+
+function buildRecoverySchema3ViewModel(artifact){
+  if(!recoveryIsRecord(artifact)||artifact.schema_version!=='3.0'){
+    return recoveryUnavailable('unsupported-or-missing-schema3-artifact');
+  }
+  const policy=artifact.policy;
+  const validPolicy=recoveryIsRecord(policy)
+    &&policy.observability_seed===0&&policy.gnn_arm==='sage'
+    &&policy.inspections_per_day===5;
+  const bundleId=artifact.bundle_id;
+  const sidecarBase=artifact.sidecar_base;
+  if(!validPolicy||typeof bundleId!=='string'||!/^[0-9a-f]{24}$/.test(bundleId)
+      ||sidecarBase!=='recovery/bundles/'+bundleId+'/'){
+    return recoveryUnavailable('invalid-schema3-manifest-contract');
+  }
+  const cohorts=artifact.cohorts;
+  const cohortNames=['hybrid_only','baseline_only','recovered_by_both'];
+  if(!recoveryIsRecord(cohorts)
+      ||!cohortNames.every(name=>Array.isArray(cohorts[name]))){
+    return recoveryUnavailable('invalid-schema3-cohorts');
+  }
+  const allCases=[];const caseIds=new Set();
+  for(const cohort of cohortNames){
+    for(const item of cohorts[cohort]){
+      if(!recoverySchema3SummaryRecord(item,cohort)
+          ||caseIds.has(item.case_id)){
+        return recoveryUnavailable('invalid-schema3-case-records');
+      }
+      caseIds.add(item.case_id);allCases.push(item);
+    }
+  }
+  const summary=artifact.summary;
+  const summaryFields=['baseline_recovered','recovered_by_both',
+    'hybrid_only_recovered','baseline_only_recovered','hybrid_total','net_gain'];
+  if(!recoveryIsRecord(summary)
+      ||!summaryFields.every(key=>recoverySafeInteger(summary[key],true))
+      ||summaryFields.slice(0,-1).some(key=>summary[key]<0)
+      ||summary.hybrid_only_recovered!==cohorts.hybrid_only.length
+      ||summary.baseline_only_recovered!==cohorts.baseline_only.length
+      ||summary.baseline_recovered!==summary.recovered_by_both
+        +summary.baseline_only_recovered
+      ||summary.hybrid_total!==summary.recovered_by_both
+        +summary.hybrid_only_recovered
+      ||summary.net_gain!==summary.hybrid_total-summary.baseline_recovered){
+    return recoveryUnavailable('invalid-schema3-overlap-algebra');
+  }
+  const selection=artifact.selection;
+  const selected=selection&&selection.selected_ids;
+  if(!recoveryIsRecord(selection)||!recoveryIsRecord(selected)
+      ||!cohortNames.every(name=>Array.isArray(selected[name]))
+      ||selected.recovered_by_both.length!==0){
+    return recoveryUnavailable('invalid-schema3-selection');
+  }
+  const selectedSets={};
+  const cohortByCaseId=new Map(allCases.map(item=>[item.case_id,item.cohort]));
+  for(const cohort of cohortNames){
+    const values=selected[cohort];
+    if(new Set(values).size!==values.length
+        ||values.some(caseId=>!caseIds.has(caseId)
+          ||cohortByCaseId.get(caseId)!==cohort)){
+      return recoveryUnavailable('invalid-schema3-selection');
+    }
+    selectedSets[cohort]=new Set(values);
+  }
+  const detailIndex=artifact.detail_index;
+  const communityIndex=artifact.community_index;
+  const communitySidecarIndex=artifact.community_sidecar_index;
+  const fallbackValues=selection.hybrid_structural_fallback_ids||[];
+  if(!Array.isArray(fallbackValues)
+      ||new Set(fallbackValues).size!==fallbackValues.length
+      ||fallbackValues.some(caseId=>!caseIds.has(caseId)
+        ||cohortByCaseId.get(caseId)!=='hybrid_only')){
+    return recoveryUnavailable('invalid-schema3-selection');
+  }
+  const fallbackSet=new Set(fallbackValues);
+  if(!recoveryIsRecord(detailIndex)||!recoveryIsRecord(communityIndex)
+      ||!recoveryIsRecord(communitySidecarIndex)
+      ||Object.entries(detailIndex).some(([caseId,ref])=>
+        !selectedSets.hybrid_only.has(caseId)||!recoverySchema3Reference(ref))
+      ||Object.entries(communityIndex).some(([caseId,ref])=>
+        !(selectedSets.baseline_only.has(caseId)||fallbackSet.has(caseId))
+          ||!recoverySchema3Reference(ref))
+      ||Object.entries(communitySidecarIndex).some(([key,ref])=>
+        !recoveryNonBlankString(key)||!recoverySchema3Reference(ref))){
+    return recoveryUnavailable('invalid-schema3-sidecar-index');
+  }
+  const coverage=artifact.coverage;
+  const coverageFields=['hybrid_requested','baseline_requested',
+    'hybrid_selected','baseline_selected','hybrid_explained',
+    'baseline_community','hybrid_shortfall','baseline_shortfall','shortfall'];
+  if(!recoveryIsRecord(coverage)
+      ||!coverageFields.every(key=>recoverySafeInteger(coverage[key],false))
+      ||!Array.isArray(coverage.shortfall_reasons)
+      ||coverage.hybrid_selected!==selected.hybrid_only.length
+      ||coverage.baseline_selected!==selected.baseline_only.length
+      ||coverage.hybrid_explained!==Object.keys(detailIndex).length
+      ||coverage.baseline_community!==Object.keys(communityIndex).filter(caseId=>
+        selectedSets.baseline_only.has(caseId)).length
+      ||(coverage.hybrid_structural_fallback!==undefined
+        &&coverage.hybrid_structural_fallback!==Object.keys(communityIndex).filter(
+          caseId=>fallbackSet.has(caseId)).length)
+      ||coverage.shortfall!==coverage.hybrid_shortfall+coverage.baseline_shortfall
+      ||(coverage.shortfall>0&&!coverage.shortfall_reasons.length)){
+    return recoveryUnavailable('invalid-schema3-coverage');
+  }
+  const defaultCohort=cohorts.hybrid_only.length?'hybrid_only':
+    (cohorts.baseline_only.length?'baseline_only':'recovered_by_both');
+  const caseIndex={};
+  for(const item of allCases){
+    caseIndex[item.case_id]={
+      ...item,
+      caseId:item.case_id,
+      personId:item.person_id,
+      detailStatus:item.detail_status,
+      detailKind:item.detail_kind===undefined?null:item.detail_kind,
+      selectionReason:recoveryNonBlankString(item.selection_reason)
+        ?item.selection_reason:'not_selected',
+      failureReason:recoveryNonBlankString(item.failure_reason)
+        ?item.failure_reason:null,
+      explanationUnavailableReason:recoveryNonBlankString(
+        item.explanation_unavailable_reason)?item.explanation_unavailable_reason:null
+    };
+  }
+  return {
+    available:true,
+    schemaVersion:'3.0',
+    policy:{...policy},summary:{...summary},coverage:{...coverage},
+    cohorts:{
+      hybrid_only:cohorts.hybrid_only.map(item=>caseIndex[item.case_id]),
+      baseline_only:cohorts.baseline_only.map(item=>caseIndex[item.case_id]),
+      recovered_by_both:cohorts.recovered_by_both.map(item=>caseIndex[item.case_id])
+    },
+    caseIndex,
+    selection:{...selection,selected_ids:{...selected}},
+    detailIndex:{...detailIndex},communityIndex:{...communityIndex},
+    communitySidecarIndex:{...communitySidecarIndex},
+    catalogIndex:recoveryIsRecord(artifact.catalog_index)?artifact.catalog_index:{},
+    sidecarBase,defaultCohort,
+    defaultCaseId:Object.keys(detailIndex)[0]
+      ||(cohorts[defaultCohort][0]||{}).case_id||null
+  };
+}
+
+const RECOVERY_SCHEMA3_FILTERS=['all','hybrid_only','baseline_only',
+  'recovered_by_both','gnn_explanation','community_control','all_detail'];
+
+function filterRecoverySchema3Cases(view,filter){
+  if(!recoveryIsRecord(view)||view.available!==true)return [];
+  const selected=RECOVERY_SCHEMA3_FILTERS.includes(filter)?filter:'all';
+  const cohortNames=['hybrid_only','baseline_only','recovered_by_both'];
+  const rows=[];
+  for(const cohort of cohortNames){
+    for(const record of view.cohorts[cohort])rows.push(record);
+  }
+  if(cohortNames.includes(selected)){
+    return rows.filter(record=>record.cohort===selected);
+  }
+  if(selected==='all_detail'){
+    return rows.filter(record=>record.detailKind!==null);
+  }
+  if(selected==='all')return rows;
+  return rows.filter(record=>record.detailKind===selected);
+}
+
+const RECOVERY_STRUCTURAL_STAGES=['first_hop','second_hop','component_pool'];
+const RECOVERY_GRAPH_NODE_LIMIT=1500;
+const RECOVERY_GRAPH_EDGE_LIMIT=4000;
+
+function buildStructuralDrawCommands(control,options){
+  if(!recoveryIsRecord(control)||!recoveryNonBlankString(control.person_id)
+      ||!recoveryIsRecord(control.community)
+      ||control.community.complete!==true){
+    return recoveryUnavailable('incomplete-community');
+  }
+  const settings=recoveryIsRecord(options)?options:{};
+  if(!['all','flow'].includes(settings.mode)
+      ||!RECOVERY_STRUCTURAL_STAGES.includes(settings.stageId)){
+    return recoveryUnavailable('invalid-view-options');
+  }
+  const community=control.community;
+  if(!Array.isArray(community.nodes)||!Array.isArray(community.edges)){
+    return recoveryUnavailable('invalid-community-membership');
+  }
+  const nodeIds=community.nodes.map(node=>recoveryIsRecord(node)?node.node_id:null);
+  const nodeSet=new Set(nodeIds);
+  if(!community.nodes.every(node=>recoveryIsRecord(node)
+        &&recoveryNonBlankString(node.node_id))
+      ||nodeIds.length===0||nodeSet.size!==nodeIds.length
+      ||!nodeSet.has(control.person_id)){
+    return recoveryUnavailable('invalid-community-membership');
+  }
+  const edgeIds=community.edges.map(edge=>recoveryIsRecord(edge)?edge.edge_id:null);
+  if(!community.edges.every(edge=>recoveryIsRecord(edge)
+        &&recoveryNonBlankString(edge.edge_id)
+        &&recoveryNonBlankString(edge.u)&&recoveryNonBlankString(edge.v)
+        &&nodeSet.has(edge.u)&&nodeSet.has(edge.v))
+      ||new Set(edgeIds).size!==edgeIds.length){
+    return recoveryUnavailable('invalid-community-membership');
+  }
+  if(!community.nodes.every(node=>recoveryFiniteUnit(node.x)
+      &&recoveryFiniteUnit(node.y))){
+    return recoveryUnavailable('invalid-community-coordinates');
+  }
+  const stages=control.structural_stages;
+  if(!Array.isArray(stages)||stages.length!==RECOVERY_STRUCTURAL_STAGES.length){
+    return recoveryUnavailable('invalid-structural-stages');
+  }
+  const stagesById=new Map();
+  for(const stage of stages){
+    if(!recoveryIsRecord(stage)
+        ||!RECOVERY_STRUCTURAL_STAGES.includes(stage.stage_id)
+        ||stagesById.has(stage.stage_id)
+        ||!recoveryIsRecord(stage.edge_rule)
+        ||!recoveryValidStageRule(stage,nodeIds,edgeIds)){
+      return recoveryUnavailable('invalid-structural-stages');
+    }
+    stagesById.set(stage.stage_id,stage);
+  }
+  if(RECOVERY_STRUCTURAL_STAGES.some(id=>!stagesById.has(id))){
+    return recoveryUnavailable('invalid-structural-stages');
+  }
+  const nodesById=new Map(community.nodes.map(node=>[node.node_id,node]));
+  const selectedStage=stagesById.get(settings.stageId);
+  const query=(typeof settings.query==='string'?settings.query:'')
+    .trim().toLowerCase();
+  const nodes=community.nodes.slice().sort((a,b)=>
+    recoveryCompareId(a.node_id,b.node_id)).map(node=>({
+      node_id:node.node_id,
+      id:node.node_id,
+      x:node.x,
+      y:node.y,
+      target:node.node_id===control.person_id,
+      pooledMember:node.pooled_member===true,
+      caughtBeforeSnapshot:node.caught_before_snapshot===true,
+      importance:0,
+      attributed:false,
+      rank:null,
+      matched:query.length>0&&node.node_id.toLowerCase().includes(query)
+    }));
+  const edges=community.edges.slice().sort((a,b)=>
+    recoveryCompareId(a.edge_id,b.edge_id)).map(edge=>({
+      edge_id:edge.edge_id,
+      id:edge.edge_id,
+      u:edge.u,
+      v:edge.v,
+      relation:recoveryNonBlankString(edge.edge_type)?edge.edge_type:'RELATION',
+      // A control has no explainer mask, so every edge keeps neutral weight.
+      importance:0,
+      attributed:false,
+      rank:null,
+      emphasized:settings.mode==='all'
+        ||recoveryStageEmphasizes(selectedStage,edge,nodesById)
+    }));
+  const slice=buildRecoveryGraphSlice(nodes,edges,control.person_id);
+  return {
+    available:true,
+    mode:settings.mode,
+    stageId:settings.stageId,
+    nodes:slice.nodes,
+    edges:slice.edges,
+    tableNodes:slice.tableNodes,
+    tableEdges:slice.tableEdges,
+    sampled:slice.sampled,
+    fullNodeCount:slice.fullNodeCount,
+    fullEdgeCount:slice.fullEdgeCount,
+    provenanceNodes:[],
+    provenanceEdges:[]
+  };
+}
+
+function assembleRecoverySchema3Community(manifest,nodeRows,edgeRows){
+  if(!recoveryIsRecord(manifest))return recoveryUnavailable('missing-community');
+  if(!Array.isArray(nodeRows)||!Array.isArray(edgeRows)){
+    return recoveryUnavailable('community-not-loaded');
+  }
+  if(nodeRows.length!==manifest.node_count
+      ||edgeRows.length!==manifest.edge_count){
+    return recoveryUnavailable('community-partially-loaded');
+  }
+  return {
+    available:true,
+    community:{
+      complete:true,
+      community_key:manifest.community_key,
+      node_count:manifest.node_count,
+      edge_count:manifest.edge_count,
+      nodes:nodeRows,
+      edges:edgeRows,
+      provenance_expansions:[]
+    }
+  };
+}
+
+function mergeRecoverySchema3Overlay(community,overlayNodes,overlayEdges){
+  if(!recoveryIsRecord(community)
+      ||community.complete!==true
+      ||!recoverySafeInteger(community.node_count,false)
+      ||!recoverySafeInteger(community.edge_count,false)
+      ||!Array.isArray(community.nodes)||!Array.isArray(community.edges)
+      ||community.node_count!==community.nodes.length
+      ||community.edge_count!==community.edges.length
+      ||!Array.isArray(overlayNodes)||!Array.isArray(overlayEdges)){
+    return recoveryUnavailable('invalid-overlay-identity');
+  }
+  const baseNodesById=new Map();
+  for(const node of community.nodes){
+    if(!recoveryIsRecord(node)||!recoveryNonBlankString(node.node_id)){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    const nodeId=node.node_id.trim();
+    if(baseNodesById.has(nodeId)){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    baseNodesById.set(nodeId,node);
+  }
+  const baseEdgesById=new Map();
+  for(const edge of community.edges){
+    if(!recoveryIsRecord(edge)||!recoveryNonBlankString(edge.edge_id)
+        ||!recoveryNonBlankString(edge.u)||!recoveryNonBlankString(edge.v)
+        ||!recoveryNonBlankString(edge.edge_type)){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    const edgeId=edge.edge_id.trim();
+    if(baseEdgesById.has(edgeId)
+        ||!baseNodesById.has(edge.u.trim())||!baseNodesById.has(edge.v.trim())){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    if(edge.relation!==undefined
+        &&(!recoveryNonBlankString(edge.relation)
+          ||edge.relation.trim()!==edge.edge_type.trim())){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    baseEdgesById.set(edgeId,edge);
+  }
+
+  const overlayNodeById=new Map();
+  for(const node of overlayNodes){
+    if(!recoveryIsRecord(node)||!recoveryNonBlankString(node.node_id)
+        ||!recoveryFiniteUnit(node.explainer_median)
+        ||!recoverySafeInteger(node.rank,false)||node.rank<1){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    const nodeId=node.node_id.trim();
+    if(overlayNodeById.has(nodeId)){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    if(!baseNodesById.has(nodeId)){
+      return recoveryUnavailable('invalid-overlay-membership');
+    }
+    overlayNodeById.set(nodeId,node);
+  }
+
+  const overlayEdgeById=new Map();
+  for(const edge of overlayEdges){
+    if(!recoveryIsRecord(edge)||!recoveryNonBlankString(edge.edge_id)
+        ||!recoveryNonBlankString(edge.u)||!recoveryNonBlankString(edge.v)
+        ||!recoveryNonBlankString(edge.edge_type)
+        ||!recoveryFiniteUnit(edge.explainer_median)
+        ||!recoverySafeInteger(edge.rank,false)||edge.rank<1){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    const edgeId=edge.edge_id.trim();
+    if(overlayEdgeById.has(edgeId)){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    const baseEdge=baseEdgesById.get(edgeId);
+    if(!baseEdge)return recoveryUnavailable('invalid-overlay-membership');
+    for(const field of ['u','v']){
+      if(edge[field].trim()!==baseEdge[field].trim()){
+        return recoveryUnavailable('invalid-overlay-membership');
+      }
+    }
+    if(edge.edge_type.trim()!==baseEdge.edge_type.trim()
+        ||(edge.relation!==undefined
+          &&(!recoveryNonBlankString(edge.relation)
+            ||edge.relation.trim()!==edge.edge_type.trim()))){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    overlayEdgeById.set(edgeId,edge);
+  }
+
+  function normalizedRow(base,row,isEdge){
+    const result={...base,importance:0,attributed:false,rank:null};
+    const identityFields=isEdge
+      ?['edge_id','u','v','edge_type','relation']:['node_id'];
+    const overlayFields=isEdge
+      ?['edge_id','u','v','edge_type','relation',
+        'explainer_median','importance','attributed','rank']
+      :['node_id','explainer_median','importance','attributed','rank'];
+    function trimIdentityFields(){
+      for(const field of identityFields){
+        if(recoveryNonBlankString(result[field]))result[field]=result[field].trim();
+      }
+    }
+    trimIdentityFields();
+    if(isEdge){
+      result.relation=recoveryNonBlankString(base.relation)
+        ?base.relation.trim():result.edge_type;
+    }
+    if(row){
+      for(const key of overlayFields){
+        if(Object.prototype.hasOwnProperty.call(row,key))result[key]=row[key];
+      }
+      trimIdentityFields();
+      result.importance=Math.max(0,Math.min(1,row.explainer_median));
+      result.attributed=true;
+      result.rank=row.rank;
+      if(isEdge){
+        result.relation=recoveryNonBlankString(row.relation)
+          ?row.relation.trim():result.edge_type;
+      }
+    }
+    return result;
+  }
+  return {
+    available:true,
+    nodes:community.nodes.map(node=>normalizedRow(
+      node,overlayNodeById.get(node.node_id.trim()),false)),
+    edges:community.edges.map(edge=>normalizedRow(
+      edge,overlayEdgeById.get(edge.edge_id.trim()),true))
+  };
+}
+
+function buildRecoverySchema3Detail(record,payload,communityView,overlayRows){
+  if(!recoveryIsRecord(record))return recoveryUnavailable('missing-case');
+  const kind=record.detailKind;
+  if(kind!=='gnn_explanation'&&kind!=='community_control'){
+    return recoveryUnavailable('no-detail-selected');
+  }
+  if(!recoveryIsRecord(payload))return recoveryUnavailable('sidecar-unavailable');
+  if(!recoveryIsRecord(communityView)||communityView.available!==true){
+    return {available:false,kind,
+      reason:recoveryIsRecord(communityView)&&communityView.reason
+        ?communityView.reason:'community-unavailable'};
+  }
+  const detail=payload.detail;
+  const explanation=kind==='gnn_explanation'
+    ?(payload.explanation||(recoveryIsRecord(detail)?detail.explanation:null))
+    :null;
+  if(kind==='gnn_explanation'&&!recoveryIsRecord(explanation)){
+    return {available:false,kind,reason:'explanation-unavailable'};
+  }
+  if(kind==='community_control'&&!recoveryIsRecord(detail)){
+    return {available:false,kind,reason:'structural-detail-unavailable'};
+  }
+  const boundarySource=kind==='gnn_explanation'?explanation:detail;
+  const evidenceBoundary=recoveryIsRecord(boundarySource)
+    ?boundarySource.evidence_boundary:null;
+  if(!validateRecoveryEvidenceBoundary(
+    {evidence_boundary:evidenceBoundary},record.scoring_day).available){
+    return {available:false,kind,reason:'invalid-evidence-boundary'};
+  }
+  let explanationPresentation=null;
+  if(kind==='gnn_explanation'){
+    let presentationOverlay=overlayRows;
+    if(presentationOverlay===undefined||presentationOverlay===null){
+      presentationOverlay={
+        available:true,
+        nodes:communityView.community.nodes.map(node=>
+          ({...node,importance:0,attributed:false})),
+        edges:communityView.community.edges.map(edge=>
+          ({...edge,importance:0,attributed:false}))
+      };
+    }else if(!recoveryIsRecord(presentationOverlay)
+        ||presentationOverlay.available!==true
+        ||!Array.isArray(presentationOverlay.nodes)
+        ||!Array.isArray(presentationOverlay.edges)){
+      return {available:false,kind,
+        reason:recoveryIsRecord(presentationOverlay)&&presentationOverlay.reason
+          ?presentationOverlay.reason:'invalid-overlay-presentation'};
+    }
+    explanationPresentation={...explanation,person_id:record.personId,
+      community:communityView.community,
+      overlayNodes:presentationOverlay.nodes,
+      overlayEdges:presentationOverlay.edges};
+  }
+  return {
+    available:true,
+    kind,
+    personId:record.personId,
+    explanation:explanationPresentation,
+    control:kind==='community_control'
+      ?{person_id:record.personId,community:communityView.community,
+        structural_stages:detail.structural_stages}
+      :null,
+    evidenceBoundary,
+    nodeCount:communityView.community.nodes.length,
+    edgeCount:communityView.community.edges.length,
+    canvasAvailable:kind==='gnn_explanation'||(
+      communityView.community.nodes.length<=RECOVERY_GRAPH_NODE_LIMIT
+      &&communityView.community.edges.length<=RECOVERY_GRAPH_EDGE_LIMIT)
+  };
 }
 
 const recoveryCatalogChunkCache=new Map();
@@ -1132,7 +1841,8 @@ function recoveryClusterNodes(nodes,query){
 }
 
 function recoveryValidateChunkOwner(owner){
-  if(!recoveryIsRecord(owner)||owner.complete!==true)return false;
+  if(!recoveryIsRecord(owner)||owner.complete!==true
+      ||owner.nodes!==undefined||owner.edges!==undefined)return false;
   const specs=[
     ['node_chunks','node_count'],['edge_chunks','edge_count'],
     ['provenance_chunks','provenance_observation_count'],
@@ -1143,7 +1853,7 @@ function recoveryValidateChunkOwner(owner){
     if(!Array.isArray(refs))return false;
     let expectedOffset=0;
     for(const ref of refs){
-      if(!recoveryIsRecord(ref)||!recoveryNonBlankString(ref.path)
+      if(!recoveryIsRecord(ref)||!recoverySafeSidecarPath(ref.path)
           ||!recoveryNonBlankString(ref.sha256)
           ||ref.offset!==expectedOffset||!recoverySafeInteger(ref.count,false))return false;
       expectedOffset+=ref.count;
@@ -1161,7 +1871,7 @@ function recoveryValidateChunkOwner(owner){
       if(!Array.isArray(refs))return false;
       let expectedOffset=0;
       for(const ref of refs){
-        if(!recoveryIsRecord(ref)||!recoveryNonBlankString(ref.path)
+        if(!recoveryIsRecord(ref)||!recoverySafeSidecarPath(ref.path)
             ||!recoveryNonBlankString(ref.sha256)
             ||ref.offset!==expectedOffset||!recoverySafeInteger(ref.count,false))return false;
         expectedOffset+=ref.count;
@@ -1185,6 +1895,82 @@ function recoveryV2Panel(doc,title,value){
   panel.appendChild(recoveryElement(doc,'h5','',title));
   panel.appendChild(recoveryElement(doc,'pre','',JSON.stringify(value||null,null,2)));
   return panel;
+}
+
+async function recoveryResolveCatalogRows(view,rows,kind){
+  const catalog=view.catalogIndex&&view.catalogIndex[kind];
+  if(!recoveryIsRecord(catalog)||!Array.isArray(catalog.chunks)){
+    throw new Error('Normalized catalog index is missing');
+  }
+  const needed=new Map();
+  for(const row of rows){
+    const catalogId=row&&row.catalog_id;
+    const chunk=catalog.chunks.find(
+      candidate=>candidate.first_id<=catalogId&&catalogId<=candidate.last_id);
+    if(!chunk)throw new Error('Normalized catalog record is not indexed');
+    needed.set(chunk.path,chunk);
+  }
+  const recordsById=new Map();
+  await Promise.all(Array.from(needed.values()).map(async chunk=>{
+    const cacheKey=recoverySidecarUrl(view,chunk.path)+'|'+chunk.sha256;
+    let records=recoveryCatalogChunkCache.get(cacheKey);
+    if(!records){
+      const catalogPayload=await recoveryFetchJson(
+        recoverySidecarUrl(view,chunk.path),chunk.sha256);
+      records=recoveryValidatedChunkRows(catalogPayload,chunk,'records');
+      if(records===null)throw new Error('Normalized catalog chunk is invalid');
+      recoveryCatalogChunkCache.set(cacheKey,records);
+    }
+    for(const entry of records){
+      if(!recoveryIsRecord(entry)||!recoveryNonBlankString(entry.record_id)
+          ||!recoveryIsRecord(entry.record)){
+        throw new Error('Normalized catalog chunk is invalid');
+      }
+      recordsById.set(entry.record_id,entry.record);
+    }
+  }));
+  for(const row of rows){
+    if(!recoveryIsRecord(row)||!recoveryNonBlankString(row.catalog_id)
+        ||!recordsById.has(row.catalog_id)){
+      throw new Error('Normalized catalog record is missing');
+    }
+    const identityField=kind==='nodes'?'node_id'
+      :(kind==='edges'?'edge_id':'source_row_id');
+    const catalogRecord=recordsById.get(row.catalog_id);
+    if(!recoveryNonBlankString(row[identityField])
+        ||!recoveryNonBlankString(catalogRecord[identityField])
+        ||row[identityField]!==catalogRecord[identityField]){
+      throw new Error('Normalized catalog identity contract is invalid');
+    }
+  }
+  return rows.map(row=>{
+    const detached={...row};delete detached.catalog_id;
+    return {...(recordsById.get(row.catalog_id)||{}),...detached};
+  });
+}
+
+async function recoveryApplyDayView(view,owner,normalized,index,resolvedRows){
+  const dayConfig=normalized==='node'
+    ?['node_status_chunks','node_statuses','node_id']
+    :['edge_membership_chunks','edge_memberships','edge_id'];
+  const dayRefs=owner.day_view[dayConfig[0]];
+  if(!Array.isArray(dayRefs)||!dayRefs[index]){
+    throw new Error('Normalized day-view chunk is missing');
+  }
+  const dayRef=dayRefs[index];
+  const dayPayload=await recoveryFetchJson(
+    recoverySidecarUrl(view,dayRef.path),dayRef.sha256);
+  const dayRows=recoveryValidatedChunkRows(dayPayload,dayRef,dayConfig[1]);
+  if(dayRows===null)throw new Error('Day-view chunk offset or count contract is invalid');
+  const dayIds=dayRows.map(row=>recoveryIsRecord(row)?row[dayConfig[2]]:null);
+  const resolvedIds=resolvedRows.map(row=>recoveryIsRecord(row)
+    ?row[dayConfig[2]]:null);
+  if(!recoverySameIds(dayIds,resolvedIds)){
+    throw new Error('Normalized day-view identity contract is invalid');
+  }
+  const stateById=new Map(dayRows.map(row=>[row[dayConfig[2]],row]));
+  return resolvedRows.map(
+    row=>({...row,...(stateById.get(row[dayConfig[2]])||{})}));
 }
 
 function mountRecoveryExplorerV2(root,artifact,tools){
@@ -1499,55 +2285,15 @@ function mountRecoveryExplorerV2(root,artifact,tools){
     if(rows===null)throw new Error('Chunk offset or count contract is invalid');
     let resolvedRows=rows;
     if(!overlay&&['node','edge','provenance'].includes(normalized)){
-      const kind=normalized==='node'?'nodes':normalized==='edge'?'edges':'provenance';
-      const catalog=view.catalogIndex&&view.catalogIndex[kind];
-      if(!recoveryIsRecord(catalog)||!Array.isArray(catalog.chunks)){
-        throw new Error('Normalized catalog index is missing');
-      }
-      const needed=new Map();
-      for(const row of rows){
-        const catalogId=row&&row.catalog_id;
-        const chunk=catalog.chunks.find(
-          candidate=>candidate.first_id<=catalogId&&catalogId<=candidate.last_id);
-        if(!chunk)throw new Error('Normalized catalog record is not indexed');
-        needed.set(chunk.path,chunk);
-      }
-      const recordsById=new Map();
-      await Promise.all(Array.from(needed.values()).map(async chunk=>{
-        const cacheKey=recoverySidecarUrl(view,chunk.path);
-        let records=recoveryCatalogChunkCache.get(cacheKey);
-        if(!records){
-          const catalogPayload=await recoveryFetchJson(cacheKey,chunk.sha256);
-          records=recoveryValidatedChunkRows(catalogPayload,chunk,'records');
-          if(records===null)throw new Error('Normalized catalog chunk is invalid');
-          recoveryCatalogChunkCache.set(cacheKey,records);
-        }
-        for(const entry of records)recordsById.set(entry.record_id,entry.record);
-      }));
-      resolvedRows=rows.map(row=>{
-        const detached={...row};delete detached.catalog_id;
-        return {...(recordsById.get(row.catalog_id)||{}),...detached};
-      });
+      resolvedRows=await recoveryResolveCatalogRows(view,rows,
+        normalized==='node'?'nodes':normalized==='edge'?'edges':'provenance');
       if(disposed||requestToken!==recoveryRequestToken)return;
     }
     if(!overlay&&recoveryIsRecord(owner.day_view)
         &&(normalized==='node'||normalized==='edge')){
-      const dayConfig=normalized==='node'
-        ?['node_status_chunks','node_statuses','node_id']
-        :['edge_membership_chunks','edge_memberships','edge_id'];
-      const dayRefs=owner.day_view[dayConfig[0]];
-      if(!Array.isArray(dayRefs)||!dayRefs[index]){
-        throw new Error('Normalized day-view chunk is missing');
-      }
-      const dayRef=dayRefs[index];
-      const dayPayload=await recoveryFetchJson(
-        recoverySidecarUrl(view,dayRef.path),dayRef.sha256);
+      resolvedRows=await recoveryApplyDayView(
+        view,owner,normalized,index,resolvedRows);
       if(disposed||requestToken!==recoveryRequestToken)return;
-      const dayRows=recoveryValidatedChunkRows(dayPayload,dayRef,dayConfig[1]);
-      if(dayRows===null)throw new Error('Day-view chunk offset or count contract is invalid');
-      const stateById=new Map(dayRows.map(row=>[row[dayConfig[2]],row]));
-      resolvedRows=resolvedRows.map(
-        row=>({...row,...(stateById.get(row[dayConfig[2]])||{})}));
     }
     cache[index]=resolvedRows;
     state.loadedNodeCount=Object.values(state.nodePages).reduce((sum,rows)=>sum+rows.length,0);
@@ -1608,12 +2354,786 @@ function mountRecoveryExplorerV2(root,artifact,tools){
     root.removeEventListener('change',onV2Change);};
 }
 
+function mountRecoveryExplorerV3(root,artifact,tools){
+  const doc=root.ownerDocument;
+  const view=buildRecoverySchema3ViewModel(artifact);
+  const fmt=recoveryIsRecord(tools)&&typeof tools.fmt==='function'
+    ?tools.fmt:value=>Number(value||0).toLocaleString();
+  const firstPublishedCaseId=view.available
+    ?Object.keys(view.detailIndex||{})[0]||null:null;
+  const state={filter:'gnn_explanation',
+    caseId:firstPublishedCaseId,caseData:null,community:null,
+    nodeRows:null,edgeRows:null,overlayNodeRows:null,overlayEdgeRows:null,
+    loading:false,error:null,
+    mode:'flow',stageId:'first_hop',selectedFactorId:null,query:'',
+    scale:1,offsetX:0,offsetY:0,labelDensity:'auto',
+    nodeTablePage:0,edgeTablePage:0};
+  let requestToken=0;let disposed=false;
+  let canvasCleanup=function(){};let pendingCanvas=null;
+
+  function restoreV3Focus(attribute,datasetKey,value){
+    for(const control of root.querySelectorAll('['+attribute+']')){
+      if(control.dataset&&control.dataset[datasetKey]===String(value)){
+        control.focus();return true;
+      }
+    }
+    return false;
+  }
+  function visibleRows(){return filterRecoverySchema3Cases(view,state.filter);}
+  function currentRecord(){
+    return visibleRows().find(item=>item.caseId===state.caseId)||null;
+  }
+  function stageIdsFor(kind){
+    return kind==='community_control'
+      ?RECOVERY_STRUCTURAL_STAGES
+      :['first_hop','second_hop','component_pool','rank_fusion'];
+  }
+  function activeStageId(kind){
+    const allowed=stageIdsFor(kind);
+    return allowed.includes(state.stageId)?state.stageId:'first_hop';
+  }
+  function addText(parent,tag,className,text){
+    parent.appendChild(recoveryElement(doc,tag,className,text));
+  }
+  function renderHeader(fragment){
+    const header=recoveryElement(doc,'header','v9-recovery-header');
+    addText(header,'div','v9-recovery-eyebrow','Balanced recovery evidence');
+    addText(header,'h3','v9-recovery-title','Why Hybrid recovered more cases');
+    addText(header,'p','v9-recovery-intro',
+      'Retrospective seed-0 evaluation cohorts with selected technical detail and structural controls.');
+    addText(header,'div','v9-recovery-scope',
+      'Single-seed observability · GraphSAGE seed 0 · Hybrid score is percentile fusion, not probability.');
+    fragment.appendChild(header);
+  }
+  function renderSummary(fragment){
+    if(!view.available)return;
+    const grid=recoveryElement(doc,'div','v9-recovery-summary');
+    grid.setAttribute('aria-label','Schema-3 recovery overlap summary');
+    for(const [key,label] of [
+      ['baseline_recovered','Baseline recovered'],
+      ['recovered_by_both','Recovered by both'],
+      ['hybrid_only_recovered','Hybrid-only recovered'],
+      ['baseline_only_recovered','Baseline-only recovered'],
+      ['hybrid_total','Hybrid total'],['net_gain','Net gain']]){
+      const card=recoveryElement(doc,'article','v9-recovery-stat');
+      addText(card,'b','',fmt(view.summary[key]));addText(card,'span','',label);
+      grid.appendChild(card);
+    }
+    fragment.appendChild(grid);
+    const coverage=recoveryElement(doc,'div','v9-recovery-coverage');
+    addText(coverage,'span','',
+      'Hybrid technical detail '+fmt(view.coverage.hybrid_explained)+' / '
+        +fmt(view.coverage.hybrid_requested));
+    addText(coverage,'span','',
+      'Baseline community context '+fmt(view.coverage.baseline_community)+' / '
+        +fmt(view.coverage.baseline_requested));
+    if(view.coverage.hybrid_structural_fallback){
+      addText(coverage,'span','',
+        'Hybrid structural fallback '+fmt(view.coverage.hybrid_structural_fallback));
+    }
+    fragment.appendChild(coverage);
+    if(view.coverage.shortfall){
+      addText(fragment,'div','v9-recovery-warning',
+        'Partial coverage: '+fmt(view.coverage.shortfall)
+          +' of the requested detail cases have no published evidence. Reasons: '
+          +(view.coverage.shortfall_reasons.join(', ')||'not recorded')+'.');
+    }
+  }
+  function renderFilters(fragment){
+    const status=recoveryElement(doc,'div','v9-recovery-status',
+      'Showing GNN explanations only');
+    status.setAttribute('role','status');
+    status.setAttribute('aria-label','Showing GNN explanations only');
+    fragment.appendChild(status);
+  }
+  function renderRecordStatus(detail,record){
+    const copy={
+      not_selected:'This case was retained in the cohort summary but was not selected for detail.',
+      selected:'Selected detail is not available in the published bundle.',
+      unavailable:'Detail is unavailable; no evidence is inferred.',
+      failed:'Detail generation failed; no replacement case was selected.'
+    }[record.detailStatus||'not_selected'];
+    if(copy)addText(detail,'div','v9-recovery-status',copy);
+    if(record.failureReason)addText(detail,'p','v9-recovery-intro',
+      'Recorded reason: '+String(record.failureReason));
+    if(record.explanationUnavailableReason)addText(detail,'p','v9-recovery-intro',
+      'GNNExplainer was not run for this case: '
+        +String(record.explanationUnavailableReason)
+        +'. The exact two-hop input exceeded the explainer limits, so structural community context is published instead.');
+  }
+  function renderRanks(detail,record){
+    const panel=recoveryElement(doc,'section','v9-recovery-v2-panel');
+    addText(panel,'h5','',
+      record.detailKind==='gnn_explanation'
+        ?'Hybrid percentile-fusion score and ranks':'Recorded ranks and structural context');
+    const values=[['Baseline rank',record.baseline_rank],
+      ['Seed-0 GNN rank',record.seed0_gnn_rank],
+      ['Seed-0 Hybrid rank',record.seed0_hybrid_rank]];
+    for(const [label,value] of values)addText(panel,'div','',label+': '+fmt(value));
+    if(typeof record.baseline_raw==='number')addText(panel,'div','',
+      'Baseline score: '+String(record.baseline_raw));
+    if(typeof record.baseline_percentile==='number')addText(panel,'div','',
+      'Baseline percentile: '+String(record.baseline_percentile));
+    if(typeof record.seed0_gnn_percentile==='number')addText(panel,'div','',
+      'Seed-0 GNN percentile: '+String(record.seed0_gnn_percentile));
+    if(typeof record.seed0_gnn_probability==='number')addText(panel,'div','',
+      'Seed-0 GNN probability: '+String(record.seed0_gnn_probability));
+    if(typeof record.seed0_hybrid_score==='number')addText(panel,'div','',
+      'Hybrid percentile-fusion score: '+String(record.seed0_hybrid_score)
+        +' (percentile fusion, not probability)');
+    detail.appendChild(panel);
+  }
+  function renderEvidenceBoundary(detail,boundary){
+    if(!recoveryIsRecord(boundary)
+        ||!recoveryNonBlankString(boundary.snapshot)
+        ||!recoveryNonBlankString(boundary.edge_rule)
+        ||!recoveryNonBlankString(boundary.caught_rule)){
+      addText(detail,'div','v9-recovery-empty',
+        'Strict as-of evidence boundary unavailable. Evidence details are not rendered.');
+      return false;
+    }
+    addText(detail,'div','v9-recovery-status',
+      'Strict as-of evidence boundary: snapshot '+boundary.snapshot
+        +'. Edges: '+boundary.edge_rule+'. Caught labels: '+boundary.caught_rule+'.');
+    return true;
+  }
+  function renderNarrative(column,explanation){
+    const panel=recoveryElement(doc,'section','v9-recovery-narrative');
+    addText(panel,'h5','','Grounded narrative');
+    const narrative=validateRecoveryNarrative(explanation.llm_narrative);
+    if(!narrative.visible){
+      addText(panel,'p','',
+        'Validated narrative unavailable. Measured factors remain authoritative.');
+    }else{
+      addText(panel,'p','',narrative.source==='llm'
+        ?'Validated local Gemma: '+narrative.model
+        :'Deterministic evidence summary. Local Gemma output was unavailable or rejected.');
+      addText(panel,'p','',narrative.summary);
+      recoveryAppendSources(doc,panel,narrative.summarySourceRefs);
+      for(const claim of narrative.claims){
+        addText(panel,'p','',claim.text);
+        recoveryAppendSources(doc,panel,claim.source_refs);
+      }
+    }
+    column.appendChild(panel);
+  }
+  function renderFactors(column,explanation){
+    const panel=recoveryElement(doc,'section','v9-recovery-panel');
+    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
+    addText(head,'h5','','Salient counterfactual factors');
+    addText(head,'p','',
+      'Signed effect is ablated rank minus original rank. Positive values mean removal worsened rank.');
+    panel.appendChild(head);
+    const factors=Array.isArray(explanation.factors)
+      ?explanation.factors.filter(recoveryValidFactor).slice():[];
+    factors.sort((left,right)=>
+      Number(right.stability==='stable')-Number(left.stability==='stable')
+      ||Math.abs(right.counterfactual.ablated_hybrid_rank-right.counterfactual.original_hybrid_rank)
+        -Math.abs(left.counterfactual.ablated_hybrid_rank-left.counterfactual.original_hybrid_rank)
+      ||recoveryCompareId(left.factor_id,right.factor_id));
+    if(!factors.some(factor=>factor.stability==='stable')){
+      addText(panel,'div','v9-recovery-status',
+        'No stable factor found; inspect measured effects below.');
+    }
+    if(!factors.length){
+      addText(panel,'div','v9-recovery-status',
+        'No measured factors are available for this explanation.');
+    }else{
+      const list=recoveryElement(doc,'div','v9-recovery-factor-list');
+      for(const factor of factors){
+        const button=recoveryElement(doc,'button','v9-recovery-factor');
+        button.type='button';button.dataset.v3Factor=factor.factor_id;
+        button.setAttribute('aria-pressed',
+          String(state.selectedFactorId===factor.factor_id));
+        button.setAttribute('aria-label',
+          'Show measured effect for '+recoveryVisibleText(factor.label));
+        addText(button,'strong','',factor.label+' / '+factor.stability);
+        const effect=factor.counterfactual.ablated_hybrid_rank
+          -factor.counterfactual.original_hybrid_rank;
+        addText(button,'span','',
+          recoverySigned(effect)+' ranks / Ablated minus original');
+        list.appendChild(button);
+      }
+      panel.appendChild(list);
+      addText(panel,'p','v9-recovery-canvas-note',
+        'Per-factor provenance is published as separate attribution overlay evidence and is not drawn on the community graph in this view.');
+    }
+    column.appendChild(panel);
+  }
+  function renderStabilityAndFaithfulness(column,explanation){
+    const panel=recoveryElement(doc,'section','v9-recovery-panel');
+    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
+    addText(head,'h5','','Restart stability and removal faithfulness');
+    panel.appendChild(head);
+    const stability=explanation.stability;
+    if(recoveryIsRecord(stability)
+        &&recoverySafeInteger(stability.stable_factor_count,false)){
+      addText(panel,'div','',
+        'Stable factors across deterministic restarts: '
+          +fmt(stability.stable_factor_count));
+      if(recoveryNonBlankString(stability.signed_effect_source)){
+        addText(panel,'div','',
+          'Signed effect source: '+stability.signed_effect_source);
+      }
+    }else{
+      addText(panel,'div','v9-recovery-status',
+        'Restart stability is unavailable in this artifact.');
+    }
+    const faithfulness=explanation.faithfulness;
+    const points=recoveryIsRecord(faithfulness)?faithfulness.points:null;
+    if(!recoveryIsRecord(faithfulness)||!Array.isArray(points)||!points.length
+        ||!recoveryFiniteUnit(faithfulness.original_probability)){
+      addText(panel,'div','v9-recovery-status',
+        'Edge-removal faithfulness is unavailable in this artifact.');
+      column.appendChild(panel);return;
+    }
+    addText(panel,'p','',
+      'Removing the highest-attribution edges is compared against a matched random control. A larger top-edge drop than its matched control is evidence the attribution tracked the score.');
+    addText(panel,'div','',
+      'Seed-0 probability before removal: '
+        +String(faithfulness.original_probability));
+    const table=recoveryElement(doc,'table','v9-recovery-table');
+    table.setAttribute('aria-label','Edge removal faithfulness by removed fraction');
+    const header=recoveryElement(doc,'tr');
+    for(const label of ['Removed fraction','Top-edge drop','Matched random drop',
+      'Unmatched controls']){
+      header.appendChild(recoveryElement(doc,'th','',label));
+    }
+    table.appendChild(header);
+    for(const point of points){
+      if(!recoveryIsRecord(point))continue;
+      const row=recoveryElement(doc,'tr');
+      const matched=typeof point.matched_random_probability_drop==='number'
+        ?String(point.matched_random_probability_drop)
+        :'not measured';
+      for(const value of [String(point.fraction),
+        String(point.top_edge_probability_drop),matched,
+        String(point.unmatched_control_count)]){
+        row.appendChild(recoveryElement(doc,'td','',value));
+      }
+      table.appendChild(row);
+    }
+    panel.appendChild(table);
+    column.appendChild(panel);
+  }
+  function graphButton(label,action,value,pressed,ariaLabel){
+    const button=recoveryElement(doc,'button','v9-recovery-button',label);
+    button.type='button';button.dataset[action]=value;
+    if(pressed!==null)button.setAttribute('aria-pressed',String(pressed));
+    button.setAttribute('aria-label',ariaLabel||label);
+    return button;
+  }
+  function renderGraphTable(panel,commands,record){
+    const wrap=recoveryElement(doc,'div','v9-recovery-table-wrap');
+    addText(wrap,'h6','','Community data table');
+    addText(wrap,'p','v9-recovery-canvas-note',
+      'Non-canvas equivalent of the graph above. Emphasis matches the selected stage.');
+    const tableNodes=Array.isArray(commands.tableNodes)
+      ?commands.tableNodes:commands.nodes;
+    const tableEdges=Array.isArray(commands.tableEdges)
+      ?commands.tableEdges:commands.edges;
+    const nodePages=Math.max(1,Math.ceil(tableNodes.length/25));
+    const edgePages=Math.max(1,Math.ceil(tableEdges.length/25));
+    const nodePage=Math.min(Math.max(0,state.nodeTablePage),nodePages-1);
+    const edgePage=Math.min(Math.max(0,state.edgeTablePage),edgePages-1);
+    const nodeTable=recoveryElement(doc,'table','v9-recovery-table');
+    nodeTable.setAttribute('aria-label',
+      'Community members for '+recoveryVisibleText(record.personId));
+    const nodeHead=recoveryElement(doc,'tr');
+    for(const label of ['Member','Focal','Pooled member','Caught before snapshot',
+      'Evidence weight','Evidence rank']){
+      nodeHead.appendChild(recoveryElement(doc,'th','',label));
+    }
+    nodeTable.appendChild(nodeHead);
+    for(const node of tableNodes.slice(nodePage*25,nodePage*25+25)){
+      const row=recoveryElement(doc,'tr');
+      const nodeId=node.id===undefined?node.node_id:node.id;
+      const weight=typeof node.importance==='number'
+        ?node.importance.toFixed(3):'none';
+      const rank=Number.isSafeInteger(node.rank)?String(node.rank):'none';
+      for(const value of [nodeId,node.target?'yes':'no',
+        node.pooledMember?'yes':'no',node.caughtBeforeSnapshot?'yes':'no',
+        weight,rank]){
+        row.appendChild(recoveryElement(doc,'td','',String(value)));
+      }
+      nodeTable.appendChild(row);
+    }
+    wrap.appendChild(nodeTable);
+    const nodeNav=recoveryElement(doc,'div','v9-recovery-pager');
+    nodeNav.appendChild(graphButton('Previous members','v3Page','node-prev',null,
+      'Previous page of community members'));
+    addText(nodeNav,'span','','Members page '+(nodePage+1)+' / '+nodePages);
+    nodeNav.appendChild(graphButton('Next members','v3Page','node-next',null,
+      'Next page of community members'));
+    wrap.appendChild(nodeNav);
+    const edgeTable=recoveryElement(doc,'table','v9-recovery-table');
+    edgeTable.setAttribute('aria-label',
+      'Community relationships for '+recoveryVisibleText(record.personId));
+    const edgeHead=recoveryElement(doc,'tr');
+    for(const label of ['Relationship','Relation','From','To','Emphasized',
+      'Evidence weight','Evidence rank']){
+      edgeHead.appendChild(recoveryElement(doc,'th','',label));
+    }
+    edgeTable.appendChild(edgeHead);
+    for(const edge of tableEdges.slice(edgePage*25,edgePage*25+25)){
+      const row=recoveryElement(doc,'tr');
+      const edgeId=edge.id===undefined?edge.edge_id:edge.id;
+      const weight=typeof edge.importance==='number'
+        ?edge.importance.toFixed(3):'none';
+      const rank=Number.isSafeInteger(edge.rank)?String(edge.rank):'none';
+      for(const value of [edgeId,edge.relation,edge.u,edge.v,
+        edge.emphasized?'yes':'no',weight,rank]){
+        row.appendChild(recoveryElement(doc,'td','',String(value)));
+      }
+      edgeTable.appendChild(row);
+    }
+    wrap.appendChild(edgeTable);
+    const edgeNav=recoveryElement(doc,'div','v9-recovery-pager');
+    edgeNav.appendChild(graphButton('Previous relationships','v3Page','edge-prev',
+      null,'Previous page of community relationships'));
+    addText(edgeNav,'span','','Relationships page '+(edgePage+1)+' / '+edgePages);
+    edgeNav.appendChild(graphButton('Next relationships','v3Page','edge-next',null,
+      'Next page of community relationships'));
+    wrap.appendChild(edgeNav);
+    panel.appendChild(wrap);
+  }
+  function renderGraph(column,detailView,record){
+    const control=detailView.kind==='community_control';
+    const stageId=activeStageId(detailView.kind);
+    const panel=recoveryElement(doc,'section','v9-recovery-panel');
+    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
+    addText(head,'h5','','As-of community context + explanation evidence');
+    addText(head,'p','',control
+      ?'Muted context remains visible. This control has no explanation evidence or attribution mask.'
+      :'Muted context remains visible. Explanation evidence width and brightness follow the unsigned explainer median. This is not a causal claim.');
+    panel.appendChild(head);
+    const toolbar=recoveryElement(doc,'div','v9-recovery-toolbar');
+    toolbar.setAttribute('role','toolbar');
+    toolbar.setAttribute('aria-label','Community graph controls');
+    const modes=recoveryElement(doc,'div','v9-recovery-toolgroup');
+    modes.appendChild(graphButton('All','v3Mode','all',state.mode==='all',
+      'Show all relationships'));
+    modes.appendChild(graphButton('Flow','v3Mode','flow',state.mode==='flow',
+      'Show influence flow emphasis'));
+    toolbar.appendChild(modes);
+    const stages=recoveryElement(doc,'div','v9-recovery-toolgroup');
+    const stageLabels={first_hop:'First hop',second_hop:'Second hop',
+      component_pool:'Component pool',rank_fusion:'Rank fusion'};
+    for(const value of stageIdsFor(detailView.kind)){
+      stages.appendChild(graphButton(stageLabels[value],'v3Stage',value,
+        stageId===value,'Show '+stageLabels[value].toLowerCase()+' stage'));
+    }
+    toolbar.appendChild(stages);
+    const zoom=recoveryElement(doc,'div','v9-recovery-toolgroup');
+    zoom.appendChild(graphButton('+','v3Zoom','in',null,'Zoom in'));
+    zoom.appendChild(graphButton('-','v3Zoom','out',null,'Zoom out'));
+    zoom.appendChild(graphButton('Reset','v3Zoom','reset',null,'Reset zoom'));
+    zoom.appendChild(graphButton('Fit','v3Zoom','fit',null,'Fit to community'));
+    toolbar.appendChild(zoom);
+    const search=recoveryElement(doc,'input','v9-recovery-search');
+    search.type='search';search.value=state.query;search.placeholder='Find node';
+    search.dataset.v3Input='search';
+    search.setAttribute('aria-label','Search node identifiers');
+    toolbar.appendChild(search);
+    const density=recoveryElement(doc,'select','v9-recovery-select');
+    density.dataset.v3Change='density';
+    density.setAttribute('aria-label','Node label density');
+    for(const pair of [['auto','Labels: auto'],['all','Labels: all'],
+      ['none','Labels: none']]){
+      const option=recoveryElement(doc,'option','',pair[1]);
+      option.value=pair[0];density.appendChild(option);
+    }
+    density.value=state.labelDensity;toolbar.appendChild(density);
+    panel.appendChild(toolbar);
+    const description=recoveryElement(doc,'p','v9-recovery-canvas-note',control
+      ?'Relation colors show observable context, not relation-specific GraphSAGE parameters. No attribution mask is drawn for a community control.'
+      :'Relation colors show observable context, not relation-specific GraphSAGE parameters. Mask values are unsigned evidence weights, not causal claims.');
+    description.id='v9-recovery-v3-canvas-description';
+    panel.appendChild(description);
+    const options={mode:state.mode,stageId,
+      selectedFactorId:null,query:state.query};
+    const commands=control
+      ?buildStructuralDrawCommands(detailView.control,options)
+      :buildCommunityDrawCommands(detailView.explanation,options);
+    if(!commands.available){
+      addText(panel,'div','v9-recovery-empty',
+        'Strict-bound unavailable: complete community unavailable ('
+          +commands.reason+'). The complete data table is not rendered because the graph command failed closed.');
+      column.appendChild(panel);return;
+    }
+    const legend=recoveryElement(doc,'div','v9-recovery-legend');
+    legend.setAttribute('role','list');
+    legend.setAttribute('aria-label','Graph legend');
+    function legendItem(label,swatchClass,description){
+      const item=recoveryElement(doc,'div','v9-recovery-legend-item');
+      item.setAttribute('role','listitem');
+      item.setAttribute('aria-label',label+(description?': '+description:''));
+      const swatch=recoveryElement(doc,'span','v9-recovery-legend-swatch '+swatchClass);
+      swatch.setAttribute('aria-hidden','true');
+      item.appendChild(swatch);
+      addText(item,'span','',label+(description?' - '+description:''));
+      legend.appendChild(item);
+    }
+    legendItem('Context relations','is-context','muted');
+    legendItem('Explanation evidence','is-evidence','width and brightness follow unsigned explainer median');
+    legendItem('Target','is-target','selected person');
+    legendItem('Caught before snapshot','is-caught','label available before T');
+    legendItem('Weight range','is-weight','0.00 to 1.00');
+    panel.appendChild(legend);
+    if(commands.sampled){
+      addText(panel,'div','v9-recovery-sampled',
+        'Sampled context: showing '+fmt(commands.nodes.length)+' of '
+          +fmt(commands.fullNodeCount)+' nodes and '+fmt(commands.edges.length)
+          +' of '+fmt(commands.fullEdgeCount)
+          +' relationships for canvas performance; complete tables remain available.');
+    }
+    if(detailView.canvasAvailable){
+      const wrap=recoveryElement(doc,'div','v9-recovery-canvas-wrap');
+      const canvas=recoveryElement(doc,'canvas','v9-recovery-canvas');
+      canvas.tabIndex=0;canvas.setAttribute('role','img');
+      canvas.setAttribute('aria-label',
+        (control
+          ?'Community context graph for '
+            +(record.cohort==='baseline_only'
+              ?'baseline control ':'Hybrid structural fallback ')
+          :'Community graph for Hybrid case ')
+          +recoveryVisibleText(record.personId)+', '+stageLabels[stageId]
+          +' stage, '+(state.mode==='all'?'all relationships':'flow emphasis')
+          +', '+commands.nodes.length+' members and '+commands.edges.length
+          +' relationships.');
+      canvas.setAttribute('aria-describedby','v9-recovery-v3-canvas-description');
+      canvas.textContent='Interactive community graph. Use the toolbar for keyboard controls.';
+      wrap.appendChild(canvas);panel.appendChild(wrap);
+      pendingCanvas={canvas,commands};
+    }else{
+      addText(panel,'div','v9-recovery-status',
+        'Strict-bound unavailable: community graph is not drawn: '
+          +fmt(detailView.nodeCount)+' members and '
+          +fmt(detailView.edgeCount)
+          +' relationships exceed the interactive rendering bound. The complete data table below carries the same evidence.');
+    }
+    renderGraphTable(panel,commands,record);
+    column.appendChild(panel);
+  }
+  function renderSelectedEvidence(detail,record){
+    if(state.error){
+      addText(detail,'div','v9-recovery-empty',recoveryServerHelp(state.error));
+      return;
+    }
+    if(state.loading){
+      addText(detail,'div','v9-recovery-status','Loading selected evidence...');
+      return;
+    }
+    if(record.detailKind===null){
+      renderRecordStatus(detail,record);return;
+    }
+    const communityView=assembleRecoverySchema3Community(
+      state.community,state.nodeRows,state.edgeRows);
+    const overlayRows=record.detailKind==='gnn_explanation'
+      ?mergeRecoverySchema3Overlay(communityView.community,
+        state.overlayNodeRows,state.overlayEdgeRows)
+      :null;
+    const detailView=buildRecoverySchema3Detail(
+      record,state.caseData,communityView,overlayRows);
+    if(!detailView.available){
+      addText(detail,'div','v9-recovery-empty',
+        'Selected evidence unavailable. '+detailView.reason+'.');
+      renderRecordStatus(detail,record);return;
+    }
+    if(detailView.kind==='community_control'){
+      addText(detail,'div','v9-recovery-status',
+        record.cohort==='baseline_only'
+          ?'Community context only: GNNExplainer was not run for this baseline control.'
+          :'Community context only: GNNExplainer was not run for this Hybrid structural fallback.');
+      addText(detail,'p','v9-recovery-intro',
+        'No GNN explanation, mask, or attribution is generated for this control.');
+    }else{
+      addText(detail,'div','v9-recovery-status','Hybrid technical detail');
+    }
+    if(!renderEvidenceBoundary(detail,detailView.evidenceBoundary)){
+      renderRecordStatus(detail,record);return;
+    }
+    const evidence=recoveryElement(doc,'div','v9-recovery-evidence-grid');
+    const left=recoveryElement(doc,'div');
+    const right=recoveryElement(doc,'div');
+    if(detailView.kind==='gnn_explanation'){
+      renderFactors(left,detailView.explanation);
+      renderStabilityAndFaithfulness(left,detailView.explanation);
+      renderNarrative(left,detailView.explanation);
+      left.appendChild(renderHighestAttributionPanel(doc,detailView.explanation));
+    }else{
+      const note=recoveryElement(doc,'section','v9-recovery-panel');
+      addText(note,'h5','','Structural evidence only');
+      addText(note,'p','',
+        'Community membership is observable context, not an attribution claim. Attribution, counterfactual factor, stability, and faithfulness panels are suppressed for a control.');
+      left.appendChild(note);
+    }
+    renderGraph(right,detailView,record);
+    evidence.appendChild(left);evidence.appendChild(right);
+    detail.appendChild(evidence);
+    renderRecordStatus(detail,record);
+  }
+  function render(){
+    canvasCleanup();canvasCleanup=function(){};pendingCanvas=null;
+    const fragment=doc.createDocumentFragment();renderHeader(fragment);
+    if(!view.available){
+      addText(fragment,'div','v9-recovery-empty',
+        'Case evidence unavailable. '+view.reason+'.');
+      root.replaceChildren(fragment);return;
+    }
+    renderSummary(fragment);renderFilters(fragment);
+    const grid=recoveryElement(doc,'div','v9-recovery-v2-grid');
+    const list=recoveryElement(doc,'aside','v9-recovery-v2-list');
+    list.setAttribute('aria-label','Recovery cases');
+    const rows=visibleRows();
+    if(!rows.length){
+      addText(list,'div','v9-recovery-empty','No cases match the current filter.');
+    }
+    for(const record of rows){
+      const button=recoveryElement(doc,'button','v9-recovery-case');
+      button.type='button';button.dataset.v3Case=record.caseId;
+      button.setAttribute('aria-current',String(record.caseId===state.caseId));
+      button.setAttribute('aria-label','Inspect recovery case '+record.personId);
+      addText(button,'strong','',record.personId);
+      addText(button,'div','v9-recovery-case-meta',
+        record.cohort+' · '+(record.detailStatus||'not_selected')
+          +' · B '+fmt(record.baseline_rank)
+          +' / H '+fmt(record.seed0_hybrid_rank));
+      list.appendChild(button);
+    }
+    grid.appendChild(list);
+    const detail=recoveryElement(doc,'div','v9-recovery-v2-detail');
+    const record=currentRecord();
+    if(!record){
+      addText(detail,'div','v9-recovery-empty',
+        'Select a case to inspect its published evidence.');
+    }else{
+      const header=recoveryElement(doc,'header','v9-recovery-case-header');
+      addText(header,'h4','','Case '+record.personId);
+      addText(header,'p','','Event '+record.event_id+' / scoring day '
+        +record.scoring_day+' / selection: '+record.selectionReason+'.');
+      detail.appendChild(header);
+      renderRanks(detail,record);
+      renderSelectedEvidence(detail,record);
+    }
+    grid.appendChild(detail);fragment.appendChild(grid);
+    root.replaceChildren(fragment);
+    if(pendingCanvas){
+      canvasCleanup=bindRecoveryCanvas(
+        pendingCanvas.canvas,pendingCanvas.commands,state);
+    }
+  }
+  async function loadSelected(){
+    const token=++requestToken;
+    const record=currentRecord();
+    state.caseData=null;state.community=null;state.nodeRows=null;
+    state.edgeRows=null;state.overlayNodeRows=null;state.overlayEdgeRows=null;
+    state.error=null;state.loading=false;
+    state.selectedFactorId=null;state.nodeTablePage=0;state.edgeTablePage=0;
+    if(!record||record.detailKind===null){render();return;}
+    const caseRef=view.detailIndex[state.caseId]||view.communityIndex[state.caseId];
+    if(!caseRef){
+      state.error=new Error('Published sidecar reference is missing for this case');
+      render();return;
+    }
+    state.loading=true;render();
+    try{
+      const payload=await recoveryFetchJson(
+        recoverySidecarUrl(view,caseRef.path),caseRef.sha256);
+      if(disposed||token!==requestToken)return;
+      if(!recoveryIsRecord(payload)
+          ||!['1.0','3.0'].includes(payload.schema_version)
+          ||!recoveryIsRecord(payload.case)||payload.case.case_id!==state.caseId
+          ||payload.cohort!==record.cohort
+          ||payload.community_key!==record.community_key){
+        throw new Error('Schema-3 case sidecar identity is invalid');
+      }
+      if(record.cohort==='hybrid_only'
+          &&record.detailKind==='gnn_explanation'
+          &&!recoveryValidateChunkOwner(payload.overlay_evidence)){
+        throw new Error('Schema-3 explanation overlay owner is invalid');
+      }
+      const communityRef=view.communitySidecarIndex[payload.community_key];
+      if(!recoverySchema3Reference(communityRef))
+        throw new Error('Schema-3 community sidecar reference is missing');
+      const community=await recoveryFetchJson(
+        recoverySidecarUrl(view,communityRef.path),communityRef.sha256);
+      if(disposed||token!==requestToken)return;
+      if(!recoverySchema3Community(community,payload.community_key))
+        throw new Error('Schema-3 community sidecar identity is invalid');
+      const detail=payload.detail||(
+        payload.explanation
+          ?{...payload.case,explanation:payload.explanation}
+          :null
+      );
+      state.caseData={...payload,detail};state.community=community;
+      render();
+      const nodeRows=await loadCommunityRows(community,'node',token);
+      if(disposed||token!==requestToken)return;
+      const edgeRows=await loadCommunityRows(community,'edge',token);
+      if(disposed||token!==requestToken)return;
+      state.nodeRows=nodeRows;state.edgeRows=edgeRows;
+      if(record.cohort==='hybrid_only'
+          &&record.detailKind==='gnn_explanation'){
+        const overlayNodeRows=await loadRecoverySchema3OverlayRows(
+          view,payload.overlay_evidence,'node',token);
+        if(disposed||token!==requestToken)return;
+        const overlayEdgeRows=await loadRecoverySchema3OverlayRows(
+          view,payload.overlay_evidence,'edge',token);
+        if(disposed||token!==requestToken)return;
+        const communityView=assembleRecoverySchema3Community(
+          community,nodeRows,edgeRows);
+        if(!communityView.available){
+          throw new Error('Schema-3 community rows are invalid');
+        }
+        const overlayRows=mergeRecoverySchema3Overlay(
+          communityView.community,overlayNodeRows,overlayEdgeRows);
+        if(!overlayRows.available){
+          throw new Error('Schema-3 overlay presentation is invalid: '
+            +overlayRows.reason);
+        }
+        state.overlayNodeRows=overlayNodeRows;
+        state.overlayEdgeRows=overlayEdgeRows;
+      }
+    }catch(error){if(token===requestToken)state.error=error;}
+    if(token===requestToken){state.loading=false;if(!disposed)render();}
+  }
+  async function loadCommunityRows(community,normalized,token){
+    const refs=community[normalized==='node'?'node_chunks':'edge_chunks'];
+    if(!Array.isArray(refs))throw new Error('Community chunk index is missing');
+    const collected=[];
+    for(let index=0;index<refs.length;index+=1){
+      const ref=refs[index];
+      const payload=await recoveryFetchJson(
+        recoverySidecarUrl(view,ref.path),ref.sha256);
+      if(disposed||token!==requestToken)return collected;
+      const rows=recoveryValidatedChunkRows(
+        payload,ref,normalized==='node'?'nodes':'edges');
+      if(rows===null)throw new Error('Chunk offset or count contract is invalid');
+      let resolved=await recoveryResolveCatalogRows(view,rows,
+        normalized==='node'?'nodes':'edges');
+      if(disposed||token!==requestToken)return collected;
+      if(recoveryIsRecord(community.day_view)){
+        resolved=await recoveryApplyDayView(
+          view,community,normalized,index,resolved);
+        if(disposed||token!==requestToken)return collected;
+      }
+      collected.push(...resolved);
+    }
+    return collected;
+  }
+  async function loadRecoverySchema3OverlayRows(view,owner,normalized,token){
+    if(!recoveryValidateChunkOwner(owner)){
+      throw new Error('Overlay chunk owner is invalid');
+    }
+    if(normalized!=='node'&&normalized!=='edge'){
+      throw new Error('Overlay row kind is invalid');
+    }
+    const refs=owner[normalized==='node'?'node_chunks':'edge_chunks'];
+    if(!Array.isArray(refs))throw new Error('Overlay chunk index is missing');
+    const collected=[];
+    for(const ref of refs){
+      const payload=await recoveryFetchJson(
+        recoverySidecarUrl(view,ref.path),ref.sha256);
+      if(disposed||token!==requestToken)return collected;
+      const rows=recoveryValidatedChunkRows(
+        payload,ref,normalized==='node'?'nodes':'edges');
+      if(rows===null)throw new Error('Chunk offset or count contract is invalid');
+      collected.push(...rows);
+    }
+    return collected;
+  }
+  function onV3Click(event){
+    const target=event.target.closest&&event.target.closest(
+      '[data-v3-filter],[data-v3-case],[data-v3-mode],[data-v3-stage],'
+        +'[data-v3-zoom],[data-v3-factor],[data-v3-page]');
+    if(!target||!root.contains(target))return;
+    const data=target.dataset;
+    if(data.v3Filter){
+      state.filter=data.v3Filter;
+      const rows=filterRecoverySchema3Cases(view,state.filter);
+      if(!rows.some(item=>item.caseId===state.caseId)){
+        state.caseId=(rows[0]||{}).caseId||null;
+        loadSelected();return;
+      }
+      render();
+      restoreV3Focus('data-v3-filter','v3Filter',data.v3Filter);return;
+    }
+    if(data.v3Case){
+      if(data.v3Case===state.caseId){render();return;}
+      state.caseId=data.v3Case;loadSelected();return;
+    }
+    if(data.v3Mode){
+      state.mode=data.v3Mode;render();
+      restoreV3Focus('data-v3-mode','v3Mode',data.v3Mode);return;
+    }
+    if(data.v3Stage){
+      state.stageId=data.v3Stage;render();
+      restoreV3Focus('data-v3-stage','v3Stage',data.v3Stage);return;
+    }
+    if(data.v3Factor){
+      state.selectedFactorId=state.selectedFactorId===data.v3Factor
+        ?null:data.v3Factor;
+      render();return;
+    }
+    if(data.v3Page){
+      const direction=data.v3Page.endsWith('next')?1:-1;
+      if(data.v3Page.startsWith('node')){
+        state.nodeTablePage=Math.max(0,state.nodeTablePage+direction);
+      }else{
+        state.edgeTablePage=Math.max(0,state.edgeTablePage+direction);
+      }
+      render();
+      restoreV3Focus('data-v3-page','v3Page',data.v3Page);return;
+    }
+    if(data.v3Zoom==='in')state.scale=Math.min(6,state.scale*1.25);
+    else if(data.v3Zoom==='out')state.scale=Math.max(.25,state.scale/1.25);
+    else{state.scale=1;state.offsetX=0;state.offsetY=0;}
+    render();
+    restoreV3Focus('data-v3-zoom','v3Zoom',data.v3Zoom);
+  }
+  function onV3Input(event){
+    if(event.target.dataset.v3Input==='search'){
+      state.query=event.target.value;render();
+      if(restoreV3Focus('data-v3-input','v3Input','search')){
+        const control=root.querySelector('[data-v3-input="search"]');
+        if(control&&typeof control.setSelectionRange==='function'){
+          control.setSelectionRange(control.value.length,control.value.length);
+        }
+      }
+    }
+  }
+  function onV3Change(event){
+    if(event.target.dataset.v3Change==='density'){
+      state.labelDensity=event.target.value;render();
+      restoreV3Focus('data-v3-change','v3Change','density');
+    }
+  }
+  root.addEventListener('click',onV3Click);root.addEventListener('input',onV3Input);
+  root.addEventListener('change',onV3Change);
+  root.classList.add('v9-recovery','v9-recovery-v3');render();
+  if(state.caseId)loadSelected();
+  return function(){disposed=true;requestToken++;canvasCleanup();
+    if(root.classList&&typeof root.classList.remove==='function'){
+      root.classList.remove('v9-recovery-v3');
+    }
+    root.removeEventListener('click',onV3Click);
+    root.removeEventListener('input',onV3Input);
+    root.removeEventListener('change',onV3Change);};
+}
+
 const recoveryMounts=new WeakMap();
 
 function mountV9RecoveryExplainer(root,artifact,tools){
   if(!root||!root.ownerDocument||!root.classList) return;
   const prior=recoveryMounts.get(root);
   if(prior) prior();
+  if(recoveryIsRecord(artifact)&&artifact.schema_version==='3.0'){
+    root.classList.add('v9-recovery');
+    const cleanup=mountRecoveryExplorerV3(root,artifact,tools);
+    recoveryMounts.set(root,cleanup);
+    return;
+  }
   if(recoveryIsRecord(artifact)&&artifact.schema_version==='2.0'){
     root.classList.add('v9-recovery');
     const cleanup=mountRecoveryExplorerV2(root,artifact,tools);

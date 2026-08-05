@@ -30,6 +30,403 @@ def _context():
     )
 
 
+def _recovery_case(case_id, cohort):
+    from gnn.recovery_observability import RecoveryAnchor, build_recovery_case
+
+    person_id = case_id.split(":", 1)[1]
+    trace = {
+        "baseline_raw": 0.4,
+        "baseline_percentile": 0.4,
+        "baseline_rank": 2,
+        "seed0_gnn_probability": 0.6,
+        "seed0_gnn_percentile": 0.6,
+        "seed0_gnn_rank": 3,
+        "seed0_hybrid_score": 0.55,
+        "seed0_hybrid_rank": 2,
+    }
+    return build_recovery_case(
+        case_id=case_id,
+        recovery_cohort=cohort,
+        anchor_event=RecoveryAnchor(
+            person_id=person_id,
+            event_id=f"event:{person_id}",
+            row_index=0,
+            scoring_day="2025-01-02T00:00:00+00:00",
+            inspected_rank=1,
+        ),
+        subject_id=person_id,
+        subject_display={},
+        decision_trace=trace,
+        recovery_anchor_arm="hybrid" if cohort == "hybrid_only" else "baseline",
+        hybrid_blend_weight=0.75,
+        relationship_categories=("COTRAVEL",),
+        scoring_period="2025-01",
+    )
+
+
+def test_canonical_benchmark_balances_cohorts_and_accounts_structural_controls():
+    from gnn.giant_observability_benchmark import (
+        BenchmarkContext,
+        _benchmark_balanced_controls,
+    )
+
+    hybrid = tuple(
+        _recovery_case(f"case:h{index:02d}", "hybrid_only")
+        for index in range(25)
+    )
+    baseline = tuple(
+        _recovery_case(f"case:b{index:02d}", "baseline_only")
+        for index in range(12)
+    )
+    structural_calls = []
+    instrumentation = []
+    context = BenchmarkContext(
+        checkpoint_id="fixture-checkpoint",
+        engine=SimpleNamespace(),
+        cases=(),
+        publication_cases=(),
+        hybrid_recovery_cases=hybrid,
+        baseline_recovery_cases=baseline,
+    )
+
+    def preflight(_engine, case):
+        oversized = case.case_id in {"case:h00", "case:h01"}
+        return {
+            "eligible": not oversized,
+            "status": "community_only" if oversized else "eligible",
+            "node_count": 129 if oversized else 128,
+            "edge_count": 256,
+            "max_nodes": 128,
+            "max_edges": 256,
+            "reason_code": "node_limit_exceeded" if oversized else "eligible",
+        }
+
+    result = _benchmark_balanced_controls(
+        context,
+        preflight_runner=preflight,
+        structural_runner=lambda _engine, case: structural_calls.append(case.case_id),
+        instrumentation=lambda stage, fields: instrumentation.append((stage, fields)),
+        started_at=0.0,
+    )
+    assert len(result["selection"].selected_ids["hybrid_only"]) == 20
+    assert len(result["selection"].selected_ids["baseline_only"]) == 10
+    assert len(result["eligible_hybrid_ids"]) == 23
+    assert len(result["baseline_structural_case_ids"]) == 10
+    assert len(structural_calls) == 10
+    assert result["baseline_gnnexplainer_encoder_forward_count"] == 0
+    assert result["counts"]["hybrid_requested"] == 20
+    assert result["counts"]["baseline_requested"] == 10
+    assert result["counts"]["hybrid_eligible"] == 23
+    assert result["counts"]["hybrid_oversized"] == 2
+    assert result["counts"]["baseline_attempted"] == 10
+    assert result["counts"]["baseline_generated"] == 10
+    elapsed = [fields["elapsed_seconds"] for _stage, fields in instrumentation]
+    assert elapsed == sorted(elapsed)
+    assert all(fields["peak_rss_bytes"] > 0 for _stage, fields in instrumentation)
+
+
+def test_benchmark_canonical_path_processes_all_selected_hybrid_cases(tmp_path):
+    from gnn.giant_observability_benchmark import BenchmarkContext, run_benchmark
+
+    day = "2025-01-02T00:00:00+00:00"
+    hybrid_technical = tuple(
+        SimpleNamespace(
+            person_id=f"h{index:02d}",
+            anchor=SimpleNamespace(scoring_day=day),
+        )
+        for index in range(22)
+    )
+    baseline_technical = tuple(
+        SimpleNamespace(
+            person_id=f"b{index:02d}",
+            anchor=SimpleNamespace(scoring_day=day),
+        )
+        for index in range(11)
+    )
+    context = BenchmarkContext(
+        checkpoint_id="checkpoint-verified",
+        engine=object(),
+        cases=hybrid_technical,
+        publication_cases=tuple(("hybrid_only", case) for case in hybrid_technical)
+        + tuple(("baseline_only", case) for case in baseline_technical),
+        hybrid_recovery_cases=tuple(
+            _recovery_case(f"case:{case.person_id}", "hybrid_only")
+            for case in hybrid_technical
+        ),
+        baseline_recovery_cases=tuple(
+            _recovery_case(f"case:{case.person_id}", "baseline_only")
+            for case in baseline_technical
+        ),
+    )
+    calls = []
+
+    def runner(_engine, case, restart_seeds):
+        calls.append(case.person_id)
+        return {
+            "restart_seeds": list(restart_seeds),
+            "local_node_count": 3,
+            "local_edge_count": 4,
+            "salient_factor_count": 0,
+            "factor_scoring_call_count": 0,
+            "factor_scoring_cache_hit_count": 0,
+            "factor_actual_encoder_forward_count": 0,
+            "faithfulness_scoring_call_count": 0,
+            "faithfulness_scoring_cache_hit_count": 0,
+            "faithfulness_actual_encoder_forward_count": 0,
+            "gnnexplainer_encoder_forward_count": 1,
+            "other_encoder_forward_count": 0,
+            "explanation": {"case_id": f"case:{case.person_id}"},
+        }
+
+    result = run_benchmark(
+        tmp_path,
+        tmp_path,
+        tmp_path / "benchmark.json",
+        context_loader=lambda *_: context,
+        component_size=lambda _engine, case: int(case.person_id[1:]) + 1,
+        explanation_runner=runner,
+        preflight_runner=lambda _engine, _case: {
+            "eligible": True,
+            "status": "eligible",
+            "node_count": 128,
+            "edge_count": 256,
+            "max_nodes": 128,
+            "max_edges": 256,
+            "reason_code": "eligible",
+        },
+        structural_runner=lambda *_: None,
+        publication_estimator=lambda *_: {
+            "estimated_publication_bytes": 1,
+            "estimated_required_free_bytes": 2,
+            "publication_estimate_basis": "recovery_bundle_dry_run_test",
+            "publication_copy_policy": "test",
+        },
+    )
+    assert len(calls) == 20
+    assert result["balanced_selection"]["baseline_gnnexplainer_encoder_forward_count"] == 0
+    assert result["balanced_selection"]["selected_ids"]["baseline_only"]
+    counts = result["balanced_selection"]["counts"]
+    assert counts["hybrid_selected"] == 20
+    assert counts["hybrid_attempted"] == 20
+    assert counts["baseline_selected"] == 10
+    assert counts["baseline_attempted"] == 10
+    assert counts["baseline_generated"] == 10
+    assert counts["baseline_failed"] == 0
+    assert counts["hybrid_gnnexplainer_encoder_forward_count"] == 20
+    assert counts["hybrid_explanations_wall_seconds"] > 0.0
+    assert counts["baseline_controls_wall_seconds"] >= 0.0
+
+
+def test_benchmark_aggregates_forward_counts_from_failed_hybrid_attempts(tmp_path):
+    from gnn.giant_observability_benchmark import BenchmarkContext, run_benchmark
+
+    day = "2025-01-02T00:00:00+00:00"
+    hybrid_technical = tuple(
+        SimpleNamespace(
+            person_id=f"h{index:02d}",
+            anchor=SimpleNamespace(scoring_day=day),
+        )
+        for index in range(21)
+    )
+    baseline_technical = tuple(
+        SimpleNamespace(
+            person_id=f"b{index:02d}",
+            anchor=SimpleNamespace(scoring_day=day),
+        )
+        for index in range(11)
+    )
+    context = BenchmarkContext(
+        checkpoint_id="checkpoint-verified",
+        engine=object(),
+        cases=hybrid_technical,
+        publication_cases=tuple(("hybrid_only", case) for case in hybrid_technical)
+        + tuple(("baseline_only", case) for case in baseline_technical),
+        hybrid_recovery_cases=tuple(
+            _recovery_case(f"case:{case.person_id}", "hybrid_only")
+            for case in hybrid_technical
+        ),
+        baseline_recovery_cases=tuple(
+            _recovery_case(f"case:{case.person_id}", "baseline_only")
+            for case in baseline_technical
+        ),
+    )
+
+    def measured(case_id, *, include_explanation):
+        payload = {
+            "restart_seeds": [0, 1, 2],
+            "local_node_count": 3,
+            "local_edge_count": 4,
+            "salient_factor_count": 0,
+            "factor_scoring_call_count": 0,
+            "factor_scoring_cache_hit_count": 0,
+            "factor_actual_encoder_forward_count": 0,
+            "faithfulness_scoring_call_count": 0,
+            "faithfulness_scoring_cache_hit_count": 0,
+            "faithfulness_actual_encoder_forward_count": 0,
+            "gnnexplainer_encoder_forward_count": 1,
+            "other_encoder_forward_count": 0,
+        }
+        if include_explanation:
+            payload["explanation"] = {"case_id": case_id}
+        return payload
+
+    calls = []
+
+    def runner(_engine, case, restart_seeds):
+        calls.append(case.person_id)
+        if len(calls) == 1:
+            error = RuntimeError("narrative failed after explainer work")
+            error.measurement = measured(f"case:{case.person_id}", include_explanation=False)
+            raise error
+        payload = measured(f"case:{case.person_id}", include_explanation=True)
+        if len(calls) == 2:
+            payload["salient_factor_count"] = -1
+        return payload
+
+    result = run_benchmark(
+        tmp_path,
+        tmp_path,
+        tmp_path / "benchmark.json",
+        context_loader=lambda *_: context,
+        component_size=lambda _engine, case: int(case.person_id[1:]) + 1,
+        explanation_runner=runner,
+        preflight_runner=lambda _engine, _case: _eligible_preflight(),
+        structural_runner=lambda *_: None,
+        publication_estimator=lambda *_: {
+            "estimated_publication_bytes": 1,
+            "estimated_required_free_bytes": 2,
+            "publication_estimate_basis": "recovery_bundle_dry_run_test",
+            "publication_copy_policy": "test",
+        },
+    )
+
+    counts = result["balanced_selection"]["counts"]
+    assert len(calls) == 20
+    assert counts["hybrid_failed"] == 2
+    assert counts["hybrid_gnnexplainer_encoder_forward_count"] == 20
+
+
+def _eligible_preflight(*_args, **_kwargs):
+    return {
+        "eligible": True,
+        "status": "eligible",
+        "node_count": 4,
+        "edge_count": 6,
+        "max_nodes": 128,
+        "max_edges": 256,
+        "reason_code": "eligible",
+    }
+
+
+def test_benchmark_measures_baseline_explainer_calls_instead_of_assuming_zero():
+    import gnn.giant_observability_benchmark as benchmark_module
+    from gnn.giant_observability_benchmark import (
+        BenchmarkContext,
+        _benchmark_balanced_controls,
+    )
+
+    context = BenchmarkContext(
+        checkpoint_id="fixture-checkpoint",
+        engine=SimpleNamespace(),
+        cases=(),
+        publication_cases=(),
+        hybrid_recovery_cases=tuple(
+            _recovery_case(f"case:h{index:02d}", "hybrid_only") for index in range(2)
+        ),
+        baseline_recovery_cases=tuple(
+            _recovery_case(f"case:b{index:02d}", "baseline_only") for index in range(2)
+        ),
+    )
+
+    def leaking_structural_runner(_engine, _case):
+        benchmark_module.run_member_explanation()
+
+    with pytest.raises(ValueError, match="must not invoke GNNExplainer"):
+        _benchmark_balanced_controls(
+            context,
+            preflight_runner=_eligible_preflight,
+            structural_runner=leaking_structural_runner,
+        )
+
+    result = _benchmark_balanced_controls(
+        context,
+        preflight_runner=_eligible_preflight,
+        structural_runner=lambda *_: None,
+    )
+    assert result["baseline_explainer_call_count"] == 0
+    assert result["baseline_gnnexplainer_encoder_forward_count"] == 0
+    assert result["baseline_explainer_measurement"] == "explainer_entrypoints_only"
+    assert benchmark_module.run_member_explanation.__name__ == "run_member_explanation"
+
+
+def test_benchmark_counts_baseline_structural_failures():
+    from gnn.giant_observability_benchmark import (
+        BenchmarkContext,
+        _benchmark_balanced_controls,
+    )
+
+    context = BenchmarkContext(
+        checkpoint_id="fixture-checkpoint",
+        engine=SimpleNamespace(),
+        cases=(),
+        publication_cases=(),
+        hybrid_recovery_cases=(_recovery_case("case:h00", "hybrid_only"),),
+        baseline_recovery_cases=tuple(
+            _recovery_case(f"case:b{index:02d}", "baseline_only") for index in range(2)
+        ),
+    )
+
+    def failing_structural_runner(_engine, case):
+        if case.case_id == "case:b00":
+            raise RuntimeError("community extraction failed")
+
+    result = _benchmark_balanced_controls(
+        context,
+        preflight_runner=_eligible_preflight,
+        structural_runner=failing_structural_runner,
+    )
+    assert result["counts"]["baseline_attempted"] == 2
+    assert result["counts"]["baseline_generated"] == 1
+    assert result["counts"]["baseline_failed"] == 1
+    assert result["baseline_failures"][0]["case_id"] == "case:b00"
+
+
+def test_benchmark_rejects_selected_hybrid_cases_missing_from_context(tmp_path):
+    from gnn.giant_observability_benchmark import BenchmarkContext, run_benchmark
+
+    day = "2025-01-02T00:00:00+00:00"
+    technical = tuple(
+        SimpleNamespace(
+            person_id=f"h{index:02d}", anchor=SimpleNamespace(scoring_day=day)
+        )
+        for index in range(3)
+    )
+    context = BenchmarkContext(
+        checkpoint_id="checkpoint-verified",
+        engine=object(),
+        cases=technical[:2],
+        publication_cases=tuple(("hybrid_only", case) for case in technical[:2]),
+        hybrid_recovery_cases=tuple(
+            _recovery_case(f"case:{case.person_id}", "hybrid_only")
+            for case in technical
+        ),
+        baseline_recovery_cases=(_recovery_case("case:b00", "baseline_only"),),
+    )
+
+    with pytest.raises(ValueError, match="missing from the verified context"):
+        run_benchmark(
+            tmp_path,
+            tmp_path,
+            tmp_path / "benchmark.json",
+            context_loader=lambda *_: context,
+            component_size=lambda _engine, case: 1,
+            explanation_runner=lambda *_: {},
+            preflight_runner=_eligible_preflight,
+            structural_runner=lambda *_: None,
+            publication_estimator=lambda *_: {},
+        )
+
+
 def test_benchmark_writes_largest_real_case_measurements_atomically(tmp_path):
     from gnn.giant_observability_benchmark import run_benchmark
 
@@ -39,6 +436,7 @@ def test_benchmark_writes_largest_real_case_measurements_atomically(tmp_path):
     checkpoint.mkdir()
     corpus.mkdir()
     calls = []
+    instrumentation = []
 
     def loader(corpus_dir, checkpoint_path):
         calls.append((Path(corpus_dir), Path(checkpoint_path)))
@@ -84,6 +482,9 @@ def test_benchmark_writes_largest_real_case_measurements_atomically(tmp_path):
         component_size=component_size,
         explanation_runner=runner,
         publication_estimator=estimator,
+        instrumentation=lambda stage, fields: instrumentation.append(
+            (stage, fields)
+        ),
     )
 
     assert calls == [(corpus, checkpoint)]
@@ -107,6 +508,18 @@ def test_benchmark_writes_largest_real_case_measurements_atomically(tmp_path):
     assert result["publication_estimate_basis"].startswith("recovery_bundle_dry_run")
     assert json.loads(output.read_text()) == result
     assert not output.with_suffix(".json.tmp").exists()
+    assert [stage for stage, _ in instrumentation] == [
+        "benchmark_start",
+        "selection_start",
+        "selection_day_released",
+        "selection_complete",
+        "explanation_start",
+        "explanation_complete",
+        "benchmark_complete",
+    ]
+    assert all("elapsed_seconds" in fields for _, fields in instrumentation)
+    assert all(fields["elapsed_seconds"] > 0.0 for _, fields in instrumentation)
+    assert all(fields["peak_rss_bytes"] > 0 for _, fields in instrumentation)
 
 
 @pytest.mark.parametrize(
