@@ -978,7 +978,9 @@ def test_schema3_bundle_manifest_is_accepted_by_the_dashboard_publisher(tmp_path
 
     sidecar_path = (
         Path(__file__).resolve().parents[1]
-        / "Documents/Data/scripts/v9_recovery_sidecars.py"
+        / "scripts"
+        / "dashboard"
+        / "v9_recovery_sidecars.py"
     )
     spec = importlib.util.spec_from_file_location(
         "v9_recovery_sidecars_e2e", sidecar_path

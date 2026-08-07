@@ -107,14 +107,14 @@ snapshot directly, so that data must be present outside Git.
 
 ```bash
 # Validate a corpus
-python Documents/Data/scripts/validate_corpus.py Documents/Data/synthetic_cbp_graph_corpus_v9dev
+python -m scripts.data.validate_corpus tests/fixtures/v9dev
 
 # Build V9 dashboard data and shell
-python Documents/Data/scripts/build_dashboard.py Documents/Data/synthetic_cbp_graph_corpus_v9
-python Documents/Data/scripts/build_v9_dashboard.py
+python -m scripts.dashboard.build_dashboard reproducibility/v9_observability_colab_schema3/corpus/synthetic_cbp_graph_corpus_v9
+python -m scripts.dashboard.build_v9_dashboard
 ```
 
-Serve `Documents/Data/v9_dashboard/` through a local HTTP server before opening
+Serve `artifacts/v9/dashboard/` through a local HTTP server before opening
 the dashboard, because it fetches `data_v9.json`.
 
 ## Working Conventions

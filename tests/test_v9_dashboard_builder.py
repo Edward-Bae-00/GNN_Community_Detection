@@ -11,21 +11,16 @@ from pathlib import Path
 import pytest
 
 from test_recovery_bundle import _schema3_sidecar_artifact
-from Documents.Data.scripts import v9_recovery_sidecars
+from scripts.dashboard import v9_recovery_sidecars
 
 
-MODULE_PATH = (
-    __import__("pathlib").Path(__file__).resolve().parents[1]
-    / "Documents/Data/scripts/build_v9_dashboard.py"
-)
+ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = ROOT / "scripts" / "dashboard" / "build_v9_dashboard.py"
 SPEC = importlib.util.spec_from_file_location("build_v9_dashboard", MODULE_PATH)
 BUILDER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BUILDER)
 
-UI_MODULE_PATH = (
-    __import__("pathlib").Path(__file__).resolve().parents[1]
-    / "Documents/Data/scripts/v9_dashboard_ui.py"
-)
+UI_MODULE_PATH = ROOT / "scripts" / "dashboard" / "v9_dashboard_ui.py"
 UI_SPEC = importlib.util.spec_from_file_location("v9_dashboard_ui", UI_MODULE_PATH)
 V9_UI = importlib.util.module_from_spec(UI_SPEC)
 UI_SPEC.loader.exec_module(V9_UI)
@@ -236,7 +231,7 @@ def test_direct_file_data_discards_stale_demo_without_current_diagnostic(
 
 
 def test_v9_ui_includes_model_daily_catch_chart():
-    ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
+    ui_path = ROOT / "scripts" / "dashboard" / "v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
     assert "daily_found_by_day@" in ui
@@ -261,7 +256,7 @@ def test_v9_ui_includes_model_daily_catch_chart():
 
 
 def test_v9_ui_keeps_daily_metric_lens_without_global_controls():
-    ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
+    ui_path = ROOT / "scripts" / "dashboard" / "v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
     assert "Read the V9 result as a daily operating view" in ui
@@ -318,7 +313,7 @@ def test_v9_ui_labels_overall_found_counts_as_event_hits_not_people():
 
 
 def test_v9_ui_removes_whole_pool_model_comparison_and_dead_helpers():
-    ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
+    ui_path = ROOT / "scripts" / "dashboard" / "v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
     assert "Whole-pool model comparison" not in ui
@@ -333,7 +328,7 @@ def test_v9_ui_removes_whole_pool_model_comparison_and_dead_helpers():
 
 
 def test_v9_results_exposes_daily_budgets_only():
-    ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
+    ui_path = ROOT / "scripts" / "dashboard" / "v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
     assert "Depth event recall" not in ui
@@ -472,7 +467,7 @@ def test_run_demo_daily_budget_contract_excludes_fifty_per_day():
 
 
 def test_v9_ui_adds_independent_simulated_catch_contract():
-    ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
+    ui_path = ROOT / "scripts" / "dashboard" / "v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
     assert ">Simulated catches</h4>" in ui
@@ -547,7 +542,7 @@ def test_v9_ui_removes_dead_model_notes_and_bar_selectors():
 
 
 def test_v9_ui_keeps_daily_volume_and_simulated_catches_independent():
-    ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
+    ui_path = ROOT / "scripts" / "dashboard" / "v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
     for element_id in (
@@ -1108,17 +1103,6 @@ def test_load_recovery_artifact_warns_and_returns_none_when_invalid(
 
 
 def test_load_recovery_artifact_packages_schema3_sidecars(tmp_path, monkeypatch):
-    sidecar_path = (
-        Path(__file__).resolve().parents[1]
-        / "Documents/Data/scripts/v9_recovery_sidecars.py"
-    )
-    sidecar_spec = importlib.util.spec_from_file_location(
-        "v9_recovery_sidecars", sidecar_path
-    )
-    v9_recovery_sidecars = importlib.util.module_from_spec(sidecar_spec)
-    sidecar_spec.loader.exec_module(v9_recovery_sidecars)
-    monkeypatch.setitem(sys.modules, "v9_recovery_sidecars", v9_recovery_sidecars)
-
     artifact = {"schema_version": "3.0"}
     path = tmp_path / "hybrid_recovery_explanations_v9.json"
     path.write_text(json.dumps(artifact))
@@ -1135,17 +1119,6 @@ def test_load_recovery_artifact_packages_schema3_sidecars(tmp_path, monkeypatch)
 def test_load_recovery_artifact_publishes_prepackaged_schema3_manifest(
     tmp_path, monkeypatch
 ):
-    sidecar_path = (
-        Path(__file__).resolve().parents[1]
-        / "Documents/Data/scripts/v9_recovery_sidecars.py"
-    )
-    sidecar_spec = importlib.util.spec_from_file_location(
-        "v9_recovery_sidecars", sidecar_path
-    )
-    v9_recovery_sidecars = importlib.util.module_from_spec(sidecar_spec)
-    sidecar_spec.loader.exec_module(v9_recovery_sidecars)
-    monkeypatch.setitem(sys.modules, "v9_recovery_sidecars", v9_recovery_sidecars)
-
     artifact = {"schema_version": "3.0", "community_sidecar_index": {}}
     path = tmp_path / "hybrid_recovery_explanations_v9.json"
     path.write_text(json.dumps(artifact))
@@ -1604,7 +1577,7 @@ def test_recovery_assets_are_injected_once_before_renderers_and_style_end():
 
 
 def test_recovery_assets_include_graph_first_explanation_contract():
-    from Documents.Data.scripts import v9_recovery_explainer_ui as recovery_ui
+    from scripts.dashboard import v9_recovery_explainer_ui as recovery_ui
 
     template = (
         "<style>base</style><script>const Tabs={\n"
@@ -1625,7 +1598,7 @@ def test_recovery_assets_include_graph_first_explanation_contract():
 
 
 def test_v9_results_injection_contains_evidence_first_graph_language_once():
-    from Documents.Data.scripts import v9_recovery_explainer_ui as recovery_ui
+    from scripts.dashboard import v9_recovery_explainer_ui as recovery_ui
 
     recovery = recovery_ui.V9_RECOVERY_EXPLAINER_JS
     assert recovery.count("Evidence first") == 1
@@ -1711,12 +1684,12 @@ def test_dashboard_generation_failure_removes_unpublished_staging_directory(
 def test_dashboard_final_log_requires_http_for_schema_v2():
     source = MODULE_PATH.read_text()
 
-    assert "python -m http.server 8000 --directory Documents/Data/v9_dashboard" in source
+    assert "python -m http.server 8000 --directory artifacts/v9/dashboard" in source
     assert "open v9_dashboard/index.html directly" not in source
 
 
 def _load_gnn_architecture_ui_module():
-    path = ROOT / "Documents/Data/scripts/v9_gnn_architecture_ui.py"
+    path = ROOT / "scripts" / "dashboard" / "v9_gnn_architecture_ui.py"
     spec = importlib.util.spec_from_file_location("v9_gnn_architecture_ui", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -2531,7 +2504,7 @@ def test_generated_dashboard_removes_legacy_duplicate_sections_and_styles():
 
 
 def test_unsupervised_dashboard_explains_modes_and_leakage_boundaries():
-    ui_path = Path(__file__).resolve().parents[1] / "Documents/Data/scripts/v9_dashboard_ui.py"
+    ui_path = ROOT / "scripts" / "dashboard" / "v9_dashboard_ui.py"
     ui = ui_path.read_text()
 
     assert "V9 designed positive control" in ui

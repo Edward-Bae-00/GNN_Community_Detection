@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build a V9-only dashboard from the V9 standalone shell.
 
-Run after `build_dashboard.py Documents/Data/synthetic_cbp_graph_corpus_v9`
+Run after `python -m scripts.dashboard.build_dashboard
+reproducibility/v9_observability_colab_schema3/corpus/synthetic_cbp_graph_corpus_v9`
 has produced `dashboard_data.json`.
 """
 from __future__ import annotations
@@ -18,11 +19,14 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.dirname(HERE)
-REPO_ROOT = os.path.dirname(os.path.dirname(DATA_DIR))
-V9_CORPUS = os.path.join(DATA_DIR, "synthetic_cbp_graph_corpus_v9")
+from gnn.paths import (
+    REPO_ROOT as REPO_ROOT_PATH,
+    V9_CORPUS_DIR as V9_CORPUS_PATH,
+    V9_DASHBOARD_DIR as V9_DASHBOARD_PATH,
+    V9_EXPLANATION_ARCHIVE as V9_EXPLANATION_PATH,
+)
+REPO_ROOT = os.fspath(REPO_ROOT_PATH)
+V9_CORPUS = os.fspath(V9_CORPUS_PATH)
 V9_DATA = os.path.join(V9_CORPUS, "dashboard_data.json")
 V9_DEMO = os.path.join(REPO_ROOT, "gnn", "diagnostics", "demo_comparison_v9.json")
 DIAGNOSTICS_DIR = os.path.join(REPO_ROOT, "gnn", "diagnostics")
@@ -35,12 +39,12 @@ V9_RECOVERY_EXPLANATIONS = os.path.join(
     "diagnostics",
     "hybrid_recovery_explanations_v9.json",
 )
-V9_RECOVERY_ARCHIVE = os.path.join(REPO_ROOT, "v9_schema3_results.zip")
+V9_RECOVERY_ARCHIVE = os.fspath(V9_EXPLANATION_PATH)
 V9_UNSUPERVISED_ARTIFACT = "unsupervised_ad_results_v9.json"
 GENERIC_UNSUPERVISED_ARTIFACT = "unsupervised_ad_results.json"
 V9_CORPUS_NAME = "synthetic_cbp_graph_corpus_v9"
 V9_GNN_ARCHITECTURE_IDS = ("sage", "rgcn", "gat", "gin", "kpiaa")
-OUT_DIR = os.path.join(DATA_DIR, "v9_dashboard")
+OUT_DIR = os.fspath(V9_DASHBOARD_PATH)
 
 
 def p(*args):
@@ -125,9 +129,9 @@ def _load_recovery_artifact(path, output_dir=None):
         p(f"[v9-dashboard] WARNING: {path} not found; case evidence unavailable.")
         return None
     if os.fspath(path).lower().endswith(".zip"):
-        if HERE not in sys.path:
-            sys.path.insert(0, HERE)
-        from v9_recovery_sidecars import publish_prepackaged_schema3_zip
+        from scripts.dashboard.v9_recovery_sidecars import (
+            publish_prepackaged_schema3_zip,
+        )
 
         try:
             dashboard_output = OUT_DIR if output_dir is None else output_dir
@@ -149,9 +153,7 @@ def _load_recovery_artifact(path, output_dir=None):
         p("[v9-dashboard] WARNING: unsupported recovery artifact schema.")
         return None
     if artifact.get("schema_version") == "3.0":
-        if HERE not in sys.path:
-            sys.path.insert(0, HERE)
-        from v9_recovery_sidecars import (
+        from scripts.dashboard.v9_recovery_sidecars import (
             package_schema3_sidecars,
             publish_prepackaged_schema3_manifest,
         )
@@ -562,8 +564,9 @@ def _load_v9_gnn_architecture_artifact(path):
 def _load_v9_data(output_dir=None) -> dict:
     if not os.path.exists(V9_DATA):
         p(f"[v9-dashboard] ERROR: {V9_DATA} not found.")
-        p("[v9-dashboard] Run: .venv/bin/python Documents/Data/scripts/build_dashboard.py "
-          "Documents/Data/synthetic_cbp_graph_corpus_v9")
+        p("[v9-dashboard] Run: python -m scripts.dashboard.build_dashboard "
+          "reproducibility/v9_observability_colab_schema3/corpus/"
+          "synthetic_cbp_graph_corpus_v9")
         sys.exit(1)
     with open(V9_DATA) as f:
         data = json.load(f)
@@ -948,8 +951,7 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
             html = html.replace(old_iife_body.group(0), "(async function(){\n")
 
     # 3. Inject the V9 Results tab
-    sys.path.insert(0, HERE)
-    from v9_dashboard_ui import (
+    from scripts.dashboard.v9_dashboard_ui import (
         V9_RESULTS_CSS,
         V9_RESULTS_JS,
         V9_RESULTS_NAV_BTN,
@@ -961,19 +963,25 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
         UNSUP_AD_VIEW_MODEL_JS,
         UNSUP_AD_CHART_JS,
     )
-    from v9_summary_page import (
+    from scripts.dashboard.v9_summary_page import (
         SUMMARY_PAGE_CSS,
         SUMMARY_PAGE_RENDERER_JS,
         SUMMARY_PAGE_RUNTIME_JS,
     )
-    from v9_recovery_explainer_ui import (
+    from scripts.dashboard.v9_recovery_explainer_ui import (
         V9_RECOVERY_EXPLAINER_CSS,
         V9_RECOVERY_EXPLAINER_JS,
     )
-    from v9_gnn_architecture_ui import (
+    from scripts.dashboard.v9_gnn_architecture_ui import (
         GNN_ARCHITECTURE_VIEW_MODEL_JS,
         GNN_ARCHITECTURE_UI_JS,
         GNN_ARCHITECTURE_CSS,
+    )
+    from scripts.dashboard.v9_design_system import (
+        build_design_system_css,
+        inject_provenance,
+        provenance_from_meta,
+        strip_google_fonts_import,
     )
 
     summary_renderer = ""
@@ -1013,13 +1021,6 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
     # 3b. Design system layer. Appended after every other stylesheet so it wins
     # the cascade, which is the only durable seam: the base sheet lives in the
     # generated, gitignored template and is rewritten on each build.
-    from v9_design_system import (
-        build_design_system_css,
-        inject_provenance,
-        provenance_from_meta,
-        strip_google_fonts_import,
-    )
-
     html = strip_google_fonts_import(html)
     html = html.replace("</style>", build_design_system_css() + "\n</style>", 1)
     html = inject_provenance(html, provenance_from_meta(data.get("meta")))
@@ -1046,7 +1047,7 @@ def _build_staged_dashboard(staged_output, destination, tmpl_path):
     final_html = destination / "index.html"
     p(f"[v9-dashboard] wrote {final_data} ({os.path.getsize(final_data)/1e6:.2f} MB)")
     p(f"[v9-dashboard] wrote {final_html} ({os.path.getsize(final_html)/1e6:.2f} MB)")
-    p("[v9-dashboard] run: python -m http.server 8000 --directory Documents/Data/v9_dashboard")
+    p("[v9-dashboard] run: python -m http.server 8000 --directory artifacts/v9/dashboard")
     p("[v9-dashboard] then open http://localhost:8000/index.html")
 
 

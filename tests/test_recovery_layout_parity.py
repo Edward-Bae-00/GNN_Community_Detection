@@ -18,10 +18,8 @@ import pytest
 
 from gnn.sage_explainer import DISPLAY_LAYOUT_RADIUS, display_hop_ring_layout
 
-UI_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "Documents/Data/scripts/v9_recovery_explainer_ui.py"
-)
+ROOT = Path(__file__).resolve().parents[1]
+UI_PATH = ROOT / "scripts" / "dashboard" / "v9_recovery_explainer_ui.py"
 UI_SPEC = importlib.util.spec_from_file_location("v9_recovery_explainer_ui", UI_PATH)
 UI = importlib.util.module_from_spec(UI_SPEC)
 UI_SPEC.loader.exec_module(UI)

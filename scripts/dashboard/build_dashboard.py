@@ -3,7 +3,7 @@
 build_dashboard.py  --  Generate a standalone HTML dashboard for a synthetic CBP graph corpus.
 
 Usage:
-    python3 build_dashboard.py <corpus_dir>
+    python -m scripts.dashboard.build_dashboard <corpus_dir>
 
 Reads the corpus CSVs, computes the aggregations the v2 dashboard's 8 analytics tabs expect,
 plus a new `explorer` block (sampled person-person graph with smuggling-role / connection /
@@ -1326,7 +1326,7 @@ def main(corpus_dir):
     #  Render HTML
     # ===================================================================
     try:
-        out_html = render_html(DATA, name)
+        out_html = render_html(DATA, name, corpus_dir)
     except FileNotFoundError as exc:
         p(f"[build] skipped standalone HTML: template missing ({exc.filename})")
     else:
@@ -1336,11 +1336,11 @@ def main(corpus_dir):
         p(f"[build] wrote {out_path}  ({os.path.getsize(out_path)/1e6:.2f} MB)")
 
 
-def render_html(DATA, name):
-    """Splice DATA + Community Explorer into the v2 dashboard template."""
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    tmpl_path = os.path.join(here, "synthetic_cbp_graph_corpus_v8", "dashboard_standalone.html")
-    html = open(tmpl_path).read()
+def render_html(DATA, name, corpus_dir):
+    """Splice data and the explorer into the corpus's standalone template."""
+    tmpl_path = os.path.join(corpus_dir, "dashboard_standalone.html")
+    with open(tmpl_path, encoding="utf-8") as tmpl_file:
+        html = tmpl_file.read()
 
     data_json = json.dumps(DATA, separators=(",", ":"))
 
@@ -1398,11 +1398,11 @@ def render_html(DATA, name):
 
 
 # Explorer CSS + JS are defined in a sibling module to keep this file readable.
-from explorer_ui import EXPLORER_CSS, EXPLORER_JS  # noqa: E402
+from scripts.dashboard.explorer_ui import EXPLORER_CSS, EXPLORER_JS  # noqa: E402
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        p("usage: python3 build_dashboard.py <corpus_dir>")
+        p("usage: python -m scripts.dashboard.build_dashboard <corpus_dir>")
         sys.exit(1)
     main(sys.argv[1])

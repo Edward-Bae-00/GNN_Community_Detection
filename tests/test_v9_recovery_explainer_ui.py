@@ -9,10 +9,8 @@ from pathlib import Path
 import pytest
 
 
-UI_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "Documents/Data/scripts/v9_recovery_explainer_ui.py"
-)
+ROOT = Path(__file__).resolve().parents[1]
+UI_PATH = ROOT / "scripts" / "dashboard" / "v9_recovery_explainer_ui.py"
 UI_SPEC = importlib.util.spec_from_file_location("v9_recovery_explainer_ui", UI_PATH)
 UI = importlib.util.module_from_spec(UI_SPEC)
 UI_SPEC.loader.exec_module(UI)
@@ -3158,7 +3156,7 @@ def test_schema3_graph_groups_evidence_stage_relationship_and_navigation_control
 
 
 def test_v9_results_injection_contains_evidence_first_graph_language_once():
-    from Documents.Data.scripts import v9_recovery_explainer_ui as recovery_ui
+    from scripts.dashboard import v9_recovery_explainer_ui as recovery_ui
 
     recovery = recovery_ui.V9_RECOVERY_EXPLAINER_JS
     assert recovery.count("Evidence first") == 1

@@ -56,10 +56,10 @@ demonstration over V8/V9 synthetic corpora.
 - `Documents/Data/synthetic_cbp_graph_corpus_v9/` - full V9 positive-control
   corpus
 - `Documents/Data/synthetic_cbp_graph_corpus_v9dev/` - small V9 dev/test corpus
-- `Documents/Data/scripts/validate_corpus.py` - corpus validation harness
-- `Documents/Data/scripts/build_dashboard.py` and `build_v9_dashboard.py` -
+- `scripts/data/validate_corpus.py` - corpus validation harness
+- `scripts/dashboard/build_dashboard.py` and `build_v9_dashboard.py` -
   dashboard builders
-- `Documents/Data/v9_dashboard/` - generated V9 dashboard output
+- `artifacts/v9/dashboard/` - generated V9 dashboard output
 - `Documents/Data/changes_3.md` - canonical V9 design/results log in this
   checkout
 - `Documents/Data/DATA_GUIDE.md` - older broad data guide; currently contains

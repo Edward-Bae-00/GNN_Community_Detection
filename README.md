@@ -99,19 +99,19 @@ that corpus to be present outside Git.
 
 ```bash
 # Validate a corpus
-python Documents/Data/scripts/validate_corpus.py Documents/Data/synthetic_cbp_graph_corpus_v9dev
+python -m scripts.data.validate_corpus tests/fixtures/v9dev
 
 # Build the V9 dashboard
-python Documents/Data/scripts/build_dashboard.py Documents/Data/synthetic_cbp_graph_corpus_v9
-python Documents/Data/scripts/build_v9_dashboard.py
+python -m scripts.dashboard.build_dashboard reproducibility/v9_observability_colab_schema3/corpus/synthetic_cbp_graph_corpus_v9
+python -m scripts.dashboard.build_v9_dashboard
 ```
 
-To view the dashboard, serve `Documents/Data/v9_dashboard/` through a local HTTP
+To view the dashboard, serve `artifacts/v9/dashboard/` through a local HTTP
 server so `index.html` can fetch `data_v9.json`.
 
 ## Current Result Summary
 
-`Documents/Data/changes_3.md` is the canonical V9 result log in this checkout.
+`docs/research/changes_3.md` is the canonical V9 result log in this checkout.
 It records the positive-control conclusion: on V9, the caught-propagation RGCN
 recovers substantially more hidden carriers than the strong tabular baseline at
 operational depth because co-travel is now present in the graph the model sees.
@@ -125,7 +125,7 @@ artifacts before relying on them.
 
 - `Documents/Data/DATA_GUIDE.md` still contains V7-era broad documentation. Use
   the V8/V9 corpus READMEs and `changes_3.md` for current-track specifics.
-- `Documents/Data/scripts/` contains validation, dashboard, and ER helper
+- `scripts/data/` and `scripts/dashboard/` contain validation, dashboard, and ER helper
   utilities. Corpus generation has been retired from this checkout; local
   V8/V9/V9dev snapshots are the source artifacts.
 - `__pycache__/`, `.pytest_cache/`, and `.DS_Store` files are local/generated

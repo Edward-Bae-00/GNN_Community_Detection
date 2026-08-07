@@ -1,5 +1,14 @@
 # Project Memory
 
+## 2026-08-06: dashboard and data utility packaging
+
+- Dashboard builders, UI modules, assets, and recovery sidecar helpers live in
+  the importable `scripts.dashboard` package; corpus validation lives in
+  `scripts.data.validate_corpus`.
+- V9 dashboard code uses the canonical `gnn.paths` contracts and publishes to
+  `artifacts/v9/dashboard`; serve that directory over HTTP for sidecar-backed
+  pages. `v9_dashboard_ui.py` was moved without behavior changes.
+
 ## V9 K=5 observability architecture
 
 - The graph node universe is the complete sorted canonical oracle universe, including disconnected people. Train, validation, and test identities are validated against it before any baseline or GNN fitting. Missing, blank, non-string, or outside-universe mappings fail closed; scoring never substitutes `0.0`.

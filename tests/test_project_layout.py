@@ -1,5 +1,6 @@
 """Repository metadata and canonical path contracts."""
 import os
+import importlib
 import re
 import subprocess
 import sys
@@ -77,3 +78,18 @@ def test_corpus_override_isolated_subprocess(tmp_path):
 
     assert result.stdout.strip() == str(expected)
     assert os.environ.get("CBP_CORPUS_DIR") == parent_value
+
+
+def test_dashboard_and_data_utilities_are_importable_packages():
+    assert (ROOT / "scripts/dashboard/build_dashboard.py").is_file()
+    assert (ROOT / "scripts/dashboard/build_v9_dashboard.py").is_file()
+    assert (ROOT / "scripts/data/validate_corpus.py").is_file()
+    assert not (ROOT / "Documents/Data/scripts").exists()
+
+    build_v9_dashboard = importlib.import_module(
+        "scripts.dashboard.build_v9_dashboard"
+    )
+    assert build_v9_dashboard.V9_CORPUS_NAME == "synthetic_cbp_graph_corpus_v9"
+
+    sidecars = importlib.import_module("scripts.dashboard.v9_recovery_sidecars")
+    assert callable(sidecars.publish_prepackaged_schema3_zip)

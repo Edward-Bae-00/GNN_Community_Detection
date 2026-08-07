@@ -2433,7 +2433,7 @@ async function recoveryFetchJson(url,expectedHash){
 
 function recoveryServerHelp(error){
   return 'Sidecars require local HTTP. From the repository root run: '
-    +'python -m http.server 8000 --directory Documents/Data/v9_dashboard, '
+    +'python -m http.server 8000 --directory artifacts/v9/dashboard, '
     +'then open http://localhost:8000/index.html. Fetch error: '
     +String(error&&error.message||error);
 }

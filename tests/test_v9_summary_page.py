@@ -1,21 +1,12 @@
-import importlib.util
 import json
 import subprocess
 from pathlib import Path
 
+from scripts.dashboard import build_v9_dashboard as BUILDER
+from scripts.dashboard import v9_summary_page as SUMMARY
+
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILDER_SPEC = importlib.util.spec_from_file_location(
-    "build_v9_dashboard", ROOT / "Documents/Data/scripts/build_v9_dashboard.py"
-)
-BUILDER = importlib.util.module_from_spec(BUILDER_SPEC)
-BUILDER_SPEC.loader.exec_module(BUILDER)
-
-SUMMARY_SPEC = importlib.util.spec_from_file_location(
-    "v9_summary_page", ROOT / "Documents/Data/scripts/v9_summary_page.py"
-)
-SUMMARY = importlib.util.module_from_spec(SUMMARY_SPEC)
-SUMMARY_SPEC.loader.exec_module(SUMMARY)
 
 
 def test_summary_renderer_replaces_only_the_existing_overview_renderer():

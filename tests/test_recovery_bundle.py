@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from gnn.recovery_bundle import RecoveryBundleError, RecoveryBundleWriter
-from Documents.Data.scripts import v9_recovery_sidecars
+from scripts.dashboard import v9_recovery_sidecars
 
 
 def test_recovery_sidecars_are_schema3_only():
