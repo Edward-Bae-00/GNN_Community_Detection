@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 from contextlib import contextmanager
 import hashlib
 import json
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -92,9 +94,16 @@ def _verified_explanation_archive(path: Path, expected_sha256: str):
                 f"explanation ZIP SHA-256 mismatch: expected {expected_sha256}, got {actual}"
             )
         handle.seek(0)
-        with zipfile.ZipFile(handle) as archive:
-            members = _safe_members(archive)
-            yield archive, len(members)
+        try:
+            with zipfile.ZipFile(handle) as archive:
+                members = _safe_members(archive)
+                yield archive, len(members)
+        except AssetError:
+            raise
+        except Exception as error:
+            raise AssetError(
+                f"explanation ZIP is corrupt or extraction failed: {error}"
+            ) from error
         if _archive_metadata(handle, path) != initial_metadata:
             raise AssetError(f"explanation ZIP changed while being processed: {path}")
 
@@ -103,9 +112,18 @@ def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     members = archive.infolist()
     if not members:
         raise AssetError("explanation ZIP is empty")
+
+    raw_names: set[str] = set()
+    normalized_kinds: dict[str, str] = {}
     for member in members:
         name = member.filename
+        if name in raw_names:
+            raise AssetError(f"duplicate ZIP member: {name!r}")
+        raw_names.add(name)
+
         relative = PurePosixPath(name)
+        if not relative.parts:
+            raise AssetError(f"unsafe ZIP member: {name!r}")
         mode = (member.external_attr >> 16) & 0o170000
         if (
             not name
@@ -113,17 +131,49 @@ def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
             or relative.is_absolute()
             or ".." in relative.parts
             or relative.parts[0] != ARCHIVE_PREFIX
-            or mode == stat.S_IFLNK
         ):
             raise AssetError(f"unsafe ZIP member: {name!r}")
-    required = {
+
+        is_directory = name.endswith("/")
+        if mode not in (0, stat.S_IFREG, stat.S_IFDIR):
+            raise AssetError(f"special ZIP member type: {name!r}")
+        if is_directory:
+            if mode == stat.S_IFREG:
+                raise AssetError(f"unsafe ZIP member type: {name!r}")
+            kind = "directory"
+        else:
+            if mode == stat.S_IFDIR:
+                raise AssetError(f"directory ZIP member must end with '/': {name!r}")
+            kind = "file"
+
+        normalized = relative.as_posix()
+        if normalized in normalized_kinds:
+            raise AssetError(f"normalized ZIP member collision: {name!r}")
+        normalized_kinds[normalized] = kind
+
+    normalized_names = sorted(normalized_kinds)
+    for name, kind in normalized_kinds.items():
+        if kind != "file":
+            continue
+        descendant_index = bisect_left(normalized_names, name + "/")
+        if (
+            descendant_index < len(normalized_names)
+            and normalized_names[descendant_index].startswith(name + "/")
+        ):
+            raise AssetError(f"file/directory prefix collision: {name!r}")
+
+    required = (
         f"{ARCHIVE_PREFIX}/result.json",
         f"{ARCHIVE_PREFIX}/recovery/current.json",
-    }
-    names = {member.filename.rstrip("/") for member in members}
-    missing = sorted(required - names)
+    )
+    missing = sorted(name for name in required if name not in normalized_kinds)
     if missing:
         raise AssetError(f"explanation ZIP is missing: {', '.join(missing)}")
+    non_files = [name for name in required if normalized_kinds[name] != "file"]
+    if non_files:
+        raise AssetError(
+            f"explanation ZIP requires regular file: {', '.join(non_files)}"
+        )
     return members
 
 
@@ -236,15 +286,20 @@ def main(argv: list[str] | None = None) -> int:
     compare.add_argument("left", type=Path)
     compare.add_argument("right", type=Path)
     args = parser.parse_args(argv)
-    if args.command == "verify-explanations":
-        print(json.dumps({"members": verify_explanation_archive(args.archive)}))
-        return 0
-    if args.command == "extract-explanations":
-        print(extract_explanations(args.archive, args.destination))
-        return 0
-    report = compare_trees(args.left, args.right)
-    print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if not any(report.values()) else 2
+    try:
+        if args.command == "verify-explanations":
+            print(json.dumps({"members": verify_explanation_archive(args.archive)}))
+            return 0
+        if args.command == "extract-explanations":
+            print(extract_explanations(args.archive, args.destination))
+            return 0
+        report = compare_trees(args.left, args.right)
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if not any(report.values()) else 2
+    except AssetError as error:
+        message = " ".join(str(error).splitlines())
+        print(f"error: {message}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

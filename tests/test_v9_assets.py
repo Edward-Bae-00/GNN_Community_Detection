@@ -2,6 +2,7 @@
 import hashlib
 import os
 import re
+import stat
 import zipfile
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from scripts.data.v9_assets import (
     assert_hydrated,
     compare_trees,
     extract_explanations,
+    main,
     verify_explanation_archive,
 )
 
@@ -21,6 +23,13 @@ def _write_zip(path: Path, members: dict[str, bytes]) -> str:
     with zipfile.ZipFile(path, "w") as archive:
         for name, payload in members.items():
             archive.writestr(name, payload)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_zip_entries(path: Path, entries) -> str:
+    with zipfile.ZipFile(path, "w") as archive:
+        for member, payload in entries:
+            archive.writestr(member, payload)
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -146,6 +155,126 @@ def test_archive_rejects_traversal(tmp_path):
         verify_explanation_archive(archive, digest)
 
 
+def test_required_members_must_be_regular_files(tmp_path):
+    archive = tmp_path / "directories.zip"
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/result.json/", b""),
+            ("v9_schema3_results/recovery/current.json/", b""),
+        ],
+    )
+
+    with pytest.raises(AssetError, match="regular file"):
+        verify_explanation_archive(archive, digest)
+
+
+def test_archive_rejects_duplicate_raw_member_names(tmp_path):
+    archive = tmp_path / "duplicate.zip"
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/result.json", b"{}"),
+            ("v9_schema3_results/result.json", b"duplicate"),
+            ("v9_schema3_results/recovery/current.json", b"{}"),
+        ],
+    )
+
+    with pytest.raises(AssetError, match="duplicate ZIP member"):
+        verify_explanation_archive(archive, digest)
+
+
+def test_archive_rejects_normalized_member_collisions(tmp_path):
+    archive = tmp_path / "normalized-collision.zip"
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/result.json", b"{}"),
+            ("v9_schema3_results/./result.json", b"duplicate"),
+            ("v9_schema3_results/recovery/current.json", b"{}"),
+        ],
+    )
+
+    with pytest.raises(AssetError, match="normalized ZIP member collision"):
+        verify_explanation_archive(archive, digest)
+
+
+def test_archive_rejects_file_directory_prefix_collisions(tmp_path):
+    archive = tmp_path / "prefix-collision.zip"
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/result.json", b"{}"),
+            ("v9_schema3_results/recovery", b"file"),
+            ("v9_schema3_results/recovery/current.json", b"{}"),
+        ],
+    )
+
+    with pytest.raises(AssetError, match="file/directory prefix collision"):
+        verify_explanation_archive(archive, digest)
+
+
+def test_archive_rejects_non_regular_special_member(tmp_path):
+    archive = tmp_path / "special.zip"
+    special = zipfile.ZipInfo("v9_schema3_results/recovery/socket")
+    special.external_attr = (stat.S_IFSOCK | 0o644) << 16
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/result.json", b"{}"),
+            ("v9_schema3_results/recovery/current.json", b"{}"),
+            (special, b"special"),
+        ],
+    )
+
+    with pytest.raises(AssetError, match="special ZIP member type"):
+        verify_explanation_archive(archive, digest)
+
+
+def test_malformed_archive_with_matching_digest_is_normalized(tmp_path):
+    archive = tmp_path / "malformed.zip"
+    archive.write_bytes(b"not a ZIP archive")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    with pytest.raises(AssetError, match="ZIP.*corrupt|malformed") as raised:
+        verify_explanation_archive(archive, digest)
+
+    assert "BadZipFile" not in str(raised.value)
+
+
+def test_main_normalizes_asset_error_to_one_stderr_line(tmp_path, capsys):
+    result = main(["verify-explanations", "--archive", str(tmp_path / "missing.zip")])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err.startswith("error: ")
+    assert len(captured.err.splitlines()) == 1
+
+
+def test_injected_extraction_error_cleans_stage_and_destination(tmp_path, monkeypatch):
+    archive = tmp_path / "corrupt-during-extract.zip"
+    digest = _write_zip(
+        archive,
+        {
+            "v9_schema3_results/result.json": b"{}",
+            "v9_schema3_results/recovery/current.json": b"{}",
+        },
+    )
+
+    def fail_extractall(self, path):
+        raise zipfile.BadZipFile("injected extraction corruption")
+
+    monkeypatch.setattr(zipfile.ZipFile, "extractall", fail_extractall)
+    destination = tmp_path / "published"
+
+    with pytest.raises(AssetError, match="ZIP.*corrupt|extraction"):
+        extract_explanations(archive, destination, digest)
+
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".v9-extract-*"))
+
+
 def test_tree_comparison_reports_missing_and_changed_files(tmp_path):
     left, right = tmp_path / "left", tmp_path / "right"
     left.mkdir()
@@ -161,6 +290,17 @@ def test_tree_comparison_reports_missing_and_changed_files(tmp_path):
         "left_only": ["left-only.csv"],
         "right_only": [],
     }
+
+
+def test_main_compare_difference_returns_two(tmp_path, capsys):
+    left = _populated_tree(tmp_path / "left")
+    right = _populated_tree(tmp_path / "right")
+    (right / "data.csv").write_text("different")
+
+    result = main(["compare-corpora", str(left), str(right)])
+
+    assert result == 2
+    assert capsys.readouterr().err == ""
 
 
 def _populated_tree(path: Path) -> Path:
