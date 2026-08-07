@@ -20,10 +20,11 @@ The production policy is:
    units: there is no CUDA path in this package (the sole device reference is
    `device="cpu"` in `gnn/graphmodel_rgcn.py`) and this path scores from a
    verified checkpoint rather than training. RAM is the real constraint.
-3. Open `v9_schema3_observability.ipynb` and run all cells from the fresh
-   runtime. If `/content/v9_observability_colab_schema3` already exists, stop
-   and inspect or remove it deliberately before copying; do not silently merge
-   an old local package.
+3. Open `v9_schema3_observability.ipynb` and run all cells. Run all
+   automatically replaces only the VM-local
+   `/content/v9_observability_colab_schema3` copy before copying from Drive.
+   The Drive source is not deleted, but unsaved edits in the local copy are
+   discarded; a fresh runtime is simplest.
 
 Colab Python cell:
 
@@ -35,8 +36,10 @@ import shutil
 drive.mount("/content/drive")
 source = Path("/content/drive/MyDrive/v9_observability_colab_schema3")
 destination = Path("/content/v9_observability_colab_schema3")
-if destination.exists():
-    raise RuntimeError(f"Remove or inspect {destination} before copying")
+if destination.is_symlink() or destination.is_file():
+    destination.unlink()
+elif destination.exists():
+    shutil.rmtree(destination)
 shutil.copytree(source, destination)
 ```
 
@@ -50,9 +53,11 @@ Colab shell/magic cell:
   --export-dir /content/drive/MyDrive/v9_schema3_results
 ```
 
-The notebook copies the package from Drive to local `/content` storage, installs
-the Ollama installer’s `zstd` prerequisite when needed, starts Ollama, obtains
-and hard-verifies `gemma4:12b`, and only then runs the producer. Keep the
+The notebook deletes/replaces only its VM-local package copy, then copies the
+package from Drive to local `/content` storage; it never deletes the Drive
+source. Any unsaved edits in the local copy are discarded. It installs the
+Ollama installer’s `zstd` prerequisite when needed, starts Ollama, obtains and
+hard-verifies `gemma4:12b`, and only then runs the producer. Keep the
 corpus, checkpoint, SQLite/catalog scratch, and generated output on local
 storage during the run; Drive FUSE is too slow for hot writes.
 The notebook runs a bounded Ollama CLI smoke probe (180 seconds) while the

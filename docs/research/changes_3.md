@@ -108,7 +108,7 @@ produced. Older notes referenced `tasks/v9_demo_corpus_design.md` and
 `tasks/v9_demo_corpus_plan.md`, but the `tasks/` directory was not present in
 that checkout.
 
-**Current organized-layout note (2026-08-07):** The active full V9 corpus is
+**Current organized-layout note (2026-08-06):** The active full V9 corpus is
 under `reproducibility/v9_observability_colab_schema3/corpus/`, V9dev is under
 `tests/fixtures/v9dev/`, and current task records are under `tasks/`. V8 remains
 historical context; its corpus is absent from the organized checkout.

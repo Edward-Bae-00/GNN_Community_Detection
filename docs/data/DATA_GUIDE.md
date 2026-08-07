@@ -124,11 +124,14 @@ not allowed to see future catches, hidden org labels, or lifetime outcomes.
 The canonical V9 result log is `docs/research/changes_3.md`, and its historical
 measured summaries are authoritative. `gnn/diagnostics/` is generated and
 ignored; these files are not checked in: `demo_comparison_v9.json`,
-`demo_smoke.json`, `unsupervised_ad_results.json`, and
-`gnn_architecture_comparison_v9.json`. The unsupervised result uses Isolation
-Forest to model each border region's definition of "normal"; the architecture
-comparison is an expensive separate run. Neither generated output should be
-treated as a versioned source of published measurements.
+`demo_smoke.json`, `unsupervised_ad_results.json`, the preferred
+`unsupervised_ad_results_v9.json`, and `gnn_architecture_comparison_v9.json`.
+The unsupervised producer emits both unsupervised filenames, while the
+dashboard prefers the corpus-qualified `unsupervised_ad_results_v9.json`; both
+are generated and ignored. The unsupervised result uses Isolation Forest to
+model each border region's definition of "normal"; the architecture comparison
+is an expensive separate run. Neither generated output should be treated as a
+versioned source of published measurements.
 
 Regenerate local diagnostics when needed:
 

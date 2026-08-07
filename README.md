@@ -125,8 +125,10 @@ The handoff package is
 to `MyDrive/v9_observability_colab_schema3`, open a high-RAM Colab runtime, and
 open `v9_schema3_observability.ipynb`. The notebook's Run all path performs the
 same mount/copy sequence below. Start from a fresh runtime; if the local
-destination already exists, remove or inspect it deliberately before copying so
-an old package is not silently overwritten.
+destination already exists, Run all automatically replaces only that VM-local
+`/content/v9_observability_colab_schema3` copy before copying. The Drive source
+is not deleted, but unsaved edits in the local copy are discarded; a fresh
+runtime is simplest.
 
 Colab Python cell:
 
@@ -138,8 +140,10 @@ import shutil
 drive.mount("/content/drive")
 source = Path("/content/drive/MyDrive/v9_observability_colab_schema3")
 destination = Path("/content/v9_observability_colab_schema3")
-if destination.exists():
-    raise RuntimeError(f"Remove or inspect {destination} before copying")
+if destination.is_symlink() or destination.is_file():
+    destination.unlink()
+elif destination.exists():
+    shutil.rmtree(destination)
 shutil.copytree(source, destination)
 ```
 
@@ -157,17 +161,8 @@ The notebook installs the requirements, prepares local runtime storage, verifies
 the checkpoint/corpus identity, starts Ollama, validates the exact
 `gemma4:12b` tag, and runs `run_schema3_observability.py`. Keep the corpus,
 checkpoint, SQLite/catalog scratch, and generated output on local storage
-during the run; Drive FUSE is too slow for hot writes.
-
-The equivalent runner handoff is:
-
-```bash
-cd reproducibility/v9_observability_colab_schema3
-python -m pip install -r requirements.txt
-python run_schema3_observability.py \
-  --work-root /content/v9_schema3_run \
-  --export-dir /content/drive/MyDrive/v9_schema3_results
-```
+during the run; Drive FUSE is too slow for hot writes. The Colab-local `/content`
+sequence above is also the manual runner path.
 
 The committed archive can be verified and used without rerunning Colab. A
 Colab rerun is only needed to reproduce or replace the evidence artifact.
