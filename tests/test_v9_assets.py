@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.data import v9_assets
 from scripts.data.v9_assets import (
     AssetError,
     assert_hydrated,
@@ -48,6 +49,88 @@ def test_archive_verification_and_atomic_extraction(tmp_path):
     extract_explanations(archive, destination, digest)
     assert (destination / "result.json").read_bytes() == b"{}"
     assert (destination / "recovery/current.json").is_file()
+
+
+def test_extraction_stays_bound_to_verified_handle_after_path_replacement(
+    tmp_path, monkeypatch
+):
+    archive = tmp_path / "result.zip"
+    replacement = tmp_path / "replacement.zip"
+    original_digest = _write_zip(
+        archive,
+        {
+            "v9_schema3_results/result.json": b"original",
+            "v9_schema3_results/recovery/current.json": b"{}",
+        },
+    )
+    _write_zip(
+        replacement,
+        {
+            "v9_schema3_results/result.json": b"replacement",
+            "v9_schema3_results/recovery/current.json": b"{}",
+        },
+    )
+    original_sha256_file = v9_assets.sha256_file
+    original_stream_hash = getattr(v9_assets, "_stream_hash", None)
+
+    def replace_after_hash(hash_target):
+        digest = (
+            original_sha256_file(hash_target)
+            if isinstance(hash_target, Path)
+            else original_stream_hash(hash_target)
+        )
+        os.replace(replacement, archive)
+        return digest
+
+    monkeypatch.setattr(v9_assets, "sha256_file", replace_after_hash)
+    monkeypatch.setattr(v9_assets, "_stream_hash", replace_after_hash, raising=False)
+
+    destination = tmp_path / "published"
+    try:
+        extract_explanations(archive, destination, original_digest)
+    except AssetError:
+        pass
+
+    if destination.exists():
+        assert (destination / "result.json").read_bytes() == b"original"
+    else:
+        assert not list(tmp_path.glob(".v9-extract-*"))
+
+
+def test_extraction_rejects_fstat_mutation_and_cleans_stage(tmp_path, monkeypatch):
+    archive = tmp_path / "result.zip"
+    digest = _write_zip(
+        archive,
+        {
+            "v9_schema3_results/result.json": b"{}",
+            "v9_schema3_results/recovery/current.json": b"{}",
+        },
+    )
+    original_stat = archive.stat()
+    original_sha256_file = v9_assets.sha256_file
+    original_stream_hash = getattr(v9_assets, "_stream_hash", None)
+
+    def mutate_after_hash(hash_target):
+        digest = (
+            original_sha256_file(hash_target)
+            if isinstance(hash_target, Path)
+            else original_stream_hash(hash_target)
+        )
+        os.utime(
+            archive,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns + 1),
+        )
+        return digest
+
+    monkeypatch.setattr(v9_assets, "sha256_file", mutate_after_hash)
+    monkeypatch.setattr(v9_assets, "_stream_hash", mutate_after_hash, raising=False)
+
+    destination = tmp_path / "published"
+    with pytest.raises(AssetError, match="changed while being processed"):
+        extract_explanations(archive, destination, digest)
+
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".v9-extract-*"))
 
 
 def test_archive_rejects_traversal(tmp_path):

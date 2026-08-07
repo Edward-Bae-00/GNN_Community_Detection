@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -47,6 +48,57 @@ def assert_hydrated(path: Path) -> Path:
     return path
 
 
+def _stream_hash(handle) -> str:
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _archive_metadata(handle, path: Path) -> tuple[int, int, int, int, int]:
+    try:
+        metadata = os.fstat(handle.fileno())
+    except OSError as error:
+        raise AssetError(f"cannot inspect explanation ZIP: {path}: {error}") from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise AssetError(f"asset is missing: {path}; run git lfs pull")
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+@contextmanager
+def _verified_explanation_archive(path: Path, expected_sha256: str):
+    path = Path(path)
+    try:
+        handle = path.open("rb")
+    except FileNotFoundError as error:
+        raise AssetError(f"asset is missing: {path}; run git lfs pull") from error
+    except OSError as error:
+        raise AssetError(f"cannot open explanation ZIP: {path}: {error}") from error
+
+    with handle:
+        initial_metadata = _archive_metadata(handle, path)
+        if handle.read(len(LFS_HEADER)) == LFS_HEADER:
+            raise AssetError(f"asset is an LFS pointer: {path}; run git lfs pull")
+        handle.seek(0)
+        actual = _stream_hash(handle)
+        if actual != expected_sha256:
+            raise AssetError(
+                f"explanation ZIP SHA-256 mismatch: expected {expected_sha256}, got {actual}"
+            )
+        handle.seek(0)
+        with zipfile.ZipFile(handle) as archive:
+            members = _safe_members(archive)
+            yield archive, len(members)
+        if _archive_metadata(handle, path) != initial_metadata:
+            raise AssetError(f"explanation ZIP changed while being processed: {path}")
+
+
 def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     members = archive.infolist()
     if not members:
@@ -80,14 +132,8 @@ def verify_explanation_archive(
     expected_sha256: str = EXPLANATION_SHA256,
 ) -> int:
     """Verify hydration, digest, safe member paths, and required evidence files."""
-    path = assert_hydrated(path)
-    actual = sha256_file(path)
-    if actual != expected_sha256:
-        raise AssetError(
-            f"explanation ZIP SHA-256 mismatch: expected {expected_sha256}, got {actual}"
-        )
-    with zipfile.ZipFile(path) as archive:
-        return len(_safe_members(archive))
+    with _verified_explanation_archive(path, expected_sha256) as (_, member_count):
+        return member_count
 
 
 def extract_explanations(
@@ -98,18 +144,16 @@ def extract_explanations(
     """Verify and atomically publish the archive's single canonical root."""
     archive_path = Path(archive_path)
     destination = Path(destination)
-    verify_explanation_archive(archive_path, expected_sha256)
     if destination.exists():
         raise AssetError(f"extraction destination already exists: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".v9-extract-", dir=destination.parent))
     try:
-        with zipfile.ZipFile(archive_path) as archive:
-            _safe_members(archive)
+        with _verified_explanation_archive(archive_path, expected_sha256) as (archive, _):
             archive.extractall(stage)
-        source = stage / ARCHIVE_PREFIX
-        if not source.is_dir():
-            raise AssetError("explanation ZIP canonical root is missing")
+            source = stage / ARCHIVE_PREFIX
+            if not source.is_dir():
+                raise AssetError("explanation ZIP canonical root is missing")
         os.replace(source, destination)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
