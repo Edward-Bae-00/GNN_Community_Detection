@@ -699,7 +699,7 @@ Run:
 
 ```bash
 rtk /Users/edward/Desktop/GNN_Community_Detection/.venv/bin/python \
-  scripts/data/v9_assets.py compare-corpora \
+  -m scripts.data.v9_assets compare-corpora \
   /Users/edward/Desktop/GNN_Community_Detection/Documents/Data/synthetic_cbp_graph_corpus_v9 \
   reproducibility/v9_observability_colab_schema3/corpus/synthetic_cbp_graph_corpus_v9
 ```
@@ -747,7 +747,7 @@ rtk shasum -a 256 \
   /Users/edward/Desktop/GNN_Community_Detection/Documents/GNN/*.pdf \
   references/papers/*.pdf
 rtk /Users/edward/Desktop/GNN_Community_Detection/.venv/bin/python \
-  scripts/data/v9_assets.py verify-explanations
+  -m scripts.data.v9_assets verify-explanations
 ```
 
 Expected: ZIP hashes are identical and equal the manifest; each paper has a matching source/destination hash; verifier reports 64,964 members.

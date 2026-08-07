@@ -3,6 +3,8 @@ import hashlib
 import os
 import re
 import stat
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -312,6 +314,24 @@ def test_main_normalizes_asset_error_to_one_stderr_line(tmp_path, capsys):
     assert captured.out == ""
     assert captured.err.startswith("error: ")
     assert len(captured.err.splitlines()) == 1
+
+
+def test_module_cli_help_runs_from_repository_root_without_pythonpath():
+    repository_root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "scripts.data.v9_assets", "--help"],
+        cwd=repository_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "usage:" in completed.stdout
 
 
 def test_injected_extraction_error_cleans_stage_and_destination(tmp_path, monkeypatch):
