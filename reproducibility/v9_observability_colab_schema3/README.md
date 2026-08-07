@@ -174,8 +174,9 @@ a new Colab run is only needed to produce a replacement artifact.
 `gnn/` was synced from the
 `feature/v9-balanced-explainability` worktree on 2026-08-02, including its
 resume-path as-of re-validation and cached-community chunk identity checks.
-The package source is self-contained; the dashboard-side schema-3 reader still
-comes from that worktree as described above.
+The package source is self-contained. The current dashboard-side schema-3
+reader is the organized repository implementation under `scripts/dashboard/`,
+as documented in the downstream dashboard section above.
 
 This is a clean schema-3 runner, not a four-worker schema-2 pack merger. The
 producer builds one detached validated artifact and writes it at the end;
