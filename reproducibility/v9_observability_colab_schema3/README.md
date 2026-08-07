@@ -154,15 +154,20 @@ If `gemma4:12b` is a private/local tag that is not on the public registry, the
 pull step will fail with instructions to import it into the VM's Ollama store
 first. Do not substitute another model — the artifact will not validate.
 
-## Downstream: the dashboard builder needs the feature branch
+## Downstream dashboard
 
-Schema-3 support is **not on `main`**. `main`'s
-`Documents/Data/scripts/build_v9_dashboard.py` accepts only schema `1.0`/`2.0`
-and will warn and silently drop case evidence for a `3.0` artifact. The
-schema-3 reader (`publish_prepackaged_schema3_manifest` and the
-`structural_stages` renderer) currently lives in the uncommitted
-`feature/v9-balanced-explainability` worktree. Check out or merge that branch
-before building the dashboard from this run's output.
+The schema-3 dashboard reader is under `scripts/dashboard/` in the organized
+repository. Verify the committed explanation archive before building:
+
+```bash
+python -m scripts.data.v9_assets verify-explanations
+python -m scripts.dashboard.build_v9_dashboard
+```
+
+The committed archive is degraded 19-of-20: it contains 19 exact Hybrid
+explanations and one failed case. It failed the coverage gate and is not fully
+passing or coverage-gated. The archive can still be used as committed evidence;
+a new Colab run is only needed to produce a replacement artifact.
 
 ## Provenance and limitations
 

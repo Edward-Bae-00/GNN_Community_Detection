@@ -1,10 +1,11 @@
 # Synthetic CBP Graph Corpus - Data Guide
 
-> Current-status note (2026-07-09): This guide describes the checked-in
-> synthetic corpus snapshots and the active `gnn/` baseline-vs-GNN research
-> track. The current track is V8/V9: V8 is the realistic honest-track corpus,
-> V9 is the designed positive control, and V9dev is the small test corpus.
-> Detailed V9 design and result claims live in `Documents/Data/changes_3.md`.
+> Current-status note (2026-08-06): The active `gnn/` runtime is the V9
+> designed positive control. The canonical full V9 corpus is Git-LFS versioned
+> in `reproducibility/v9_observability_colab_schema3/corpus/`; V9dev is at
+> `tests/fixtures/v9dev/`. V8 is historical honest-track context only and its
+> corpus is absent from this checkout. Detailed V9 design and result claims
+> live in `docs/research/changes_3.md`.
 
 ## What This Dataset Is
 
@@ -14,23 +15,30 @@ events. It is for research on graph learning, entity resolution, and anomaly
 scoring. It is not operational data.
 
 No row represents a real person, vehicle, document, officer, case, event,
-seizure, arrest, address, phone number, email, license plate, or name. Aggregate
-CSV files under `Documents/Data/RealWorld_Data/` are calibration/context inputs
-only.
+seizure, arrest, address, phone number, email, license plate, or name.
+Aggregate real-world CSVs are calibration/context inputs only.
 
-The active corpus snapshots in this checkout are:
+The active corpus inputs in this checkout are:
 
 | Corpus | Path | Role |
 | --- | --- | --- |
-| V8 | `Documents/Data/synthetic_cbp_graph_corpus_v8/` | Realistic honest-track corpus with thin relational signal |
-| V9 | `Documents/Data/synthetic_cbp_graph_corpus_v9/` | Designed positive-control corpus with propagable relational signal |
-| V9dev | `Documents/Data/synthetic_cbp_graph_corpus_v9dev/` | Small V9-profile corpus used by tests and smoke runs |
+| V9 | `reproducibility/v9_observability_colab_schema3/corpus/synthetic_cbp_graph_corpus_v9/` | Active designed positive-control corpus with propagable relational signal |
+| V9dev | `tests/fixtures/v9dev/` | Small V9-profile corpus used by tests and smoke runs |
+| V8 | *(historical; corpus absent)* | Honest-track context with thin relational signal |
 
-`gnn/config.py` defaults to V8. The V9 demonstration is selected explicitly:
+`gnn/config.py` defaults to the canonical full V9 corpus. Set
+`CBP_CORPUS_DIR` only when intentionally evaluating another compatible corpus:
 
 ```bash
-CBP_CORPUS_DIR=$PWD/Documents/Data/synthetic_cbp_graph_corpus_v9 \
-  PYTHONPATH=. python -m gnn.run_demo
+CBP_CORPUS_DIR=/path/to/compatible/corpus python -m gnn.run_demo
+```
+
+Validate the tracked development corpus and rebuild the current dashboard with
+the organized package modules:
+
+```bash
+python -m scripts.data.validate_corpus tests/fixtures/v9dev
+python -m scripts.dashboard.build_v9_dashboard
 ```
 
 ## Current Research Track
@@ -113,7 +121,7 @@ not allowed to see future catches, hidden org labels, or lifetime outcomes.
 
 ## Current Results
 
-The canonical V9 result log is `Documents/Data/changes_3.md`. The main checked-in
+The canonical V9 result log is `docs/research/changes_3.md`. The main checked-in
 result artifact is `gnn/diagnostics/demo_comparison_v9.json`; the small smoke
 artifact is `gnn/diagnostics/demo_smoke.json`. Additionally, an unsupervised 
 anomaly detection evaluation (`gnn/diagnostics/unsupervised_ad_results.json`) 
@@ -172,9 +180,10 @@ The corpora use strict temporal splits combined with group-level leakage prevent
 
 ## Snapshot Methodology
 
-The active V8, V9, and V9dev corpora are checked-in synthetic snapshots. The
-active code path for evaluation is `gnn/`, not corpus generation. Each corpus
-directory still includes a snapshot-local copy of
+The canonical V9 and V9dev inputs are Git-LFS-backed synthetic snapshots. The
+active code path for evaluation is `gnn/`, not corpus generation. The V8 corpus
+is intentionally absent. Each available corpus directory still includes a
+snapshot-local copy of
 `generate_synthetic_cbp_graph_corpus_v3.py` and `GENERATION_CONFIG.json` as
 provenance artifacts, but generator maintenance is not the current research
 track in this checkout.
@@ -200,10 +209,11 @@ Foundational design principles inherited from earlier versions include:
 Dashboard artifacts exist for corpus inspection, not as the source of current
 model claims.
 
-- V8 and V9 corpus directories include `dashboard_data.json` and
+- The canonical V9 corpus includes `dashboard_data.json` and
   `dashboard_standalone.html`.
-- `Documents/Data/v9_dashboard/` contains a packaged V9 dashboard shell:
-  `index.html` plus `data_v9.json`.
+- The current V9 dashboard rebuild target is `artifacts/v9/dashboard/`, which
+  receives `index.html` and `data_v9.json` from
+  `python -m scripts.dashboard.build_v9_dashboard`.
 - V9dev intentionally does not include dashboard payloads; it is for tests and
   smoke runs.
 
@@ -234,56 +244,25 @@ the preserved lone-carrier tail, and that `COTRAVEL` reaches the graph built by
 ## File Layout
 
 ```text
-Documents/Data/
-  DATA_GUIDE.md
-  changes_3.md                     # canonical V9 design/results log
+docs/
+  data/DATA_GUIDE.md               # active data guide
+  research/changes_3.md            # canonical V9 design/results log
 
-  synthetic_cbp_graph_corpus_v8/
-    *.csv                          # V8 honest-track corpus tables
-    README.md
-    DATA_DICTIONARY.md
-    SCHEMA.json
-    GENERATION_CONFIG.json
-    VALIDATION_REPORT.md
-    generate_synthetic_cbp_graph_corpus_v3.py
-    dashboard_data.json
-    dashboard_standalone.html
+reproducibility/v9_observability_colab_schema3/corpus/
+  synthetic_cbp_graph_corpus_v9/   # full V9 positive-control corpus
 
-  synthetic_cbp_graph_corpus_v9/
-    *.csv                          # full V9 positive-control corpus tables
-    README.md
-    DATA_DICTIONARY.md
-    SCHEMA.json
-    GENERATION_CONFIG.json
-    VALIDATION_REPORT.md
-    generate_synthetic_cbp_graph_corpus_v3.py
-    dashboard_data.json
-    dashboard_standalone.html
+tests/fixtures/v9dev/              # small V9-profile test corpus
+artifacts/v9/dashboard/            # generated dashboard rebuild target
 
-  synthetic_cbp_graph_corpus_v9dev/
-    *.csv                          # small V9-profile test corpus
-    README.md
-    DATA_DICTIONARY.md
-    SCHEMA.json
-    GENERATION_CONFIG.json
-    VALIDATION_REPORT.md
-    generate_synthetic_cbp_graph_corpus_v3.py
+scripts/data/
+  validate_corpus.py
 
-  scripts/
-    validate_corpus.py
-    build_dashboard.py
-    build_v9_dashboard.py
-    explorer_ui.py
-    v9_dashboard_ui.py
+scripts/dashboard/
+  build_dashboard.py
+  build_v9_dashboard.py
+  explorer_ui.py
+  v9_dashboard_ui.py
 
-  v9_dashboard/
-    index.html
-    data_v9.json
-
-  RealWorld_Data/
-    *.csv                          # aggregate calibration/reference inputs
-
-  CAVIAR/
-    phase*.csv                     # external benchmark/reference data
+Real-world aggregates and historical reference inputs are outside the active
+corpus path and remain calibration/context material only.
 ```
-

@@ -42,7 +42,7 @@
   `<!-- V9_NAV_TABS -->` / `<!-- V9_TAB_SECTIONS -->` markers, so `build_v9_dashboard.py`
   silently injected neither the V9 nav buttons nor the `tab-v9Results`/`tab-unsupervisedAD`
   section wrappers (V9 tabs were unreachable), and there was no grouped/ARIA/hash-routed
-  nav. Fixed in `Documents/Data/scripts/build_v9_dashboard.py` with marker-independent
+  nav. Fixed in `scripts/dashboard/build_v9_dashboard.py` with marker-independent
   injection (`_inject_v9_nav_and_sections`) plus `_apply_grouped_accessible_nav` /
   `_rewrite_nav_js` (data-nav-group readout/explore, role/aria-controls/aria-selected,
   data-navigate-tab delegated clicks, location.hash + hashchange routing). 74/74 dashboard
@@ -99,7 +99,7 @@
 - Check available disk against the measured publication requirement.
 - Run the full three-seed V9 K=5 comparison/observability generation and verify exact coverage, zero failures, validated narratives, complete as-of communities, hashes/pointers, and staging cleanup.
 - Build and serve the dashboard; verify cohort switching, narratives/fusion, lazy complete evidence, pagination, responsive behavior, and browser console cleanliness.
-- Update `Documents/Data/changes_3.md` only with newly measured K=5 results. Its existing daily-25 observability record is historical and must not be reused as the K=5 result.
+- Update `docs/research/changes_3.md` only with newly measured K=5 results. Its existing daily-25 observability record is historical and must not be reused as the K=5 result.
 
 ## 2026-08-06: guided Overview and bootstrap interpretation
 
@@ -161,7 +161,7 @@
 - Dashboard output independently validates/embeds the artifact under
   `v9GNNArchitectureComparison` and adds a GNN-only V9 Results section without
   changing existing sections/nav/data. Rebuilt outputs:
-  `Documents/Data/v9_dashboard/data_v9.json` and `index.html`.
+  `artifacts/v9/dashboard/data_v9.json` and `index.html`.
 - Approximate observed runtime risk: on a 16GB Mac, the sequential run used about
   12 active CPU-hours; sleep/contention lengthened wall time. Future optimization
   should cache snapshots/checkpoints and use at most about two workers. The affected
@@ -199,7 +199,7 @@
   `17d5ee9fe23234ab33b0ba33e36800ab21bd25101b32ff51bb787b259e4f3c52`; no GNN
   retraining was needed. Existing K=5 values were preserved while K=10/K=25
   daily metrics and paired-bootstrap summaries were added to the published
-  artifact. The rebuilt dashboard lives under `Documents/Data/v9_dashboard/`.
+  artifact. The rebuilt dashboard lives under `artifacts/v9/dashboard/`.
 - The architecture comparison now leads with three aligned F1 bar-chart panels
   for K=5/10/25. Bar length uses one shared scale; the tabular baseline is gray,
   GNN architectures are blue, and an off-screen accessible table preserves
@@ -646,3 +646,17 @@ Durable decisions and deviations from the written plan:
   then the LLM explanation, so visual and keyboard reading order match. The
   structural-only fallback remains unchanged. Focused UI and dashboard-builder
   tests pass (361 total), and the generated V9 dashboard was rebuilt.
+
+## 2026-08-06: repository organization and artifact policy
+
+- The active runtime is V9-first. The full V9 corpus lives inside the
+  `reproducibility/v9_observability_colab_schema3/` handoff; V9dev lives under
+  `tests/fixtures/v9dev/`.
+- Schema-3 evidence is one SHA-256-verified Git LFS ZIP at
+  `artifacts/v9/explanations/v9_schema3_results.zip`. Extracted explanation
+  trees are generated and ignored.
+- The root `gnn/` directory is the flat active implementation. The bundled
+  `reproducibility/v9_observability_colab_schema3/gnn/` copy is an intentional
+  reproducibility snapshot.
+- Documentation changes preserve the as-of and leakage semantics and are
+  verified separately from functional model/evaluation changes.

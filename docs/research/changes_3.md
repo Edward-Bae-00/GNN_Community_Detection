@@ -511,8 +511,8 @@ At daily K=25, whole-pool aggregate found/precision/recall/F1 were:
 The dashboard independently validates and embeds this artifact under
 `v9GNNArchitectureComparison`, rendering a strictly additive GNN-only section in
 V9 Results; existing sections, navigation, and data remain unchanged. Generated
-outputs were rebuilt at `Documents/Data/v9_dashboard/data_v9.json` and
-`Documents/Data/v9_dashboard/index.html`.
+outputs were rebuilt at `artifacts/v9/dashboard/data_v9.json` and
+`artifacts/v9/dashboard/index.html`.
 
 This observed run used a 16GB Mac and about 12 active CPU-hours sequentially;
 sleep/contention made wall time longer. This is an approximate observation, not a

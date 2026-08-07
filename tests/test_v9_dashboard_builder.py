@@ -2470,7 +2470,7 @@ def test_schema_v2_renderer_is_explicitly_unsupported():
 
 
 def test_v9_research_log_records_caught_supervised_contract():
-    log = (ROOT / "Documents/Data/changes_3.md").read_text()
+    log = (ROOT / "docs/research/changes_3.md").read_text()
 
     for token in (
         "tabular_unlabeled",

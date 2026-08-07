@@ -1,97 +1,72 @@
 # Agent Instructions - GNN Community Detection
 
-## Project Context
+## Project context
 
-This is a GNN-based anomaly detection research project on fully synthetic
-CBP-style border crossing data. No row represents a real person, vehicle,
-document, officer, case, event, seizure, arrest, address, phone number, email,
-license plate, or name. Aggregate real-world CSVs under
-`Documents/Data/RealWorld_Data/` are calibration/context inputs only.
+This is a research project on fully synthetic CBP-style border-crossing data.
+No row represents a real person, vehicle, document, officer, case, event,
+seizure, arrest, address, phone number, email, license plate, or name.
+Aggregate real-world CSVs are calibration/context inputs only.
 
-The active research track is `gnn/`: a leak-free baseline-vs-GNN
-demonstration over V8/V9 synthetic corpora.
+The active runtime is the V9-first, leak-free baseline-vs-GNN demonstration in
+the flat root `gnn/` package. V9 is the designed positive control. V8 is
+historical honest-track context only; its corpus is absent and must not be
+treated as the current default or data path.
 
-## Current Goals
+## Current research constraints
 
-- Preserve the distinction between the V8 honest track and the V9 positive
-  control. V8 is the realistic thin-graph-signal regime; V9 is deliberately
-  engineered to contain relational signal.
-- Use V9 to demonstrate the intended positive control: when hidden-carrier risk
-  is propagable through co-travel/shared-plate/residence structure, the as-of
-  caught-propagation RGCN should recover more hidden carriers at operational
-  depth than a strong tabular baseline.
-- Keep the comparison leak-free. Future outcomes, lifetime catches, hidden org
-  labels, and outcome aggregates must not become model features.
-- Keep the baseline strong and fair: own-history, observed demographics, and
-  event context are allowed; graph/neighbor-label features are not.
-- Keep docs synchronized with the filesystem. The historical
-  `Documents/Data/changes_2.md` and `gnn/FINDINGS.md` notes were intentionally
-  removed; verify detailed V8 claims from current artifacts before relying on
-  them.
+- Preserve strict as-of semantics: graph edges and caught labels must be
+  available before row time `T`.
+- Keep future outcomes, lifetime catches, hidden organization labels, and
+  outcome aggregates out of features.
+- Keep the strong graph-free baseline fair: own history, observed demographics,
+  and event context are allowed; graph and neighbor-label features are not.
+- Keep V9 positive-control conclusions separate from the historical V8
+  thin-graph-signal interpretation.
+- Treat every record as synthetic; real-world aggregates are calibration/context
+  inputs only.
 
-## Environment
+## Active paths
 
-- Python 3.14, venv at `.venv/`
-- Activate with `source .venv/bin/activate`
-- Key packages in the working environment: PyTorch, PyTorch Geometric,
-  scikit-learn, networkx, pandas, numpy
-- Local shell convention from `@/Users/edward/.codex/RTK.md`: prefix shell
-  commands with `rtk`
+- `gnn/` - active flat implementation and generated diagnostics.
+- `docs/research/changes_3.md` - canonical V9 design/results log.
+- `docs/data/DATA_GUIDE.md` - active data guide and historical interpretation.
+- `scripts/data/validate_corpus.py` - corpus validation harness.
+- `scripts/dashboard/build_v9_dashboard.py` - V9 dashboard builder.
+- `tests/fixtures/v9dev/` - tracked small V9 development/test corpus.
+- `reproducibility/v9_observability_colab_schema3/` - full V9 Colab/checkpoint
+  handoff and canonical corpus.
+- `artifacts/v9/explanations/v9_schema3_results.zip` - committed schema-3
+  explanation archive.
+- `artifacts/v9/dashboard/` - generated dashboard output.
+- `references/papers/` - seven Git LFS-backed research papers.
 
-## Current File Navigation
+`pyproject.toml` is authoritative for install metadata and dependencies.
+`gnn/config.py` defaults to the canonical full V9 corpus and accepts the
+`CBP_CORPUS_DIR` override for intentional compatible-corpus evaluation.
 
-### Active Package
+## Before changing model or evaluation logic
 
-- `gnn/config.py` - repository paths, corpus override, result path
-- `gnn/run_demo.py` - main V9 baseline-vs-GNN evaluation harness
-- `gnn/demo_baseline.py` - leak-safe 14-feature tabular baseline
-- `gnn/graphmodel_rgcn.py` - typed graph construction and RGCN
-- `gnn/learned_cell.py` - as-of caught-propagation scoring
-- `gnn/detector.py` - sklearn model fitting helper
-- `gnn/diagnostics/` - run outputs such as `demo_comparison_v9.json`
+1. Read `docs/research/changes_3.md`.
+2. Read the relevant source files in `gnn/` and verify the current path
+   contracts.
+3. Confirm strict as-of availability of graph edges and caught labels before
+   row time `T`.
+4. Re-run the affected `tests/test_*.py` files.
 
-### Data And Scripts
+The historical V8 interpretation must be verified from current artifacts before
+being extended. Do not restore removed historical notes based on stale paths.
 
-- `Documents/Data/synthetic_cbp_graph_corpus_v8/` - V8 honest-track corpus
-- `Documents/Data/synthetic_cbp_graph_corpus_v9/` - full V9 positive-control
-  corpus
-- `Documents/Data/synthetic_cbp_graph_corpus_v9dev/` - small V9 dev/test corpus
-- `scripts/data/validate_corpus.py` - corpus validation harness
-- `scripts/dashboard/build_dashboard.py` and `build_v9_dashboard.py` -
-  dashboard builders
-- `artifacts/v9/dashboard/` - generated V9 dashboard output
-- `Documents/Data/changes_3.md` - canonical V9 design/results log in this
-  checkout
-- `Documents/Data/DATA_GUIDE.md` - older broad data guide; currently contains
-  V7-era material and should not override V8/V9-specific docs
+## Organization constraints
 
-### Tests
-
-The current source test suite is small and focused on the V9 demo stack:
-
-- `tests/test_df_detector.py`
-- `tests/test_df_graphmodel_rgcn.py`
-- `tests/test_demo_baseline.py`
-- `tests/test_run_demo_smoke.py`
-- `tests/test_v9_corpus_snapshot.py`
-
-## Before Changing Model Or Evaluation Logic
-
-1. Read `Documents/Data/changes_3.md`.
-2. Read the relevant source files in `gnn/`.
-3. The historical `Documents/Data/changes_2.md` and `gnn/FINDINGS.md` notes were
-   intentionally removed; verify V8/honest-track claims from current artifacts
-   before changing that logic.
-4. Verify strict as-of semantics: graph edges and caught labels must be available
-   before the row time `T`.
-5. Re-run targeted tests, at minimum the affected `tests/test_*.py` files.
-
-## Organization Constraints
-
-- Do not move corpus directories casually. Several scripts and configs assume
-  the current `Documents/Data/...` layout.
-- Do not delete or restore legacy research artifacts based only on stale docs or
-  `__pycache__` names.
-- Keep generated diagnostics under `gnn/diagnostics/`.
-- Prefer small, targeted documentation updates over large rewrites unless the
-  user explicitly asks for a data-guide or architecture cleanup pass.
+- Do not move corpus directories casually; the canonical full V9 corpus lives
+  inside the schema-3 reproducibility handoff and V9dev lives under the test
+  fixtures path.
+- Do not change code/model behavior, data, artifacts, or tests during
+  documentation-only reorganizations except for explicitly requested path
+  assertions.
+- Keep generated diagnostics under `gnn/diagnostics/` and generated dashboard
+  output under `artifacts/v9/dashboard/`.
+- Keep active docs synchronized with the filesystem. Root `README.md` is
+  authoritative for onboarding; `tasks/README.md` and
+  `docs/superpowers/README.md` explain the status of historical task records.
+- Prefix shell commands with `rtk` in this environment.

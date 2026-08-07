@@ -1,134 +1,186 @@
 # GNN Community Detection
 
-Research project for graph-based anomaly detection on fully synthetic
-CBP-style border crossing data. The current active track is `gnn/`,
-which compares a strong leak-safe tabular baseline with an as-of
-caught-propagation RGCN.
+Research project for graph-based anomaly detection on fully synthetic CBP-style
+border-crossing data. The active runtime is the V9 baseline-vs-GNN positive
+control in `gnn/`.
 
-The data is synthetic. No row represents a real person, vehicle, document,
-officer, case, event, seizure, arrest, address, phone number, email, license
-plate, or name. Aggregate real-world CSVs under `Documents/Data/RealWorld_Data/`
-are calibration/context inputs only.
+## Safety and synthetic-data scope
 
-## Current Goals
+Every modeled record is synthetic. No row represents a real person, vehicle,
+document, officer, case, event, seizure, arrest, address, phone number, email,
+license plate, or name. Aggregate real-world CSVs under `Documents/Data/RealWorld_Data/`
+are calibration/context inputs only; they are not operational records or model
+targets.
 
-- Maintain an honest V8 track where relational signal is naturally thin and the
-  graph advantage is expected to be bounded.
-- Maintain a V9 positive-control demo where co-travel, shared plates, residence,
-  and prior caught cell-mates create a real relational signal.
-- Demonstrate that the RGCN catches more hidden carriers than a strong per-person
-  tabular baseline when the graph signal is actually present.
-- Preserve strict as-of semantics: no future outcomes, lifetime labels, hidden
-  org labels, or outcome aggregates in model features.
+V8 is historical honest-track context only. Its corpus is intentionally absent
+from this checkout and is not the default or active data path.
 
-## Repository Layout
+## What the V9 positive control demonstrates
+
+V9 is an active, deliberately designed positive control: hidden-carrier risk is
+propagable through observable co-travel, shared-plate, residence, and prior
+caught-cell-mate structure. The evaluation is strict and leak-free: graph edges
+and caught labels used for a row are available before that row's time `T`, and
+future outcomes, lifetime catches, hidden organization labels, and outcome
+aggregates are excluded from features.
+
+The graph-free baseline remains strong and fair. It uses own history, observed
+demographics, and current event context, but no graph or neighbor-label
+features. The experiment asks whether the as-of caught-propagation GNN can
+recover more hidden carriers at operational depth when relational signal is
+actually present; it does not claim that V9 supersedes the historical V8
+honest-track caveat.
+
+## Repository layout
 
 ```text
-gnn/
-  config.py              Corpus/result paths; `CBP_CORPUS_DIR` override
-  run_demo.py            Main V9 baseline-vs-GNN evaluation harness
-  demo_baseline.py       Strong 14-feature tabular baseline, no graph features
-  graphmodel_rgcn.py     Typed graph builder and RGCN components
-  learned_cell.py        As-of caught-propagation scoring
-  detector.py            sklearn fitting helper
-  diagnostics/           Generated evaluation outputs
-
-scripts/
-  data/validate_corpus.py            Corpus validator
-  dashboard/build_dashboard.py      Corpus dashboard builder
-  dashboard/build_v9_dashboard.py   V9 dashboard packager
-
-reproducibility/v9_observability_colab_schema3/corpus/
-  synthetic_cbp_graph_corpus_v9/     Canonical full V9 positive-control corpus
-
-tests/fixtures/v9dev/                Tracked small V9 dev/test corpus
-artifacts/v9/dashboard/              Generated V9 dashboard output
-Documents/Data/
-  changes_3.md                       Canonical V9 design/results log
-  DATA_GUIDE.md                      Older broad data guide with V7-era sections
-
-tests/
-  test_demo_baseline.py
-  test_df_detector.py
-  test_df_graphmodel_rgcn.py
-  test_run_demo_smoke.py
-  test_v9_corpus_snapshot.py
+gnn/                                  Active flat implementation and diagnostics
+scripts/data/                         Corpus and explanation utilities
+scripts/data/validate_corpus.py      Corpus validator
+scripts/dashboard/                   Dashboard readers/builders
+scripts/dashboard/build_v9_dashboard.py
+reproducibility/v9_observability_colab_schema3/
+                                      Full V9 corpus, checkpoint, notebook, runner
+tests/fixtures/v9dev/                 Tracked small V9 development/test corpus
+artifacts/v9/explanations/            Committed schema-3 evidence ZIP and manifest
+artifacts/v9/dashboard/               Generated V9 dashboard target
+docs/data/                            Active data guide
+docs/research/                        V9 research log and historical ideas page
+docs/superpowers/                     Immutable historical plans/specifications
+references/papers/                    Seven tracked research papers
+tasks/                                Current reorganization notes and task records
 ```
 
-## Environment
+The canonical full V9 corpus is
+`reproducibility/v9_observability_colab_schema3/corpus/synthetic_cbp_graph_corpus_v9/`.
+`gnn/config.py` uses it by default. Set `CBP_CORPUS_DIR` to evaluate another
+compatible corpus intentionally; the override does not change the repository's
+canonical V9 path.
 
-This checkout assumes the existing virtual environment:
+## Clone and hydrate Git LFS assets
+
+Git LFS is required for the full V9 corpus, the V9dev fixture, the explanation
+ZIP and checkpoints, and all seven papers. After cloning, hydrate the tracked
+large files:
 
 ```bash
-source .venv/bin/activate
+git lfs install
+git lfs pull
 ```
 
-The working environment is Python 3.14 with PyTorch, PyTorch Geometric,
-scikit-learn, networkx, pandas, and numpy installed. Runtime and development
-dependencies are declared in the root `pyproject.toml`.
-
-## Data Availability
-
-The canonical full V9 corpus and tracked V9dev fixture live at the paths shown
-above. Historical V8 data is not tracked here; preserve its honest-track
-interpretation and verify any local V8 artifacts before using them.
-
-## Run The V9 Demo
+## Environment setup
 
 ```bash
+python -m venv .venv
 source .venv/bin/activate
+python -m pip install -e '.[dev]'
+```
+
+`pyproject.toml` is the authoritative install metadata. The supported local
+environment is Python 3.14 with PyTorch, PyTorch Geometric, scikit-learn,
+networkx, pandas, numpy, and pytest installed by the project metadata.
+
+## Run the V9 demo
+
+```bash
 python -m gnn.run_demo
 ```
 
-Results are written under `gnn/diagnostics/`.
-
-By default, `gnn/config.py` uses the canonical V9 corpus from `gnn.paths`.
-Set `CBP_CORPUS_DIR` only when intentionally evaluating another compatible
-corpus.
-
-## Run Tests
+Results are written to the generated `gnn/diagnostics/` tree. To use an
+intentional compatible override:
 
 ```bash
-source .venv/bin/activate
-PYTHONPATH=. pytest -q tests
+CBP_CORPUS_DIR=/path/to/compatible/corpus python -m gnn.run_demo
 ```
 
-The V9 corpus snapshot test validates the tracked `tests/fixtures/v9dev/`
-fixture directly.
-
-## Data Utilities
+## Run tests
 
 ```bash
-# Validate a corpus
+pytest -q
+```
+
+The test suite includes path contracts, leak-safe baseline/GNN behavior, and
+the tracked V9dev fixture.
+
+## Validate corpora
+
+```bash
 python -m scripts.data.validate_corpus tests/fixtures/v9dev
-
-# Build the V9 dashboard
-python -m scripts.dashboard.build_dashboard reproducibility/v9_observability_colab_schema3/corpus/synthetic_cbp_graph_corpus_v9
-python -m scripts.dashboard.build_v9_dashboard
 ```
 
-To view the dashboard, serve `artifacts/v9/dashboard/` through a local HTTP
-server so `index.html` can fetch `data_v9.json`.
+The same validator can inspect the canonical full V9 directory when its Git
+LFS payloads are hydrated.
 
-## Current Result Summary
+## Run schema-3 observability in Colab
 
-`Documents/Data/changes_3.md` is the canonical V9 result log in this checkout.
-It records the positive-control conclusion: on V9, the caught-propagation RGCN
-recovers substantially more hidden carriers than the strong tabular baseline at
-operational depth because co-travel is now present in the graph the model sees.
+The handoff package is
+`reproducibility/v9_observability_colab_schema3/`. Upload that whole directory
+to Google Drive, open a high-RAM Colab runtime, open
+`v9_schema3_observability.ipynb`, and run all cells. The notebook installs the
+requirements, prepares local runtime storage, verifies the checkpoint/corpus
+identity, starts Ollama, validates the exact `gemma4:12b` tag, and runs
+`run_schema3_observability.py`.
 
-The V8 honest-track note historically referenced as `Documents/Data/changes_2.md`
-and the older `gnn/FINDINGS.md` notes were intentionally removed from this
-checkout. Treat detailed V8 claims as needing verification from current
-artifacts before relying on them.
+The equivalent runner handoff is:
 
-## Organization Notes
+```bash
+cd reproducibility/v9_observability_colab_schema3
+python -m pip install -r requirements.txt
+python run_schema3_observability.py \
+  --work-root /content/v9_schema3_run \
+  --export-dir /content/drive/MyDrive/v9_schema3_results
+```
 
-- `Documents/Data/DATA_GUIDE.md` still contains V7-era broad documentation. Use
-  the V8/V9 corpus READMEs and `Documents/Data/changes_3.md` for current-track
-  specifics.
-- `scripts/data/` and `scripts/dashboard/` contain validation, dashboard, and ER helper
-  utilities. Corpus generation has been retired from this checkout; local
-  V8/V9/V9dev snapshots are the source artifacts.
-- `__pycache__/`, `.pytest_cache/`, and `.DS_Store` files are local/generated
-  noise and should not be treated as source-of-truth structure.
+The committed archive can be verified and used without rerunning Colab. A
+Colab rerun is only needed to reproduce or replace the evidence artifact.
+
+## Verify and extract explanation evidence
+
+```bash
+python -m scripts.data.v9_assets verify-explanations
+python -m scripts.data.v9_assets extract-explanations \
+  artifacts/v9/explanations/extracted
+```
+
+The extracted tree is generated and ignored; keep the committed ZIP and
+`MANIFEST.sha256` as the reproducible evidence inputs.
+
+## Build and serve the dashboard
+
+```bash
+python -m scripts.dashboard.build_v9_dashboard
+python -m http.server 8000 --directory artifacts/v9/dashboard
+```
+
+The builder reads the canonical V9 contracts and publishes the generated
+dashboard under `artifacts/v9/dashboard/`. Serve it over HTTP so sidecar-backed
+pages can fetch their data.
+
+## Research papers
+
+The seven Git LFS-backed papers are:
+
+- `references/papers/ACGAN-GNNExplainer.pdf`
+- `references/papers/GAT.pdf`
+- `references/papers/GIN.pdf`
+- `references/papers/GraphEXPLAINER.pdf`
+- `references/papers/GraphSAGE.pdf`
+- `references/papers/KPI-AA.pdf`
+- `references/papers/RGCN.pdf`
+
+## Generated and local-only files
+
+Generated diagnostics under `gnn/diagnostics/`, extracted explanation trees
+under `artifacts/v9/explanations/extracted/`, generated dashboard files under
+`artifacts/v9/dashboard/`, Python caches, pytest caches, and local scratch/log
+files are ignored or local-only. The V9 explanation ZIP, its manifest, the
+schema-3 checkpoint, corpora, V9dev fixture, and papers are the committed/LFS
+inputs; do not replace them with untracked generated copies.
+
+## Known schema-3 result limitation
+
+The committed schema-3 ZIP failed its coverage gate. It contains 19 exact
+Hybrid explanations out of 20 selected cases and records one failed case, so
+it is a degraded 19-of-20 archive and is not fully passing or coverage-gated.
+Treat it as committed evidence with an explicit limitation, never as a fully
+passing run.
