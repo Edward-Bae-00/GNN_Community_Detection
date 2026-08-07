@@ -20,6 +20,7 @@ EXPLANATION_SHA256 = (
 )
 LFS_HEADER = b"version https://git-lfs.github.com/spec/v1"
 ARCHIVE_PREFIX = "v9_schema3_results"
+_EXCLUDED_TREE_PARTS = {"__pycache__", ".pytest_cache"}
 
 
 class AssetError(RuntimeError):
@@ -117,13 +118,51 @@ def extract_explanations(
 
 def _file_map(root: Path) -> dict[str, Path]:
     root = Path(root)
-    return {
-        path.relative_to(root).as_posix(): path
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-        and "__pycache__" not in path.parts
-        and ".pytest_cache" not in path.parts
-    }
+    try:
+        root_mode = root.lstat().st_mode
+    except FileNotFoundError as error:
+        raise AssetError(f"comparison root is missing: {root}") from error
+    except OSError as error:
+        raise AssetError(f"cannot inspect comparison root {root}: {error}") from error
+    if stat.S_ISLNK(root_mode):
+        raise AssetError(f"comparison root must not be a symlink: {root}")
+    if not stat.S_ISDIR(root_mode):
+        raise AssetError(f"comparison root is not a directory: {root}")
+
+    files: dict[str, Path] = {}
+
+    def visit(directory: Path) -> None:
+        try:
+            with os.scandir(directory) as scanner:
+                entries = sorted(scanner, key=lambda entry: entry.name)
+        except OSError as error:
+            raise AssetError(
+                f"cannot traverse comparison path {directory}: {error}"
+            ) from error
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(root)
+            if _EXCLUDED_TREE_PARTS.intersection(relative.parts):
+                continue
+            try:
+                mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError as error:
+                raise AssetError(f"cannot inspect comparison path {path}: {error}") from error
+            if stat.S_ISLNK(mode):
+                raise AssetError(f"comparison path must not be a symlink: {path}")
+            if stat.S_ISDIR(mode):
+                visit(path)
+            elif stat.S_ISREG(mode):
+                files[relative.as_posix()] = path
+            else:
+                raise AssetError(
+                    f"comparison path is not a regular file or directory: {path}"
+                )
+
+    visit(root)
+    if not files:
+        raise AssetError(f"comparison root contains no eligible regular files: {root}")
+    return files
 
 
 def compare_trees(left: Path, right: Path) -> dict[str, list[str]]:

@@ -1,5 +1,7 @@
 """Hash, hydration, comparison, and extraction tests for V9 assets."""
 import hashlib
+import os
+import re
 import zipfile
 from pathlib import Path
 
@@ -76,3 +78,109 @@ def test_tree_comparison_reports_missing_and_changed_files(tmp_path):
         "left_only": ["left-only.csv"],
         "right_only": [],
     }
+
+
+def _populated_tree(path: Path) -> Path:
+    path.mkdir()
+    (path / "data.csv").write_text("data")
+    return path
+
+
+@pytest.mark.parametrize("invalid_side", ["left", "right"])
+def test_tree_comparison_rejects_missing_root(tmp_path, invalid_side):
+    left = _populated_tree(tmp_path / "left")
+    right = _populated_tree(tmp_path / "right")
+    invalid = tmp_path / "missing"
+    if invalid_side == "left":
+        left = invalid
+    else:
+        right = invalid
+
+    with pytest.raises(AssetError, match=re.escape(str(invalid))):
+        compare_trees(left, right)
+
+
+@pytest.mark.parametrize("invalid_side", ["left", "right"])
+def test_tree_comparison_rejects_regular_file_root(tmp_path, invalid_side):
+    left = _populated_tree(tmp_path / "left")
+    right = _populated_tree(tmp_path / "right")
+    invalid = tmp_path / "not-a-directory"
+    invalid.write_text("data")
+    if invalid_side == "left":
+        left = invalid
+    else:
+        right = invalid
+
+    with pytest.raises(AssetError, match=re.escape(str(invalid))):
+        compare_trees(left, right)
+
+
+@pytest.mark.parametrize("cache_name", [None, "__pycache__", ".pytest_cache"])
+def test_tree_comparison_rejects_empty_or_excluded_only_root(tmp_path, cache_name):
+    left = tmp_path / "left"
+    right = _populated_tree(tmp_path / "right")
+    left.mkdir()
+    if cache_name is not None:
+        cache = left / cache_name
+        cache.mkdir()
+        (cache / "ignored.pyc").write_bytes(b"ignored")
+
+    with pytest.raises(AssetError, match=re.escape(str(left))):
+        compare_trees(left, right)
+
+
+def _symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool):
+    if not hasattr(os, "symlink"):
+        pytest.skip("the platform does not support symlinks")
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except OSError as error:
+        pytest.skip(f"the platform cannot create symlinks: {error}")
+
+
+def test_tree_comparison_rejects_symlink_root(tmp_path):
+    target = _populated_tree(tmp_path / "target")
+    link = tmp_path / "root-link"
+    _symlink_or_skip(link, target, target_is_directory=True)
+    right = _populated_tree(tmp_path / "right")
+
+    with pytest.raises(AssetError, match=re.escape(str(link))):
+        compare_trees(link, right)
+
+
+def test_tree_comparison_rejects_symlink_file_descendant(tmp_path):
+    left = _populated_tree(tmp_path / "left")
+    right = _populated_tree(tmp_path / "right")
+    outside = tmp_path / "outside.csv"
+    outside.write_text("outside")
+    link = left / "linked.csv"
+    _symlink_or_skip(link, outside, target_is_directory=False)
+
+    with pytest.raises(AssetError, match=re.escape(str(link))):
+        compare_trees(left, right)
+
+
+def test_tree_comparison_rejects_symlink_directory_descendant(tmp_path):
+    left = _populated_tree(tmp_path / "left")
+    right = _populated_tree(tmp_path / "right")
+    outside = _populated_tree(tmp_path / "outside")
+    link = left / "linked-directory"
+    _symlink_or_skip(link, outside, target_is_directory=True)
+
+    with pytest.raises(AssetError, match=re.escape(str(link))):
+        compare_trees(left, right)
+
+
+def test_tree_comparison_rejects_non_regular_special_entry(tmp_path):
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("the platform does not support FIFOs")
+    left = _populated_tree(tmp_path / "left")
+    right = _populated_tree(tmp_path / "right")
+    fifo = left / "events.fifo"
+    try:
+        os.mkfifo(fifo)
+    except OSError as error:
+        pytest.skip(f"the platform cannot create FIFOs: {error}")
+
+    with pytest.raises(AssetError, match=re.escape(str(fifo))):
+        compare_trees(left, right)
