@@ -52,7 +52,9 @@ FROZEN_V9_RESULT_IDS = (
 )
 def _minimal_dashboard_template():
     return """<!doctype html>
-<html><head><title>old</title><style>base</style></head><body>
+<html><head><title>old</title><style>base
+/* ---- Community Explorer ---- */
+</style></head><body>
 <nav class="tabs"><button data-tab="overview">Overview</button><button data-tab="explorer">Explorer</button></nav>
 <main><h1>old</h1><section id="tab-overview" class="tab-content"></section><section id="tab-explorer" class="tab-content"></section></main>
 <script>
@@ -1356,6 +1358,25 @@ def _compatible_v9_demo():
     }
 
 
+@pytest.fixture
+def generated_dashboard_html(tmp_path, monkeypatch):
+    data = {
+        "v9Demo": _compatible_v9_demo(),
+        "v9RecoveryExplainer": {"schema_version": "1.0", "fixture": True},
+        "unsupervisedAD": {"schema_version": 3, "modes": {}},
+        "nav": {"keep": True},
+        "unrelated": {"keep": "unchanged"},
+    }
+    monkeypatch.setattr(BUILDER, "_load_v9_data", lambda **_: data)
+    monkeypatch.setattr(BUILDER, "_publish_staged_dashboard", lambda *_: None)
+    template_path = tmp_path / "template.html"
+    template_path.write_text(_minimal_dashboard_template())
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    BUILDER._build_staged_dashboard(staged, staged, template_path)
+    return (staged / "index.html").read_text()
+
+
 def _configure_architecture_load(tmp_path, monkeypatch, artifact=None):
     preserved = {
         "v9Demo": _compatible_v9_demo(),
@@ -2096,7 +2117,6 @@ def test_gnn_architecture_css_keeps_looks_for_column_readable_at_desktop():
     assert "white-space: normal" in css
     assert "max-width" in css
 ROOT = Path(__file__).resolve().parents[1]
-GENERATED_INDEX = ROOT / "Documents/Data/v9_dashboard/index.html"
 
 
 def _run_unsupervised_view_model(payload):
@@ -2447,18 +2467,17 @@ def test_v9_research_log_records_caught_supervised_contract():
         assert token.lower() in log.lower()
 
 
-def test_generated_dashboard_v9_bootstrap_does_not_require_d3():
-    html = (
-        Path(__file__).resolve().parents[1]
-        / "Documents/Data/v9_dashboard/index.html"
-    ).read_text()
+def test_generated_dashboard_v9_bootstrap_does_not_require_d3(generated_dashboard_html):
+    html = generated_dashboard_html
 
     assert "const tip=document.createElement('div')" in html
     assert "const tip=d3.select('body')" not in html
 
 
-def test_generated_dashboard_has_grouped_accessible_navigation_and_hash_state():
-    html = GENERATED_INDEX.read_text()
+def test_generated_dashboard_has_grouped_accessible_navigation_and_hash_state(
+    generated_dashboard_html,
+):
+    html = generated_dashboard_html
 
     assert 'data-nav-group="readout"' in html
     assert 'data-nav-group="explore"' in html
@@ -2469,16 +2488,20 @@ def test_generated_dashboard_has_grouped_accessible_navigation_and_hash_state():
     assert "closest('[data-navigate-tab]')" in html
 
 
-def test_generated_dashboard_renders_the_overview_tab_exactly_once():
+def test_generated_dashboard_renders_the_overview_tab_exactly_once(
+    generated_dashboard_html,
+):
     """Only the hash-routed bootstrap may perform the initial render."""
-    html = GENERATED_INDEX.read_text()
+    html = generated_dashboard_html
 
     assert "_navigateTo(n||'overview')" in html
     assert "Tabs.overview.render()" not in html
 
 
-def test_generated_dashboard_has_v9_headline_and_responsive_table_contract():
-    html = GENERATED_INDEX.read_text()
+def test_generated_dashboard_has_v9_headline_and_responsive_table_contract(
+    generated_dashboard_html,
+):
+    html = generated_dashboard_html
 
     assert 'id="v9-summary"' in html
     assert "Deployable Hybrid" in html
@@ -2488,15 +2511,19 @@ def test_generated_dashboard_has_v9_headline_and_responsive_table_contract():
     assert "font-family: var(--font-body)" in html
 
 
-def test_generated_dashboard_omits_recovery_coverage_warning_banner():
-    html = GENERATED_INDEX.read_text()
+def test_generated_dashboard_omits_recovery_coverage_warning_banner(
+    generated_dashboard_html,
+):
+    html = generated_dashboard_html
 
     assert "Partial coverage: " not in html
     assert "v9-recovery-warning" not in html
 
 
-def test_generated_dashboard_removes_legacy_duplicate_sections_and_styles():
-    html = GENERATED_INDEX.read_text()
+def test_generated_dashboard_removes_legacy_duplicate_sections_and_styles(
+    generated_dashboard_html,
+):
+    html = generated_dashboard_html
 
     assert html.count('data-tab="entityResolution"') == 0
     assert html.count("entityResolution:{rendered:false") == 0
