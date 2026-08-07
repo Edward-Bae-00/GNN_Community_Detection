@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
@@ -1420,7 +1421,27 @@ def _official_catch_history_provenance(catch_history):
     }
 
 
+def _logical_corpus_name(corpus_dir):
+    """Return the generated corpus identity, falling back to its basename."""
+    corpus_dir = Path(corpus_dir)
+    fallback = corpus_dir.name
+    try:
+        config = json.loads((corpus_dir / "GENERATION_CONFIG.json").read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return fallback
+
+    scale_key = config.get("scale_key") if isinstance(config, dict) else None
+    if not isinstance(scale_key, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_-]*", scale_key
+    ):
+        return fallback
+
+    prefix = "synthetic_cbp_graph_corpus_"
+    return scale_key if scale_key.startswith(prefix) else prefix + scale_key
+
+
 def corpus_output_path(results_dir, corpus_dir):
+    """Return a storage path whose suffix follows the corpus directory basename."""
     corpus_name = Path(corpus_dir).name
     prefix = "synthetic_cbp_graph_corpus_"
     suffix = corpus_name[len(prefix):] if corpus_name.startswith(prefix) else corpus_name
@@ -1538,7 +1559,7 @@ def main(
     output = {
         "schema_version": 3,
         "provenance": {
-            "corpus_name": corpus_dir.name,
+            "corpus_name": _logical_corpus_name(corpus_dir),
             "corpus_path": str(corpus_dir),
             "artifact": "unsupervised_ad_schema_v3",
         },

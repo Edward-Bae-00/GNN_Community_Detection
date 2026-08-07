@@ -23,11 +23,58 @@ from gnn.unsupervised_ad import (
     freeze_scored_events,
     load_observable_pool,
     load_oracle_evaluation,
+    _logical_corpus_name,
     main,
     prepare_training_rows,
     run_deployable_arms,
 )
 from gnn.unsupervised_features import FeatureBundle, RELATIONAL_PROXY_FEATURES
+
+
+@pytest.mark.parametrize(
+    ("directory_name", "scale_key", "expected"),
+    [
+        ("v9dev", "v9dev", "synthetic_cbp_graph_corpus_v9dev"),
+        ("full-v9", "v9", "synthetic_cbp_graph_corpus_v9"),
+        (
+            "prefixed",
+            "synthetic_cbp_graph_corpus_v9",
+            "synthetic_cbp_graph_corpus_v9",
+        ),
+    ],
+)
+def test_logical_corpus_name_uses_scale_key(tmp_path, directory_name, scale_key, expected):
+    corpus = tmp_path / directory_name
+    corpus.mkdir()
+    (corpus / "GENERATION_CONFIG.json").write_text(
+        json.dumps({"scale_key": scale_key})
+    )
+
+    assert _logical_corpus_name(corpus) == expected
+
+
+@pytest.mark.parametrize(
+    "config_text",
+    [
+        None,
+        "{",
+        "[]",
+        json.dumps({}),
+        json.dumps({"scale_key": None}),
+        json.dumps({"scale_key": ""}),
+        json.dumps({"scale_key": "v9 dev"}),
+        json.dumps({"scale_key": "v9/dev"}),
+        json.dumps({"scale_key": "v9\u0000dev"}),
+    ],
+    ids=["absent", "malformed", "non_dict", "missing_key", "none", "empty", "whitespace", "separator", "control"],
+)
+def test_logical_corpus_name_falls_back_to_basename(tmp_path, config_text):
+    corpus = tmp_path / "ad_hoc"
+    corpus.mkdir()
+    if config_text is not None:
+        (corpus / "GENERATION_CONFIG.json").write_text(config_text)
+
+    assert _logical_corpus_name(corpus) == "ad_hoc"
 
 
 def test_cached_features_follow_event_row_order():
