@@ -54,9 +54,20 @@ def _minimal_dashboard_template():
     return """<!doctype html>
 <html><head><title>old</title><style>base
 /* ---- Community Explorer ---- */
+/* ---- Community Explorer ---- */
 </style></head><body>
-<nav class="tabs"><button data-tab="overview">Overview</button><button data-tab="explorer">Explorer</button></nav>
-<main><h1>old</h1><section id="tab-overview" class="tab-content"></section><section id="tab-explorer" class="tab-content"></section></main>
+<nav class="tabs">
+  <button data-tab="overview">Overview</button>
+  <button data-tab="entityResolution">Entity Resolution</button>
+  <button data-tab="entityResolution">Entity Resolution</button>
+  <button data-tab="explorer">Explorer</button>
+</nav>
+<main><h1>old</h1>
+  <section id="tab-overview" class="tab-content"></section>
+  <section id="tab-entityResolution" class="tab-content"></section>
+  <section id="tab-entityResolution" class="tab-content"></section>
+  <section id="tab-explorer" class="tab-content"></section>
+</main>
 <script>
 const DATA = OLD;
 (async function(){
@@ -73,9 +84,16 @@ function showTip(e,html){
 }
 function hideTip(){tip.style('opacity',0)}
 const Tabs={
+entityResolution:{rendered:false,render(){
+  legacyEntityResolutionRenderer();
+}},
+entityResolution:{rendered:false,render(){
+  legacyEntityResolutionRenderer();
+}},
 explorer:{rendered:false,render(){}}
 };
 document.querySelectorAll('nav.tabs button').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
+Tabs.overview.render();Tabs.overview.rendered=true;
 })();
   </script></body></html>"""
 
@@ -1370,7 +1388,17 @@ def generated_dashboard_html(tmp_path, monkeypatch):
     monkeypatch.setattr(BUILDER, "_load_v9_data", lambda **_: data)
     monkeypatch.setattr(BUILDER, "_publish_staged_dashboard", lambda *_: None)
     template_path = tmp_path / "template.html"
-    template_path.write_text(_minimal_dashboard_template())
+    template_html = _minimal_dashboard_template()
+    assert template_html.count("Tabs.overview.render();Tabs.overview.rendered=true;") == 1
+    assert template_html.count("/* ---- Community Explorer ---- */") >= 2
+    assert template_html.count(
+        '  <button data-tab="entityResolution">Entity Resolution</button>\n'
+    ) >= 2
+    assert template_html.count(
+        '  <section id="tab-entityResolution" class="tab-content"></section>\n'
+    ) >= 2
+    assert template_html.count("entityResolution:{rendered:false,render(){") >= 2
+    template_path.write_text(template_html)
     staged = tmp_path / "staged"
     staged.mkdir()
     BUILDER._build_staged_dashboard(staged, staged, template_path)
@@ -2526,8 +2554,10 @@ def test_generated_dashboard_removes_legacy_duplicate_sections_and_styles(
     html = generated_dashboard_html
 
     assert html.count('data-tab="entityResolution"') == 0
+    assert html.count('  <section id="tab-entityResolution" class="tab-content"></section>\n') == 0
     assert html.count("entityResolution:{rendered:false") == 0
     assert html.count("/* ---- Community Explorer ---- */") == 1
+    assert "Tabs.overview.render();Tabs.overview.rendered=true;" not in html
 
 
 def test_unsupervised_dashboard_explains_modes_and_leakage_boundaries():
