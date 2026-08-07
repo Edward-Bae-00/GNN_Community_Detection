@@ -46,7 +46,7 @@ _gnn_scores = _rd._gnn_scores
 DEFAULT_SEEDS = (0, 1, 2)
 DEFAULT_EPOCHS = 18
 DEFAULT_TRAIN_BUCKET = "Q"
-DEFAULT_CORPUS = FC.REPO_ROOT / "Documents" / "Data" / "synthetic_cbp_graph_corpus_v9"
+DEFAULT_CORPUS = FC.DEFAULT_CORPUS_DIR
 DEFAULT_OUTPUT = FC.RESULTS / "gnn_architecture_comparison_v9.json"
 
 
