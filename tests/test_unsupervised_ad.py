@@ -65,8 +65,16 @@ def test_logical_corpus_name_uses_scale_key(tmp_path, directory_name, scale_key,
         json.dumps({"scale_key": "v9 dev"}),
         json.dumps({"scale_key": "v9/dev"}),
         json.dumps({"scale_key": "v9\u0000dev"}),
+        json.dumps({"scale_key": "synthetic_cbp_graph_corpus_"}),
+        json.dumps({"scale_key": "synthetic_cbp_graph_corpus_-bad"}),
+        json.dumps({"scale_key": "synthetic_cbp_graph_corpus_v9/dev"}),
+        json.dumps({"scale_key": "synthetic_cbp_graph_corpus_v9\u0000dev"}),
     ],
-    ids=["absent", "malformed", "non_dict", "missing_key", "none", "empty", "whitespace", "separator", "control"],
+    ids=[
+        "absent", "malformed", "non_dict", "missing_key", "none", "empty",
+        "whitespace", "separator", "control", "prefixed_empty",
+        "prefixed_invalid", "prefixed_separator", "prefixed_control",
+    ],
 )
 def test_logical_corpus_name_falls_back_to_basename(tmp_path, config_text):
     corpus = tmp_path / "ad_hoc"

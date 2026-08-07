@@ -1431,13 +1431,18 @@ def _logical_corpus_name(corpus_dir):
         return fallback
 
     scale_key = config.get("scale_key") if isinstance(config, dict) else None
-    if not isinstance(scale_key, str) or not re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9_-]*", scale_key
-    ):
+    prefix = "synthetic_cbp_graph_corpus_"
+    if not isinstance(scale_key, str):
         return fallback
 
-    prefix = "synthetic_cbp_graph_corpus_"
-    return scale_key if scale_key.startswith(prefix) else prefix + scale_key
+    suffix = (
+        scale_key[len(prefix):]
+        if scale_key.startswith(prefix)
+        else scale_key
+    )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", suffix):
+        return fallback
+    return prefix + suffix
 
 
 def corpus_output_path(results_dir, corpus_dir):
