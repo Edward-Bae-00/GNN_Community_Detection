@@ -1,14 +1,12 @@
 """Realistic tabular baseline: shape, feature set, and as-of correctness.
 See tasks/v9_demo_corpus_plan.md (Task 9)."""
-import pathlib
-
 import numpy as np
 import pandas as pd
 
 from gnn.demo_baseline import build_baseline_features, FEATURE_NAMES
+from gnn.paths import V9DEV_CORPUS_DIR
 
-CD = pathlib.Path(__file__).resolve().parents[1] / \
-    "Documents/Data/synthetic_cbp_graph_corpus_v9dev"
+CD = V9DEV_CORPUS_DIR
 
 
 def test_realistic_baseline_shape_and_asof_counts():

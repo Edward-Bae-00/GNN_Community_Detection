@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import pathlib
 from types import SimpleNamespace
 
 import numpy as np
@@ -16,9 +15,9 @@ import pytest
 
 import gnn.run_demo as rd
 from gnn import learned_cell as lc
+from gnn.paths import V9DEV_CORPUS_DIR
 
-CD = pathlib.Path(__file__).resolve().parents[1] / \
-    "Documents/Data/synthetic_cbp_graph_corpus_v9dev"
+CD = V9DEV_CORPUS_DIR
 
 
 def test_run_demo_exposes_schema3_observability_controls_with_legacy_defaults():

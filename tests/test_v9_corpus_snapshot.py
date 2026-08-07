@@ -1,15 +1,13 @@
 """V9 designed-signal corpus snapshot property tests."""
 from collections import defaultdict
-from pathlib import Path
 
 import pandas as pd
 
 from gnn.graphmodel_rgcn import build_person_graph_typed
+from gnn.paths import V9_CORPUS_DIR, V9DEV_CORPUS_DIR
 
-
-REPO = Path(__file__).resolve().parents[1]
-V9 = REPO / "Documents" / "Data" / "synthetic_cbp_graph_corpus_v9"
-V9DEV = REPO / "Documents" / "Data" / "synthetic_cbp_graph_corpus_v9dev"
+V9 = V9_CORPUS_DIR
+V9DEV = V9DEV_CORPUS_DIR
 
 
 def _truthy(series):

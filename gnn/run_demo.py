@@ -2,10 +2,11 @@
 propagation RGCN over {COTRAVEL, RESIDENCE, SHARED_PLATE, SHARED_PLATE_HOT}. Same
 pool, same substrate (oracle identity — ER is NOT the question here and both arms
 share it, so the comparison is fair), leak-free; paired-event bootstrap for
-significance. Run against V9:
+significance. The default is the Git-LFS-backed canonical V9 corpus:
 
-    CBP_CORPUS_DIR=$PWD/Documents/Data/synthetic_cbp_graph_corpus_v9 \
-        PYTHONPATH=. python -m gnn.run_demo
+    python -m gnn.run_demo
+
+Set CBP_CORPUS_DIR to override the default corpus path.
 """
 from __future__ import annotations
 from collections.abc import Mapping

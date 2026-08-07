@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 import gnn.gnn_architecture_bakeoff as bakeoff
+from gnn.paths import V9_CORPUS_DIR
 
 
 def _pool():
@@ -449,7 +450,8 @@ def test_runner_uses_repository_v9_corpus_when_omitted(monkeypatch, tmp_path):
         lambda *args, **kwargs: _fake_score_bundle(kwargs["seeds"], 4),
     )
     bakeoff.run_bakeoff(output=tmp_path / "artifact.json", ks=(1,), daily_ks=(1,))
-    assert seen["corpus"] == bakeoff.DEFAULT_CORPUS
+    assert bakeoff.DEFAULT_CORPUS == V9_CORPUS_DIR
+    assert seen["corpus"] == V9_CORPUS_DIR
 
 
 def test_validation_failure_preserves_prior_output(monkeypatch, tmp_path):
@@ -479,6 +481,8 @@ def test_validation_failure_preserves_prior_output(monkeypatch, tmp_path):
 def test_parser_defaults_and_overrides_and_integer_validation():
     parser = bakeoff.build_parser()
     args = parser.parse_args([])
+    assert bakeoff.DEFAULT_CORPUS == V9_CORPUS_DIR
+    assert args.corpus == str(V9_CORPUS_DIR)
     assert args.corpus == str(bakeoff.DEFAULT_CORPUS)
     assert args.output == str(bakeoff.DEFAULT_OUTPUT)
     assert tuple(args.seeds) == (0, 1, 2)

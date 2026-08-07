@@ -8,6 +8,7 @@ import numpy as np
 
 import gnn.unsupervised_ad as unsupervised_ad
 from gnn.demo_baseline import FEATURE_NAMES
+from gnn.paths import V9DEV_CORPUS_DIR
 from gnn.unsupervised_ad import (
     ABLATION_ARM_ORDER,
     FrozenScoredEvents,
@@ -832,12 +833,7 @@ def test_one_class_caught_region_skips_only_supervised_arms():
 def test_actual_runner_is_invariant_to_oracle_file_mutation_until_evaluation(
     tmp_path, monkeypatch
 ):
-    source = (
-        Path(__file__).parents[1]
-        / "Documents"
-        / "Data"
-        / "synthetic_cbp_graph_corpus_v9dev"
-    )
+    source = V9DEV_CORPUS_DIR
     original_corpus = tmp_path / "original_corpus"
     mutated_corpus = tmp_path / "mutated_corpus"
     shutil.copytree(source, original_corpus)
@@ -912,12 +908,7 @@ def test_actual_runner_is_invariant_to_oracle_file_mutation_until_evaluation(
 def test_v9dev_main_schema_v3_freezes_before_oracle_and_quarantines_assisted(
     tmp_path, monkeypatch
 ):
-    corpus = (
-        Path(__file__).parents[1]
-        / "Documents"
-        / "Data"
-        / "synthetic_cbp_graph_corpus_v9dev"
-    )
+    corpus = V9DEV_CORPUS_DIR
     call_order = []
     actual_run = unsupervised_ad.run_deployable_arms
     actual_oracle_loader = unsupervised_ad.load_oracle_evaluation
