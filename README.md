@@ -33,14 +33,17 @@ gnn/
   detector.py            sklearn fitting helper
   diagnostics/           Generated evaluation outputs
 
+scripts/
+  data/validate_corpus.py            Corpus validator
+  dashboard/build_dashboard.py      Corpus dashboard builder
+  dashboard/build_v9_dashboard.py   V9 dashboard packager
+
+reproducibility/v9_observability_colab_schema3/corpus/
+  synthetic_cbp_graph_corpus_v9/     Canonical full V9 positive-control corpus
+
+tests/fixtures/v9dev/                Tracked small V9 dev/test corpus
+artifacts/v9/dashboard/              Generated V9 dashboard output
 Documents/Data/
-  synthetic_cbp_graph_corpus_v8/     Local V8 honest-track corpus, not in Git
-  synthetic_cbp_graph_corpus_v9/     Local full V9 positive-control corpus, not in Git
-  synthetic_cbp_graph_corpus_v9dev/  Local small V9 dev/test corpus, not in Git
-  scripts/validate_corpus.py         Corpus validator
-  scripts/build_dashboard.py         Corpus dashboard builder
-  scripts/build_v9_dashboard.py      V9 dashboard packager
-  v9_dashboard/                      Generated V9 dashboard output
   changes_3.md                       Canonical V9 design/results log
   DATA_GUIDE.md                      Older broad data guide with V7-era sections
 
@@ -61,28 +64,27 @@ source .venv/bin/activate
 ```
 
 The working environment is Python 3.14 with PyTorch, PyTorch Geometric,
-scikit-learn, networkx, pandas, and numpy installed. There is no root
-`requirements.txt` or `pyproject.toml` in this checkout yet.
+scikit-learn, networkx, pandas, and numpy installed. Runtime and development
+dependencies are declared in the root `pyproject.toml`.
 
 ## Data Availability
 
-Large data corpora, aggregate calibration CSVs, reference PDFs, generated
-dashboards, and run diagnostics are intentionally excluded from Git. Keep local
-copies under the paths shown above, or set `CBP_CORPUS_DIR` to point at another
-compatible corpus checkout.
+The canonical full V9 corpus and tracked V9dev fixture live at the paths shown
+above. Historical V8 data is not tracked here; preserve its honest-track
+interpretation and verify any local V8 artifacts before using them.
 
 ## Run The V9 Demo
 
 ```bash
 source .venv/bin/activate
-PYTHONPATH=. CBP_CORPUS_DIR=$PWD/Documents/Data/synthetic_cbp_graph_corpus_v9 \
-  python -m gnn.run_demo
+python -m gnn.run_demo
 ```
 
 Results are written under `gnn/diagnostics/`.
 
-By default, `gnn/config.py` points at the V8 corpus. Set
-`CBP_CORPUS_DIR` explicitly when running the V9 positive-control demo.
+By default, `gnn/config.py` uses the canonical V9 corpus from `gnn.paths`.
+Set `CBP_CORPUS_DIR` only when intentionally evaluating another compatible
+corpus.
 
 ## Run Tests
 
@@ -91,9 +93,8 @@ source .venv/bin/activate
 PYTHONPATH=. pytest -q tests
 ```
 
-The V9 corpus snapshot test validates the local
-`Documents/Data/synthetic_cbp_graph_corpus_v9dev/` files directly, so it requires
-that corpus to be present outside Git.
+The V9 corpus snapshot test validates the tracked `tests/fixtures/v9dev/`
+fixture directly.
 
 ## Data Utilities
 
@@ -111,7 +112,7 @@ server so `index.html` can fetch `data_v9.json`.
 
 ## Current Result Summary
 
-`docs/research/changes_3.md` is the canonical V9 result log in this checkout.
+`Documents/Data/changes_3.md` is the canonical V9 result log in this checkout.
 It records the positive-control conclusion: on V9, the caught-propagation RGCN
 recovers substantially more hidden carriers than the strong tabular baseline at
 operational depth because co-travel is now present in the graph the model sees.
@@ -124,7 +125,8 @@ artifacts before relying on them.
 ## Organization Notes
 
 - `Documents/Data/DATA_GUIDE.md` still contains V7-era broad documentation. Use
-  the V8/V9 corpus READMEs and `changes_3.md` for current-track specifics.
+  the V8/V9 corpus READMEs and `Documents/Data/changes_3.md` for current-track
+  specifics.
 - `scripts/data/` and `scripts/dashboard/` contain validation, dashboard, and ER helper
   utilities. Corpus generation has been retired from this checkout; local
   V8/V9/V9dev snapshots are the source artifacts.

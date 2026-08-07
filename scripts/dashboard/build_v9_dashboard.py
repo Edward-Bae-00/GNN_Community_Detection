@@ -19,6 +19,12 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+if not __package__:
+    sys.path.insert(
+        0,
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    )
+
 from gnn.paths import (
     REPO_ROOT as REPO_ROOT_PATH,
     V9_CORPUS_DIR as V9_CORPUS_PATH,

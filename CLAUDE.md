@@ -42,8 +42,8 @@ Canonical V9 notes and current headline results are in
 - Common libraries in this environment: torch, torch-geometric, scikit-learn,
   networkx, pandas, numpy
 
-This checkout does not currently include a root `requirements.txt` or
-`pyproject.toml`; use the existing `.venv` unless dependency metadata is added.
+The root `pyproject.toml` declares runtime and development dependencies; use the
+existing `.venv` for this checkout.
 
 ## Project Structure
 
@@ -65,13 +65,15 @@ This checkout does not currently include a root `requirements.txt` or
 │   ├── Data/
 │   │   ├── DATA_GUIDE.md      # Legacy broad guide; V7-era sections remain
 │   │   ├── changes_3.md       # V9 design and result log
-│   │   ├── RealWorld_Data/    # Aggregate calibration/reference CSVs
-│   │   ├── scripts/           # Validator, dashboard, and ER utilities
-│   │   ├── synthetic_cbp_graph_corpus_v8/    # local, excluded from Git
-│   │   ├── synthetic_cbp_graph_corpus_v9/    # local, excluded from Git
-│   │   ├── synthetic_cbp_graph_corpus_v9dev/ # local, excluded from Git
-│   │   └── v9_dashboard/      # Generated V9 dashboard assets
+│   │   └── RealWorld_Data/    # Aggregate calibration/reference CSVs
 │   └── GNN/                   # Reference papers/materials
+├── reproducibility/v9_observability_colab_schema3/corpus/
+│   └── synthetic_cbp_graph_corpus_v9/  # Canonical full V9 corpus
+├── scripts/
+│   ├── data/validate_corpus.py
+│   └── dashboard/             # Generic and V9 dashboard utilities
+├── tests/fixtures/v9dev/      # Tracked small V9 fixture
+└── artifacts/v9/dashboard/    # Generated dashboard output
 └── tests/
     ├── test_demo_baseline.py
     ├── test_df_detector.py
@@ -84,12 +86,11 @@ This checkout does not currently include a root `requirements.txt` or
 
 ```bash
 source .venv/bin/activate
-PYTHONPATH=. CBP_CORPUS_DIR=$PWD/Documents/Data/synthetic_cbp_graph_corpus_v9 \
-  python -m gnn.run_demo
+python -m gnn.run_demo
 ```
 
-`CBP_CORPUS_DIR` defaults to the V8 corpus in `gnn/config.py`; set it
-explicitly for the V9 demonstration.
+`gnn/config.py` defaults to the canonical V9 corpus from `gnn.paths`. Set
+`CBP_CORPUS_DIR` only when intentionally evaluating another compatible corpus.
 
 Outputs go to `gnn/diagnostics/`.
 
@@ -100,8 +101,8 @@ source .venv/bin/activate
 PYTHONPATH=. pytest -q tests
 ```
 
-`tests/test_v9_corpus_snapshot.py` validates the local small `v9dev` corpus
-snapshot directly, so that data must be present outside Git.
+`tests/test_v9_corpus_snapshot.py` validates the tracked `tests/fixtures/v9dev/`
+snapshot directly.
 
 ## Data And Dashboard Utilities
 

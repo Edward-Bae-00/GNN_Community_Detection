@@ -14,10 +14,16 @@ byte-identical) and splicing in the embedded DATA plus the new Community Explore
 """
 import csv, json, os, sys, re, math, random, collections, datetime
 
+if not __package__:
+    sys.path.insert(
+        0,
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    )
+
 from gnn.paths import REPO_ROOT
 
 csv.field_size_limit(10 ** 8)
-random.seed(13)
+_RNG = random.Random(13)
 
 # ---------------------------------------------------------------------------
 # Geographic centroids  (lon, lat)  -- used to place ports/origins on the map.
@@ -144,6 +150,39 @@ def load_entity_resolution_summary(corpus_dir):
 
 
 # ===========================================================================
+def _embed_optional_diagnostics(data, name, repo_root=REPO_ROOT):
+    """Embed available V8/V9 diagnostics without changing missing-file fallbacks."""
+    diagnostics_dir = os.path.join(os.fspath(repo_root), "gnn", "diagnostics")
+
+    if name.endswith("_v8"):
+        flagged_path = os.path.join(diagnostics_dir, "model_flagged_v8.json")
+        if os.path.exists(flagged_path):
+            with open(flagged_path) as flagged_file:
+                data["modelFlagged"] = json.load(flagged_file)
+            p(f"[build] embedded modelFlagged ({len(data['modelFlagged'].get('rows', []))} rows)")
+        else:
+            p(f"[build] note: {flagged_path} absent — Flagged tab will stay hidden")
+
+        arms_path = os.path.join(diagnostics_dir, "detection_arms_v8.json")
+        if os.path.exists(arms_path):
+            with open(arms_path) as arms_file:
+                data["detectionArms"] = json.load(arms_file)
+            p(f"[build] embedded detectionArms ({len(data['detectionArms'].get('arms', []))} arms)")
+        else:
+            p(f"[build] note: {arms_path} absent — Detection Arms tab will stay hidden")
+
+    if name.endswith("_v9"):
+        demo_path = os.path.join(diagnostics_dir, "demo_comparison_v9.json")
+        if os.path.exists(demo_path):
+            with open(demo_path) as demo_file:
+                data["v9Demo"] = json.load(demo_file)
+            p("[build] embedded v9Demo comparison result")
+        else:
+            p(f"[build] note: {demo_path} absent — V9 Results tab will show corpus-only data")
+
+    return data
+
+
 def main(corpus_dir):
     files = lambda n: os.path.join(corpus_dir, n)
     name = os.path.basename(os.path.normpath(corpus_dir))
@@ -778,7 +817,7 @@ def main(corpus_dir):
     detected = set(i for i in range(N) if role[i] & (R_SEIZED | R_ARRESTED))
     node_set = set(detected)
     smug = [i for i in range(N) if (role[i] & (R_CARRIED | R_INTERDICT)) and i not in node_set]
-    random.shuffle(smug)
+    _RNG.shuffle(smug)
     for i in smug[:ROLE_SAMPLE_CAP]:
         node_set.add(i)
     role_nodes = list(node_set)
@@ -799,7 +838,7 @@ def main(corpus_dir):
     target = min(CONTEXT_TARGET, MAX_NODES)
     if len(node_set) < target:
         pool = [i for i in range(N) if i not in node_set]
-        random.shuffle(pool)
+        _RNG.shuffle(pool)
         by_type_pool = collections.defaultdict(list)
         for i in pool:
             by_type_pool[ctype[i]].append(i)
@@ -1086,7 +1125,7 @@ def main(corpus_dir):
         c = STATE_CENTROIDS.get(state)
         if not c:
             return None, None
-        return c[1] + random.uniform(-0.25, 0.25), c[0] + random.uniform(-0.25, 0.25)
+        return c[1] + _RNG.uniform(-0.25, 0.25), c[0] + _RNG.uniform(-0.25, 0.25)
 
     top_ports = []
     for pc, v in sorted(by_port.items(), key=lambda kv: -kv[1]["total"])[:50]:
@@ -1283,38 +1322,7 @@ def main(corpus_dir):
     if er_summary is not None:
         DATA["entity_resolution"] = er_summary
 
-    # Embed the combined-detector flagged export for V8 (single copy path via
-    # dashboard_data.json; the unified builder only copies that file per corpus).
-    if name.endswith("_v8"):
-        flagged_path = os.path.join(REPO_ROOT, "gnn", "diagnostics",
-                                    "model_flagged_v8.json")
-        if os.path.exists(flagged_path):
-            with open(flagged_path) as ff:
-                DATA["modelFlagged"] = json.load(ff)
-            p(f"[build] embedded modelFlagged ({len(DATA['modelFlagged'].get('rows', []))} rows)")
-        else:
-            p(f"[build] note: {flagged_path} absent — Flagged tab will stay hidden")
-
-        # Detection Arms tab: five arms with uncertainty + seed spread + ceiling.
-        arms_path = os.path.join(REPO_ROOT, "gnn", "diagnostics",
-                                 "detection_arms_v8.json")
-        if os.path.exists(arms_path):
-            with open(arms_path) as af:
-                DATA["detectionArms"] = json.load(af)
-            p(f"[build] embedded detectionArms ({len(DATA['detectionArms'].get('arms', []))} arms)")
-        else:
-            p(f"[build] note: {arms_path} absent — Detection Arms tab will stay hidden")
-
-    # V9 positive-control result blob for the V9-specific dashboard.
-    if name.endswith("_v9"):
-        demo_path = os.path.join(REPO_ROOT, "gnn", "diagnostics",
-                                 "demo_comparison_v9.json")
-        if os.path.exists(demo_path):
-            with open(demo_path) as df:
-                DATA["v9Demo"] = json.load(df)
-            p("[build] embedded v9Demo comparison result")
-        else:
-            p(f"[build] note: {demo_path} absent — V9 Results tab will show corpus-only data")
+    _embed_optional_diagnostics(DATA, name)
 
     # Also write JSON for the unified dashboard
     json_path = files("dashboard_data.json")
