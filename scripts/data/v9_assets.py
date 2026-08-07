@@ -12,6 +12,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -113,13 +114,13 @@ def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     if not members:
         raise AssetError("explanation ZIP is empty")
 
-    raw_names: set[str] = set()
+    raw_kinds: dict[str, str] = {}
     normalized_kinds: dict[str, str] = {}
+    filesystem_kinds: dict[str, str] = {}
     for member in members:
         name = member.filename
-        if name in raw_names:
+        if name in raw_kinds:
             raise AssetError(f"duplicate ZIP member: {name!r}")
-        raw_names.add(name)
 
         relative = PurePosixPath(name)
         if not relative.parts:
@@ -149,27 +150,46 @@ def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
         normalized = relative.as_posix()
         if normalized in normalized_kinds:
             raise AssetError(f"normalized ZIP member collision: {name!r}")
-        normalized_kinds[normalized] = kind
 
-    normalized_names = sorted(normalized_kinds)
-    for name, kind in normalized_kinds.items():
-        if kind != "file":
-            continue
-        descendant_index = bisect_left(normalized_names, name + "/")
-        if (
-            descendant_index < len(normalized_names)
-            and normalized_names[descendant_index].startswith(name + "/")
-        ):
-            raise AssetError(f"file/directory prefix collision: {name!r}")
+        filesystem_key = unicodedata.normalize("NFC", normalized).casefold()
+        if filesystem_key in filesystem_kinds:
+            raise AssetError(f"filesystem ZIP member collision: {name!r}")
+
+        raw_kinds[name] = kind
+        normalized_kinds[normalized] = kind
+        filesystem_kinds[filesystem_key] = kind
+
+    for label, kinds in (
+        ("", normalized_kinds),
+        ("filesystem ", filesystem_kinds),
+    ):
+        names = sorted(kinds)
+        for name, kind in kinds.items():
+            if kind != "file":
+                continue
+            descendant_index = bisect_left(names, name + "/")
+            if (
+                descendant_index < len(names)
+                and names[descendant_index].startswith(name + "/")
+            ):
+                raise AssetError(
+                    f"{label}file/directory prefix collision: {name!r}"
+                )
 
     required = (
         f"{ARCHIVE_PREFIX}/result.json",
         f"{ARCHIVE_PREFIX}/recovery/current.json",
     )
-    missing = sorted(name for name in required if name not in normalized_kinds)
+    missing = sorted(
+        name
+        for name in required
+        if name not in raw_kinds and normalized_kinds.get(name) != "directory"
+    )
     if missing:
         raise AssetError(f"explanation ZIP is missing: {', '.join(missing)}")
-    non_files = [name for name in required if normalized_kinds[name] != "file"]
+    non_files = [
+        name for name in required if normalized_kinds.get(name) == "directory"
+    ]
     if non_files:
         raise AssetError(
             f"explanation ZIP requires regular file: {', '.join(non_files)}"
@@ -196,17 +216,21 @@ def extract_explanations(
     destination = Path(destination)
     if destination.exists():
         raise AssetError(f"extraction destination already exists: {destination}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix=".v9-extract-", dir=destination.parent))
+    stage: Path | None = None
     try:
         with _verified_explanation_archive(archive_path, expected_sha256) as (archive, _):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            stage = Path(
+                tempfile.mkdtemp(prefix=".v9-extract-", dir=destination.parent)
+            )
             archive.extractall(stage)
             source = stage / ARCHIVE_PREFIX
             if not source.is_dir():
                 raise AssetError("explanation ZIP canonical root is missing")
         os.replace(source, destination)
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
     return destination
 
 

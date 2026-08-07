@@ -199,6 +199,51 @@ def test_archive_rejects_normalized_member_collisions(tmp_path):
         verify_explanation_archive(archive, digest)
 
 
+def test_archive_rejects_casefolded_member_collisions(tmp_path):
+    archive = tmp_path / "casefolded-collision.zip"
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/result.json", b"{}"),
+            ("v9_schema3_results/Result.json", b"duplicate"),
+            ("v9_schema3_results/recovery/current.json", b"{}"),
+        ],
+    )
+
+    with pytest.raises(AssetError, match="filesystem ZIP member collision"):
+        verify_explanation_archive(archive, digest)
+
+
+def test_archive_rejects_unicode_normalized_member_collisions(tmp_path):
+    archive = tmp_path / "unicode-collision.zip"
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/result.json", b"{}"),
+            ("v9_schema3_results/recovery/current.json", b"{}"),
+            ("v9_schema3_results/recovery/caf\u00e9.json", b"one"),
+            ("v9_schema3_results/recovery/cafe\u0301.json", b"two"),
+        ],
+    )
+
+    with pytest.raises(AssetError, match="filesystem ZIP member collision"):
+        verify_explanation_archive(archive, digest)
+
+
+def test_required_members_use_exact_archive_names(tmp_path):
+    archive = tmp_path / "dotted-required-name.zip"
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/./result.json", b"{}"),
+            ("v9_schema3_results/recovery/current.json", b"{}"),
+        ],
+    )
+
+    with pytest.raises(AssetError, match="missing.*result.json"):
+        verify_explanation_archive(archive, digest)
+
+
 def test_archive_rejects_file_directory_prefix_collisions(tmp_path):
     archive = tmp_path / "prefix-collision.zip"
     digest = _write_zip_entries(
@@ -211,6 +256,23 @@ def test_archive_rejects_file_directory_prefix_collisions(tmp_path):
     )
 
     with pytest.raises(AssetError, match="file/directory prefix collision"):
+        verify_explanation_archive(archive, digest)
+
+
+def test_archive_rejects_casefolded_file_directory_prefix_collisions(tmp_path):
+    archive = tmp_path / "casefolded-prefix-collision.zip"
+    digest = _write_zip_entries(
+        archive,
+        [
+            ("v9_schema3_results/result.json", b"{}"),
+            ("v9_schema3_results/Recovery", b"file"),
+            ("v9_schema3_results/recovery/current.json", b"{}"),
+        ],
+    )
+
+    with pytest.raises(
+        AssetError, match="filesystem file/directory prefix collision"
+    ):
         verify_explanation_archive(archive, digest)
 
 
@@ -273,6 +335,33 @@ def test_injected_extraction_error_cleans_stage_and_destination(tmp_path, monkey
 
     assert not destination.exists()
     assert not list(tmp_path.glob(".v9-extract-*"))
+
+
+@pytest.mark.parametrize("failure", ["malformed", "hash-mismatch"])
+def test_extraction_verifies_before_creating_destination_parent(tmp_path, failure):
+    archive = tmp_path / f"{failure}.zip"
+    if failure == "malformed":
+        archive.write_bytes(b"not a ZIP archive")
+        expected_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    else:
+        _write_zip(
+            archive,
+            {
+                "v9_schema3_results/result.json": b"{}",
+                "v9_schema3_results/recovery/current.json": b"{}",
+            },
+        )
+        expected_digest = "0" * 64
+
+    destination_parent = tmp_path / "absent" / "nested"
+    destination = destination_parent / "published"
+
+    with pytest.raises(AssetError):
+        extract_explanations(archive, destination, expected_digest)
+
+    assert not destination.exists()
+    assert not destination_parent.exists()
+    assert not list(tmp_path.rglob(".v9-extract-*"))
 
 
 def test_tree_comparison_reports_missing_and_changed_files(tmp_path):
