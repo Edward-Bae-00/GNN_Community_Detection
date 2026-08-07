@@ -8,9 +8,10 @@ control in `gnn/`.
 
 Every modeled record is synthetic. No row represents a real person, vehicle,
 document, officer, case, event, seizure, arrest, address, phone number, email,
-license plate, or name. Aggregate real-world CSVs under `Documents/Data/RealWorld_Data/`
-are calibration/context inputs only; they are not operational records or model
-targets.
+license plate, or name. Optional/local aggregate real-world CSVs under
+`Documents/Data/RealWorld_Data/` are calibration/context inputs only; that
+directory is absent from a fresh clone unless supplied. They are not
+operational records or model targets.
 
 V8 is historical honest-track context only. Its corpus is intentionally absent
 from this checkout and is not the default or active data path.
@@ -26,7 +27,8 @@ aggregates are excluded from features.
 
 The graph-free baseline remains strong and fair. It uses own history, observed
 demographics, and current event context, but no graph or neighbor-label
-features. The experiment asks whether the as-of caught-propagation GNN can
+features, party size, shared vehicle/document co-use, or other relational graph
+shadows. The experiment asks whether the as-of caught-propagation GNN can
 recover more hidden carriers at operational depth when relational signal is
 actually present; it does not claim that V9 supersedes the historical V8
 honest-track caveat.
@@ -70,15 +72,20 @@ git lfs pull
 
 ## Environment setup
 
+Check that Python 3 is installed, then create the virtual environment with
+Python 3:
+
 ```bash
-python -m venv .venv
+python3 --version
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-`pyproject.toml` is the authoritative install metadata. The supported local
-environment is Python 3.14 with PyTorch, PyTorch Geometric, scikit-learn,
-networkx, pandas, numpy, and pytest installed by the project metadata.
+`pyproject.toml` is the authoritative install metadata and requires Python
+`>=3.11`. This project is currently verified with Python 3.14; other supported
+Python versions must satisfy the metadata requirement. The project installs
+PyTorch, PyTorch Geometric, scikit-learn, networkx, pandas, numpy, and pytest.
 
 ## Run the V9 demo
 
@@ -115,11 +122,42 @@ LFS payloads are hydrated.
 
 The handoff package is
 `reproducibility/v9_observability_colab_schema3/`. Upload that whole directory
-to Google Drive, open a high-RAM Colab runtime, open
-`v9_schema3_observability.ipynb`, and run all cells. The notebook installs the
-requirements, prepares local runtime storage, verifies the checkpoint/corpus
-identity, starts Ollama, validates the exact `gemma4:12b` tag, and runs
-`run_schema3_observability.py`.
+to `MyDrive/v9_observability_colab_schema3`, open a high-RAM Colab runtime, and
+open `v9_schema3_observability.ipynb`. The notebook's Run all path performs the
+same mount/copy sequence below. Start from a fresh runtime; if the local
+destination already exists, remove or inspect it deliberately before copying so
+an old package is not silently overwritten.
+
+Colab Python cell:
+
+```python
+from google.colab import drive
+from pathlib import Path
+import shutil
+
+drive.mount("/content/drive")
+source = Path("/content/drive/MyDrive/v9_observability_colab_schema3")
+destination = Path("/content/v9_observability_colab_schema3")
+if destination.exists():
+    raise RuntimeError(f"Remove or inspect {destination} before copying")
+shutil.copytree(source, destination)
+```
+
+Colab shell/magic cell:
+
+```bash
+%cd /content/v9_observability_colab_schema3
+!python -m pip install -r requirements.txt
+!python run_schema3_observability.py \
+  --work-root /content/v9_schema3_run \
+  --export-dir /content/drive/MyDrive/v9_schema3_results
+```
+
+The notebook installs the requirements, prepares local runtime storage, verifies
+the checkpoint/corpus identity, starts Ollama, validates the exact
+`gemma4:12b` tag, and runs `run_schema3_observability.py`. Keep the corpus,
+checkpoint, SQLite/catalog scratch, and generated output on local storage
+during the run; Drive FUSE is too slow for hot writes.
 
 The equivalent runner handoff is:
 

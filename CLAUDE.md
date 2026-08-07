@@ -14,9 +14,10 @@ propagable. The comparison is leak-free and uses strict as-of semantics: only
 graph edges and caught labels available before row time `T` may be used.
 
 The baseline is intentionally strong and graph-free. It may use own history,
-observed demographics, and event context, but not graph edges or neighbor
-labels. Future outcomes, lifetime catches, hidden organization labels, and
-outcome aggregates are not features.
+observed demographics, and non-relational event context, but not graph edges,
+neighbor labels, party size, shared vehicle/document co-use, or other relational
+graph shadows. Future outcomes, lifetime catches, hidden organization labels,
+and outcome aggregates are not features.
 
 V8 is historical honest-track context only. Its corpus is absent from this
 checkout and is not the current default/data path. Preserve the interpretation
@@ -53,8 +54,8 @@ leakage safety, and the strong-baseline contract, then run affected tests.
 - Keep the synthetic-data scope and the V8/V9 distinction explicit.
 - Do not move corpus directories casually.
 - Do not change code/model behavior, data, artifacts, or tests during a
-  documentation-only task except for the explicitly requested research-log
-  path assertion.
+  documentation-only task except for an explicitly requested path-only test
+  update.
 - Keep generated diagnostics under `gnn/diagnostics/` and generated dashboard
   output under `artifacts/v9/dashboard/`.
 - Root `README.md` is authoritative for onboarding. Historical plans and specs

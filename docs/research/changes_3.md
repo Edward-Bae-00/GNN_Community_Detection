@@ -101,11 +101,17 @@ honest, realistic shape of the win.
 
 ## Design
 
-The design is captured in this log and the current checked-in corpus snapshots.
-The generator has been retired from this checkout after the V8/V9/V9dev snapshots
-were produced. Older notes referenced `tasks/v9_demo_corpus_design.md` and
-`tasks/v9_demo_corpus_plan.md`, but the `tasks/` directory is not present in this
-checkout.
+**Historical checkout-state note (2026-07-07):** The design was captured in
+this log and the then-current checked-in V8/V9/V9dev corpus snapshots. The
+generator had been retired from that checkout after those snapshots were
+produced. Older notes referenced `tasks/v9_demo_corpus_design.md` and
+`tasks/v9_demo_corpus_plan.md`, but the `tasks/` directory was not present in
+that checkout.
+
+**Current organized-layout note (2026-08-07):** The active full V9 corpus is
+under `reproducibility/v9_observability_colab_schema3/corpus/`, V9dev is under
+`tests/fixtures/v9dev/`, and current task records are under `tasks/`. V8 remains
+historical context; its corpus is absent from the organized checkout.
 
 **Corpus knobs** (V9 snapshot: 120K persons / 200K events; `v9dev` snapshot:
 2K/4K for tests):
@@ -131,8 +137,8 @@ checkout.
   that plate, so later seizures do not hot-label earlier plate edges).
 - GNN arm: as-of caught-propagation RGCN over
   `{COTRAVEL, RESIDENCE, SHARED_PLATE, SHARED_PLATE_HOT}`.
-- Baseline arm: realistic **14-feature** observable tabular model (`gnn/
-  demo_baseline.py`): as-of own history (`prior_crossings, prior_secondary, prior_seizure,
+- Baseline arm: realistic **14-feature** observable tabular model in
+  `gnn/demo_baseline.py`: as-of own history (`prior_crossings, prior_secondary, prior_seizure,
   prior_arrests`) + observed demographics (`age_bucket, sex`) + per-event context
   (`citizenship_country, residence_country, region, mode_of_transportation,
   travel_category, declared_trip_purpose, day_of_week, hour`), NO graph info. This is a
@@ -163,10 +169,11 @@ per-event and unchanged. New guard `test_v9dev_cotravel_reaches_demo_graph` asse
 
 **Leak-free cleanup (2026-07-08):** Shared-plate HOT relation assignment was
 changed so a future vehicle seizure cannot mark earlier shared-plate encounters
-as `SHARED_PLATE_HOT`. The checked-in V8/V9/V9dev `PERSON_ASSOCIATED_WITH_PERSON`
-edges were also retimestamped to the pair's first actual shared crossing instead
-of the source person's first-ever crossing. This keeps `edges.csv` as-of consumers
-from seeing co-travel relationships before they existed.
+as `SHARED_PLATE_HOT`. In that historical checkout, the checked-in V8/V9/V9dev
+`PERSON_ASSOCIATED_WITH_PERSON` edges were also retimestamped to the pair's first
+actual shared crossing instead of the source person's first-ever crossing. This
+keeps `edges.csv` as-of consumers from seeing co-travel relationships before they
+existed.
 
 **Evaluation:** the existing leak-free harness — train on `detected_flag`, rank
 `false_negative_flag` in the test pool; found@K / precision@K / recall@K on the whole
@@ -203,7 +210,8 @@ replace or alter any three-seed V9 headline metric.
 
 Full-scale V9 (120K persons / 200K events), oracle-identity substrate (shared by both
 arms, so ER is not the variable), 3 seeds, paired-event bootstrap (1,500 resamples),
-`train_bucket='Q'`, 18 epochs. Source: `gnn/diagnostics/demo_comparison_v9.json`.
+`train_bucket='Q'`, 18 epochs. Historical generated-output source (ignored, not
+checked in): `gnn/diagnostics/demo_comparison_v9.json`.
 
 - **Pool:** 38,948 test events; **2,691 hidden carriers** — 708 observable (in a co-offender
   cell with an observable tie), 234 dark, 1,749 lone. The observable 708 is the GNN's
@@ -354,8 +362,8 @@ full corpus, and the hardware limit that gates full observability generation.
 ### Fresh K=5 scoring (measured, not fit inputs)
 
 Config: seeds `[0,1,2]`, 18 epochs, quarterly training buckets, validation
-sample 20,000, `daily_ks=(5,)`, 1,500 bootstraps. Canonical output rewritten to
-`gnn/diagnostics/demo_comparison_v9.json`; durable checkpoint
+sample 20,000, `daily_ks=(5,)`, 1,500 bootstraps. The historical run rewrote
+generated output to `gnn/diagnostics/demo_comparison_v9.json`; durable checkpoint
 `gnn/diagnostics/checkpoints/17d5ee9fe23234ab33b0ba33e36800ab21bd25101b32ff51bb787b259e4f3c52`.
 
 Seed-level unique-person recovery at 5 inspections/day:
@@ -483,8 +491,8 @@ Suite after the change: 830 passed, 1 skipped.
 The standalone command `.venv/bin/python -m gnn.gnn_architecture_bakeoff` resolved
 the full-V9 configuration: seeds `0/1/2`, 18 epochs, `train_bucket='Q'`, global
 `K=50/100/200/500/1000/2000/5000`, and daily `K=5/10/25/50`. It wrote
-`gnn/diagnostics/gnn_architecture_comparison_v9.json`; no Baseline or Hybrid arm
-was executed or written by this command.
+the ignored local `gnn/diagnostics/gnn_architecture_comparison_v9.json`; no
+Baseline or Hybrid arm was executed or written by this command.
 
 The full artifact validated five arms: GraphSAGE, full-graph RGCN, GAT attention,
 GIN, and KPI-AA approximation. At global K=500, whole-pool and observable
@@ -510,9 +518,14 @@ At daily K=25, whole-pool aggregate found/precision/recall/F1 were:
 
 The dashboard independently validates and embeds this artifact under
 `v9GNNArchitectureComparison`, rendering a strictly additive GNN-only section in
-V9 Results; existing sections, navigation, and data remain unchanged. Generated
-outputs were rebuilt at `artifacts/v9/dashboard/data_v9.json` and
-`artifacts/v9/dashboard/index.html`.
+V9 Results; existing sections, navigation, and data remain unchanged.
+
+**Historical checkout-state provenance (2026-08-01):** Generated outputs were
+rebuilt at `Documents/Data/v9_dashboard/data_v9.json` and
+`Documents/Data/v9_dashboard/index.html`.
+
+**Current organized-layout rebuild target:** `artifacts/v9/dashboard/data_v9.json`
+and `artifacts/v9/dashboard/index.html`.
 
 This observed run used a 16GB Mac and about 12 active CPU-hours sequentially;
 sleep/contention made wall time longer. This is an approximate observation, not a

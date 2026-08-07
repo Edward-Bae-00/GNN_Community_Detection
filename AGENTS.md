@@ -19,7 +19,9 @@ treated as the current default or data path.
 - Keep future outcomes, lifetime catches, hidden organization labels, and
   outcome aggregates out of features.
 - Keep the strong graph-free baseline fair: own history, observed demographics,
-  and event context are allowed; graph and neighbor-label features are not.
+  and non-relational event context are allowed; graph edges, neighbor labels,
+  party size, shared vehicle/document co-use, and other relational graph
+  shadows are not.
 - Keep V9 positive-control conclusions separate from the historical V8
   thin-graph-signal interpretation.
 - Treat every record as synthetic; real-world aggregates are calibration/context

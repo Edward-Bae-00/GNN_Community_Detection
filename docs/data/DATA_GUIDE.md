@@ -121,14 +121,24 @@ not allowed to see future catches, hidden org labels, or lifetime outcomes.
 
 ## Current Results
 
-The canonical V9 result log is `docs/research/changes_3.md`. The main checked-in
-result artifact is `gnn/diagnostics/demo_comparison_v9.json`; the small smoke
-artifact is `gnn/diagnostics/demo_smoke.json`. Additionally, an unsupervised 
-anomaly detection evaluation (`gnn/diagnostics/unsupervised_ad_results.json`) 
-uses Isolation Forest to model each border region's definition of "normal", 
-and is displayed in the V9 dashboard.
+The canonical V9 result log is `docs/research/changes_3.md`, and its historical
+measured summaries are authoritative. `gnn/diagnostics/` is generated and
+ignored; these files are not checked in: `demo_comparison_v9.json`,
+`demo_smoke.json`, `unsupervised_ad_results.json`, and
+`gnn_architecture_comparison_v9.json`. The unsupervised result uses Isolation
+Forest to model each border region's definition of "normal"; the architecture
+comparison is an expensive separate run. Neither generated output should be
+treated as a versioned source of published measurements.
 
-Full-scale V9 result summary from `changes_3.md`:
+Regenerate local diagnostics when needed:
+
+```bash
+python -m gnn.run_demo
+python -m gnn.unsupervised_ad
+python -m gnn.gnn_architecture_bakeoff  # optional; expensive separate run
+```
+
+Full-scale V9 result summary from `docs/research/changes_3.md`:
 
 - Corpus: 120K persons / 200K events.
 - Test pool: 38,948 events.
@@ -216,6 +226,18 @@ model claims.
   `python -m scripts.dashboard.build_v9_dashboard`.
 - V9dev intentionally does not include dashboard payloads; it is for tests and
   smoke runs.
+
+After a fresh clone is hydrated with Git LFS, the dashboard can render canonical
+corpus content plus the committed schema-3 explanation evidence. The generated
+demo, anomaly-ranking, and GNN-architecture sections may be absent or sparse
+until their ignored diagnostics are regenerated with the commands above. The
+dashboard itself is also generated/ignored; it is not a versioned artifact.
+
+Rebuild the current dashboard after generating any desired local diagnostics:
+
+```bash
+python -m scripts.dashboard.build_v9_dashboard
+```
 
 Dashboard tabs summarize corpus structure: overview, temporal/geographic
 patterns, communities, outcomes, seizures, graph metrics, entity-resolution

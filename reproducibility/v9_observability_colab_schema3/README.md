@@ -1,8 +1,8 @@
 # V9 schema-3 observability Colab handoff
 
-This is the clean schema-3 handoff for the V9 observability run. It is
-separate from the legacy `v9_observability_colab` package, which generates the
-older schema-2 artifact for all 268 Hybrid-only cases.
+This is the self-contained schema-3 handoff for the V9 observability run. The
+legacy schema-2 package is not included here; this handoff does not depend on
+files outside this directory.
 
 The production policy is:
 
@@ -14,12 +14,41 @@ The production policy is:
 
 ## Colab setup
 
-1. Upload this whole folder to Google Drive (~1.4 GB, almost all corpus).
+1. Upload this whole `v9_observability_colab_schema3` folder to
+   `MyDrive/v9_observability_colab_schema3` (~1.4 GB, almost all corpus).
 2. Open a **high-RAM** runtime. A GPU is *not* required and only costs compute
    units: there is no CUDA path in this package (the sole device reference is
    `device="cpu"` in `gnn/graphmodel_rgcn.py`) and this path scores from a
    verified checkpoint rather than training. RAM is the real constraint.
-3. Open `v9_schema3_observability.ipynb` and run all cells.
+3. Open `v9_schema3_observability.ipynb` and run all cells from the fresh
+   runtime. If `/content/v9_observability_colab_schema3` already exists, stop
+   and inspect or remove it deliberately before copying; do not silently merge
+   an old local package.
+
+Colab Python cell:
+
+```python
+from google.colab import drive
+from pathlib import Path
+import shutil
+
+drive.mount("/content/drive")
+source = Path("/content/drive/MyDrive/v9_observability_colab_schema3")
+destination = Path("/content/v9_observability_colab_schema3")
+if destination.exists():
+    raise RuntimeError(f"Remove or inspect {destination} before copying")
+shutil.copytree(source, destination)
+```
+
+Colab shell/magic cell:
+
+```bash
+%cd /content/v9_observability_colab_schema3
+!python -m pip install -r requirements.txt
+!python run_schema3_observability.py \
+  --work-root /content/v9_schema3_run \
+  --export-dir /content/drive/MyDrive/v9_schema3_results
+```
 
 The notebook copies the package from Drive to local `/content` storage, installs
 the Ollama installer’s `zstd` prerequisite when needed, starts Ollama, obtains
@@ -184,5 +213,5 @@ producer builds one detached validated artifact and writes it at the end;
 runtime expires before completion, rerun from the last successful full artifact
 (there is no partial artifact to publish).
 
-Keep the old Colab package unchanged until this run has passed the live
-acceptance checks.
+The legacy schema-2 package is not included here. This current handoff is
+self-contained and requires no edits to absent legacy files.
