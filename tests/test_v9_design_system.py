@@ -39,7 +39,7 @@ def _contrast(fg, bg):
     return (hi + 0.05) / (lo + 0.05)
 
 
-SURFACES = ("#0a0a0c", "#131316", "#1a1a1f", "#08080a")
+SURFACES = ("#0c1117", "#141c24", "#1d2832", "#070b10")
 
 
 def _token(css, name):
@@ -51,6 +51,51 @@ def _token(css, name):
 def _strip_comments(css):
     """Comments document what was retired; only rendered CSS is under test."""
     return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+
+# --- approved token contract ------------------------------------------------
+
+
+APPROVED_TOKENS = {
+    "--bg": "#0c1117",
+    "--surface": "#141c24",
+    "--elevated": "#1d2832",
+    "--sunk": "#070b10",
+    "--text1": "#f4f7fa",
+    "--text2": "#c0cbd5",
+    "--text3": "#93a1ad",
+    "--text-dim": "#71808c",
+    "--accent": "#5eead4",
+    "--accent-hover": "#99f6e4",
+    "--accent-soft": "rgba(94,234,212,.12)",
+    "--accent-glow": "rgba(94,234,212,.18)",
+    "--positive": "#5eead4",
+    "--warning": "#fbbf24",
+    "--negative": "#fb7185",
+    "--negative-soft": "rgba(251,113,133,.14)",
+    "--data-baseline": "#e2e8f0",
+    "--data-hybrid": "#5eead4",
+    "--data-gnn": "#60a5fa",
+    "--data-context": "#93a1ad",
+    "--fs-micro": "11px",
+    "--fs-xs": "12px",
+    "--fs-sm": "13px",
+    "--fs-base": "14px",
+    "--fs-md": "15px",
+    "--fs-lg": "19px",
+    "--fs-xl": "26px",
+}
+
+
+def test_approved_deep_slate_tokens_are_exact():
+    css = ds.build_design_system_css()
+    mismatches = {}
+    for token, expected in APPROVED_TOKENS.items():
+        match = re.search(rf"{re.escape(token)}\s*:\s*([^;}}]+)", css)
+        actual = match.group(1).strip() if match else "<missing>"
+        if actual != expected:
+            mismatches[token] = {"expected": expected, "actual": actual}
+    assert not mismatches, f"approved token mismatches: {mismatches}"
 
 
 # --- contrast ---------------------------------------------------------------
@@ -77,7 +122,7 @@ def test_text_ramp_keeps_three_distinguishable_steps():
 def test_dim_token_is_documented_as_decoration_only():
     """--text-dim is below AA on purpose; the comment must say so."""
     css = ds.build_design_system_css()
-    assert _contrast(_token(css, "--text-dim"), "#131316") < 4.5
+    assert _contrast(_token(css, "--text-dim"), "#141c24") < 4.5
     assert "non-essential decoration" in css
 
 
@@ -163,13 +208,13 @@ def test_outcome_pills_are_restated_for_a_dark_surface():
 # --- type, shape, motion ----------------------------------------------------
 
 
-def test_no_font_size_below_the_ten_pixel_floor():
+def test_no_font_size_below_the_eleven_pixel_floor():
     """Covers both the scale tokens and any literal font-size in the layer."""
     css = _strip_comments(ds.build_design_system_css())
     sizes = [int(v) for v in re.findall(r"--fs-[a-z]+:\s*(\d+)px", css)]
     sizes += [int(v) for v in re.findall(r"font-size:\s*(\d+)px", css)]
     assert sizes, "expected explicit sizes in the type scale"
-    assert min(sizes) >= 10, f"sub-10px type present: {sorted(set(sizes))}"
+    assert min(sizes) >= 11, f"sub-11px type present: {sorted(set(sizes))}"
 
 
 def test_this_layer_does_not_restyle_recovery_explorer_type():
@@ -191,7 +236,7 @@ def test_this_layer_does_not_restyle_recovery_explorer_type():
 def test_type_scale_is_bounded():
     css = ds.build_design_system_css()
     scale = re.search(r"--fs-micro:(\d+)px", css)
-    assert scale and scale.group(1) == "10"
+    assert scale and scale.group(1) == "11"
 
 
 def test_radius_scale_collapses_to_three_values():
@@ -213,6 +258,53 @@ def test_global_focus_visible_covers_interactive_elements():
         assert re.search(rf"\b{element}\b[^{{]*:focus-visible", css) or element in (
             css.split(":focus-visible")[0][-200:]
         )
+
+
+def test_dashboard_shell_uses_readable_shell_rhythm():
+    css = ds.build_design_system_css()
+
+    assert ".metric-label,.metric-sub{color:var(--text2)" in css
+    assert ".section-head{font-size:var(--fs-md);color:var(--text1)" in css
+    assert ".chart-title{color:var(--text2)" in css
+    assert ".axis .tick text{fill:var(--text2);font-size:12px" in css
+    assert ".grid line{stroke:var(--border-strong);opacity:.72}" in css
+    assert "nav.tabs{background:var(--sunk);border-bottom-color:var(--border-strong)" in css
+    assert "nav.tabs button{color:var(--text2);font-size:13px;padding:15px 18px}" in css
+    assert (
+        "nav.tabs button.active{color:var(--accent-hover);border-bottom-color:var(--accent)}"
+        in css
+    )
+    panel_rule = (
+        r"\.chart-panel,\s*\.map-container,\s*\.filter-panel,\s*"
+        r"\.network-canvas,\s*\.network-side,\s*\.xp-canvas,\s*"
+        r"\.xp-side,\s*\.xp-tools,\s*\.uad-card,\s*\.uad-figure,\s*"
+        r"#tab-v9Results \.v9-card,\s*#tab-v9Results "
+        r"\.v9-recovery-workspace\s*\{\s*"
+        r"background:var\(--surface\);\s*"
+        r"border-color:var\(--border-strong\)"
+    )
+    assert re.search(panel_rule, css)
+    assert "header{background:var(--surface);border-bottom-color:var(--border-strong)" in css
+    assert ".section-note{color:var(--text2)}" in css
+
+
+def test_dashboard_shell_allows_results_children_to_shrink():
+    css = ds.build_design_system_css()
+
+    assert re.search(r":where\(main,[^)]*\)\{[^}]*min-width:\s*0", css)
+    assert re.search(
+        r":where\([^)]*#tab-v9Results[^)]*\)\{[^}]*min-width:\s*0",
+        css,
+    )
+
+
+def test_crossing_context_line_is_solid_and_muted():
+    css = ds.build_design_system_css()
+
+    assert re.search(
+        r"\.v9-volume-line\{[^}]*stroke-dasharray:\s*none[^}]*opacity:",
+        css,
+    )
 
 
 def test_neon_glow_is_removed():

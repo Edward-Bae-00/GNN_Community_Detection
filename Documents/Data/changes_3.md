@@ -9,6 +9,68 @@ V9 corpus the GNN catches **2.3–2.9× more hidden carriers at operational dept
 strong 14-feature tabular baseline (p=0 for K≥500), via as-of guilt-by-association — a wash
 only at the razor top (K≤100). See Results.
 
+## 2026-08-06: evidence-first explanation graph
+
+The V9 explanation graph now defaults to an evidence-first first-hop view,
+separates unsigned model evidence weight from observable relationship type with
+dual-channel edges, groups graph controls by purpose, and labels the strongest
+published connections directly. When the strict narrative validator rejects or
+lacks prose and ranked attribution is available, the Grounded narrative section
+shows deterministic highest-attribution evidence instead of empty prose;
+otherwise the inline panel shows an explicit attribution-unavailable state.
+Model outputs, sidecars, strict as-of rules, graph limits, and complete tables
+are unchanged.
+Browser visual QA was unavailable in this environment, so verification used
+executable DOM/canvas contracts and generated-dashboard inspection; no manual
+visual pass is claimed.
+
+## 2026-08-06: guided Overview and bootstrap explanation
+
+The V9 Overview now leads with the operational result, then explains the
+relational mechanism and limits before the dataset/model inventory. The daily
+bootstrap panel now explains event-level paired re-sampling: event rows are
+sampled with replacement, then ranked within each day under the same inspection
+quota. It defines the Hybrid-minus-baseline event-hit gap, the 95% interval as
+resampling variability, zero-crossing verdicts, and the event-vs-person
+distinction. Artifacts, calculations, and as-of contracts are unchanged.
+
+## 2026-08-06: published narrative and factor cleanup
+
+The schema-3 UI source-reference validator now accepts the producer-generated
+v4 attribution, component-pooling, and rank-fusion claim paths. The published
+bundle contains validated local Gemma narratives for all 19 explanation cases;
+the dashboard had been rejecting their valid claim references client-side.
+Counterfactual cards now omit factors whose ablation leaves Hybrid rank
+unchanged, while retaining both positive and countervailing rank effects.
+Restart-selection stability remains separate from measured rank movement.
+
+## 2026-08-05: explanation dashboard readability pass
+
+The schema-3 explanation explorer now leads with a grounded narrative and an
+explicit Baseline / Seed-0 GNN / Seed-0 Hybrid rank comparison, including a
+plain-language baseline-to-Hybrid movement. Visible numeric text is capped at
+three decimal places with trailing zeroes omitted across scores, faithfulness,
+attribution, graph tables, progress labels, and legacy JSON panels. Artifact
+precision, model semantics, lazy sidecar loading, and strict as-of evidence
+contracts are unchanged.
+
+## 2026-08-05: Graph-first GNN explanation workspace
+
+- Reorganized the schema-3 explanation explorer around the selected case: full-width case/rank context, bounded explanation rail, large graph workspace, then readable narrative and measured factors.
+- Moved stability, faithfulness, attribution, complete graph tables, and cohort metrics into accessible state-preserving disclosures.
+- Added responsive case-picker behavior plus composed loading, empty, and retryable error states.
+- Preserved explained-only eligibility, SHA-256 sidecar verification, strict as-of fail-closed behavior, graph semantics, artifacts, and evaluation logic.
+
+## 2026-08-05: schema-3 explanation graph loading fix
+
+Schema-3 overlay sidecars intentionally combine weighted attribution rows with
+neutral structural-provenance rows. The dashboard now classifies rows before
+attribution membership checks: rows with neither `explainer_median` nor `rank`
+remain neutral context, while any row carrying either evidence field must pass
+the complete weight, rank, identity, and base-community contract. This restores
+graph loading across all 19 published GNN-explanation cases without weakening
+fail-closed validation for malformed attribution evidence.
+
 ## What V9 is (and is not)
 
 V9 is a **designed positive-control / demonstration corpus**: the generative process is
@@ -479,3 +541,28 @@ evaluation behavior changed.
 The affected dashboard and recovery UI suite completed **307 passed**. The
 rebuilt static dashboard was inspected with headless Chrome at the V9 Results
 hash; the in-app browser backend was unavailable in this session.
+
+## Part: Schema-3 dashboard contract and V9 Results presentation (2026-08-05)
+
+The V9 dashboard's active recovery path is schema-3-only: top-level schema-1/2
+UI and packaging compatibility was removed, while shared schema-3 evidence
+helpers remain. The main GNN explainability case list/default now includes only
+canonical, available `gnn_explanation` records whose `detail_index` membership
+validates; the full cohort summary remains available. V9 Results now leads with
+Daily Crossing Volume, Daily capacity, and Simulated catches. The crossing
+selector defaults to 10/day; capacity renders Baseline and Deployable Hybrid
+only, while GNN remains in the combined chart/headline and other relevant views.
+
+The simulated-catch view/model/accessibility behavior and every source
+JSON/ZIP artifact, data schema, and metric are unchanged. Legacy anomaly fields
+may remain in source artifacts but are no longer rendered. No new measured
+results were produced.
+
+## Part: Schema-3 explanation panel stack (2026-08-06)
+
+The schema-3 GNN explanation panels now occupy separate full-width rows in the
+reading order Highest-attribution evidence, Key counterfactual factors, then
+LLM explanation. This is presentation-only: the published evidence, rank
+effects, restart-support semantics, narrative validation, and structural
+fallback are unchanged. The focused recovery UI/dashboard-builder suite passed
+361 tests after rebuilding the dashboard bundle.

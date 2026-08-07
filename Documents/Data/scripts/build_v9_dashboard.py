@@ -172,46 +172,28 @@ def _load_recovery_artifact(path, output_dir=None):
             raise ValueError(
                 f"invalid schema-3 recovery artifact: {error}"
             ) from error
-    if artifact.get("schema_version") == "2.0":
-        if HERE not in sys.path:
-            sys.path.insert(0, HERE)
-        from v9_recovery_sidecars import publish_prepackaged_manifest
-
-        try:
-            dashboard_output = OUT_DIR if output_dir is None else output_dir
-            if (
-                isinstance(artifact.get("case_index"), dict)
-                and isinstance(artifact.get("community_index"), dict)
-                and isinstance(artifact.get("bundle_id"), str)
-            ):
-                return publish_prepackaged_manifest(
-                    artifact,
-                    path,
-                    os.path.join(dashboard_output, "recovery"),
-                )
-            raise ValueError(
-                "schema-2 recovery requires a prepackaged producer bundle"
-            )
-        except ValueError as error:
-            raise ValueError(
-                f"invalid schema-2 recovery artifact: {error}"
-            ) from error
-    if artifact.get("schema_version") != "1.0":
-        p("[v9-dashboard] WARNING: unsupported recovery artifact schema.")
-        return None
-    return artifact
+    p("[v9-dashboard] WARNING: unsupported recovery artifact schema.")
+    return None
 
 
 def _recovery_artifact_path():
-    """Choose an explicit artifact, legacy JSON, or the repo-root ZIP fallback."""
+    """Choose the configured or available schema-3 recovery artifact."""
     configured = os.environ.get("V9_SCHEMA3_RESULTS_ZIP")
     if configured:
         return configured
-    if os.path.exists(V9_RECOVERY_EXPLANATIONS):
-        return V9_RECOVERY_EXPLANATIONS
     if os.path.exists(V9_RECOVERY_ARCHIVE):
         return V9_RECOVERY_ARCHIVE
-    return V9_RECOVERY_EXPLANATIONS
+    if os.path.exists(V9_RECOVERY_EXPLANATIONS):
+        try:
+            with open(V9_RECOVERY_EXPLANATIONS) as handle:
+                artifact = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            artifact = None
+        if isinstance(artifact, dict) and artifact.get("schema_version") == "3.0":
+            return V9_RECOVERY_EXPLANATIONS
+    # Keep the existing missing-artifact warning path when no schema-3 input
+    # is available.  In particular, do not select a legacy JSON artifact.
+    return V9_RECOVERY_ARCHIVE
 
 
 def _load_v9_unsupervised_artifact(diagnostics_dir):

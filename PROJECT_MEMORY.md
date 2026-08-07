@@ -92,6 +92,21 @@
 - Build and serve the dashboard; verify cohort switching, narratives/fusion, lazy complete evidence, pagination, responsive behavior, and browser console cleanliness.
 - Update `Documents/Data/changes_3.md` only with newly measured K=5 results. Its existing daily-25 observability record is historical and must not be reused as the K=5 result.
 
+## 2026-08-06: guided Overview and bootstrap interpretation
+
+- The V9 Overview now leads with the operational result, then the relational
+  mechanism and limits, followed by dataset/model inventory. Keep the V9
+  positive-control framing distinct from the V8 honest track.
+- The Daily bootstrap explanation must match `gnn.run_demo.paired_daily_bootstrap`:
+  event rows are sampled with replacement, then ranked within each day under the
+  same daily quota. Each replicate produces a Hybrid-minus-baseline event-hit
+  gap; the 95% interval is the middle 95% of those gaps and is not a probability
+  that the true gap lies inside it.
+- Bootstrap verdicts count event hits, not unique-person recovery. The recovery
+  explorer remains the unique-person readout. Dashboard source-contract tests
+  cover the copy, pills, quota note, and preserved table behavior; no live
+  browser visual pass was available in this environment.
+
 ## 2026-07-30: additive-only GNN architecture dashboard work
 
 - The standalone multi-architecture GNN comparison must be added without
@@ -434,3 +449,191 @@ Durable decisions and deviations from the written plan:
   salience, not a causal claim. The generated dashboard was rebuilt from the
   supplied schema-3 ZIP and verified over HTTP for the index, data, recovery
   pointer, manifest, case, community, and both overlay sidecars.
+- Overlay chunks intentionally mix weighted attribution rows with neutral
+  structural-provenance rows. The renderer must skip rows containing neither
+  `explainer_median` nor `rank` before attribution membership checks; a row
+  containing either field remains an attribution candidate and must pass the
+  complete weight, rank, identity, and base-community contract.
+
+## 2026-08-05: explanation dashboard readability pass
+
+- The tracked recovery UI now uses one presentation-only numeric formatter with
+  a maximum of three fractional digits, including nested legacy JSON panels;
+  artifact values remain full precision.
+- Both the schema-3 and legacy recovery paths use a narrative-first selected
+  case view, explicit Baseline / Seed-0 GNN / Seed-0 Hybrid ranks, and a plain-
+  language baseline-to-Hybrid movement. This is display hierarchy only; filters,
+  lazy sidecars, graph bounds, evidence contracts, and as-of semantics remain
+  unchanged.
+- `DESIGN.md` is the Stitch-ready visual source of truth: Outfit prose,
+  JetBrains Mono technical values, zinc/charcoal neutrals, green interaction
+  accent, semantic evidence colors, and no decorative glow/precision sprawl.
+
+## 2026-08-05: GNN explanation workspace hierarchy
+
+- The schema-3 explanation view is graph-first: selected case and ranks lead, the graph is the primary surface, narrative/factors follow, and dense technical evidence is closed by default.
+- The published-artifact, strict as-of, explained-only eligibility, and graph/table contracts remain unchanged; future UI work should preserve this boundary.
+
+## 2026-08-05: schema-3 recovery and V9 Results contract
+
+- The active recovery dashboard contract is schema-3-only. Top-level schema-1/2
+  UI and packaging compatibility is removed; shared schema-3 evidence helpers
+  remain.
+- The main GNN explainability case list/default contains only canonical,
+  available `gnn_explanation` records with validated `detail_index` membership.
+  The full cohort summary remains available.
+- V9 Results order is Daily Crossing Volume, Daily capacity, then Simulated
+  catches. The crossing selector defaults to 10/day; capacity shows Baseline and
+  Deployable Hybrid only. GNN remains in the combined chart/headline and other
+  relevant views.
+- Simulated-catch view/model/accessibility behavior and every source JSON/ZIP
+  artifact, data schema, and metric remain unchanged. Legacy anomaly fields may
+  remain in source artifacts but are no longer rendered. No new measured results.
+
+## 2026-08-06: evidence-first explanation graph
+
+- Keep the explanation graph evidence-first at the first hop: relationship
+  identity is encoded by stroke color/pattern while unsigned model evidence
+  weight is a separate gold underlay; grouped controls and direct labels must
+  preserve those distinct semantics.
+- If strict narrative validation rejects or lacks prose and ranked attribution
+  is available, render the deterministic highest-attribution evidence in the
+  Grounded narrative panel once, omitting only the duplicate attribution
+  disclosure; otherwise the inline panel shows an explicit
+  attribution-unavailable state. Preserve model outputs, sidecars, strict
+  as-of behavior, graph limits, and complete tables.
+
+## 2026-08-06: Overview dataset and model snapshot
+
+- The V9 Overview now reads the existing embedded `meta`, `overview`, and
+  `v9Demo` payloads through a validated client-side snapshot view model.
+- It exposes corpus-wide totals (nodes, heterogeneous edges, events, and
+  communities), compact typed node/edge counts, and the deployable HGB
+  tabular baseline versus Baseline + GraphSAGE rank-fusion Hybrid setup.
+- Total heterogeneous edges must remain labeled as corpus edges, not as the
+  person-graph edge count. Malformed or missing metadata renders unavailable
+  states and never invents values; model evaluation artifacts and metrics are
+  unchanged.
+- Do not surface legacy whole-pool `found@K` ranking depth in Overview. V9's
+  operational comparison is the daily inspection-budget view rendered in V9
+  Results (`overall_daily`); global `found@K` values are not interchangeable
+  with inspections per day.
+
+## 2026-08-06: explanation graph render seam and canvas legibility
+
+- Graph control changes (view, stage, relationship, labels, search, zoom) must
+  NOT re-render the whole recovery section. `renderGraphOnly` rebuilds just the
+  `.v9-recovery-graph-panel` (plus the tables disclosure body, whose Emphasized
+  column is stage-dependent); zoom/label-density repaint the live canvas via
+  `canvasCleanup.draw`, and search swaps draw commands via
+  `canvasCleanup.setCommands` so the input keeps focus and caret. Measured:
+  ~1078 ms per stage click before, 13-67 ms after; "Full community" previously
+  blocked the renderer for tens of seconds.
+- Every re-render path must pair `focus({preventScroll:true})` with the
+  `measureAnchor`/`restoreAnchor` pin. GOTCHA: do not feature-detect
+  preventScroll via `control.focus.length` - Chrome's native `focus.length` is
+  0, so that guard silently takes the scrolling path and the page still jumps.
+  Always pass the options object; engines without support ignore it.
+- Canvas legibility rules that the published sidecar layout forces:
+  x/y coordinates frequently put three or more members on one line, so edges
+  are drawn as deterministic quadratic arcs (`recoveryEdgeCurveOffset`, keyed
+  by a stable hash of edge id) rather than straight lines. Do not relayout
+  published coordinates to fix this.
+- Evidence weight is normalized against the strongest attributed edge that is
+  actually on screen (`recoveryEvidenceScale`); absolute-only scaling saturates
+  every edge in gold whenever a case attributes most of its edges at high
+  weight. The evidence channel is a gold halo (shadowBlur), not a flat band
+  under the relationship stroke - a band shows through dashed strokes and
+  collapses both channels into one muddy colour.
+- Node labels are placed by priority with collision rejection
+  (`recoveryNodeLabelPriority`); sampled communities otherwise emit hundreds of
+  overlapping labels. GOTCHA: the label box must clear the node's own marker
+  box (`recoveryNodeLabelBox` starts at radius+7, marker box ends at radius+5)
+  or every collision-checked label rejects itself and only the target is
+  labeled.
+- Pre-existing, untouched: `tests/test_recovery_layout_parity.py` fails to
+  import (`DISPLAY_LAYOUT_RADIUS` missing from `gnn.sage_explainer`), and the
+  screen-reader-only `.gnn-chart-data` tables overflow the page horizontally.
+
+## 2026-08-06: hop-ring layout restored (was lost in merge 8f00e43)
+
+- Published community `x`/`y` in the chunked schema-3 sidecars come from
+  `iter_nodes`, which indexes members into a sqrt(N) grid in **sorted node_id
+  order**. Position therefore encoded alphabetical rank and nothing else, and
+  every edge was a line between two unrelated cells. Measured on the 35,791-node
+  community for `P00031774`: x spacing exactly 1/190, y spacing exactly 1/189.
+- `buildRecoveryGraphSlice` fills its context quota in the *same* sorted-id
+  order, so the drawn context was an alphabetical prefix that landed in the
+  first 8 of 189 grid rows — the horizontal band at the top of the canvas. Its
+  hop mix matched the whole community's, i.e. it carried no structure.
+- `display_hop_ring_layout` / `recoveryHopRingLayout` already existed with a
+  bit-exact parity test and were dropped by merge `8f00e43`, which kept
+  `tests/test_recovery_layout_parity.py` while taking the other parent's copy of
+  both implementation files. Restored from `fec6b5d`; that suite now passes
+  (19 tests) for the first time.
+- The UI recomputes the rings client-side, so **already-published bundles read
+  structurally with no regeneration**. This depends on `message_distance` being
+  present in the day-view node rows and on `assembleRecoverySchema3Community`
+  passing `nodes: nodeRows` through untouched.
+- GOTCHA: lay out over the bounded drawable projection (`slice.nodes`), not
+  `community.nodes` and not `slice.tableNodes` (the complete row set). Ring
+  radius is `DISPLAY_LAYOUT_RADIUS*ring/(maxRing+0.5)`, so a wrongly scoped
+  layout sizes the rings for members that are never drawn and squeezes the drawn
+  ones into an inner sliver. Pinned by
+  `test_layout_is_scoped_to_the_drawn_projection_not_the_whole_community`.
+- Result on the real drawn projection (1,500 nodes of 35,791): vertical spread
+  26.5% -> 87.4% of the canvas, radius now encodes hop (hop 1 at 0.184-0.253,
+  hop 2 at 0.368-0.437), target dead centre, all 1,500 positions distinct.
+- Not re-verified in a browser: the Chrome extension stopped responding after
+  the rebuild. Rendering correctness is covered by tests and by numeric checks
+  against the published bundle, but the on-screen result is unconfirmed, as is
+  whether the hashed edge arcs are still worth keeping now that positions carry
+  structure.
+
+## 2026-08-06: recovery explainer factor readability
+
+- `canonical_pair_group_id` may already begin with `pair:`. Factor generation
+  must preserve that prefix rather than emitting `pair:pair:...`.
+- Recovery factor rows should resolve technical pair IDs to relation plus
+  endpoints when the community edge is available; schema-3 published edge
+  catalog records expose the pair ID through `edge_id`, not necessarily through
+  `canonical_pair_group_id`. Retain the full factor ID only as technical
+  metadata/title text.
+- Explain `unstable` as variation across deterministic explainer restarts. A
+  stable factor requires positive rank effect, selection frequency at least
+  2/3, and restart IQR at most 0.25. The absence of a stable factor does not
+  mean the measured effect is zero.
+- Highest-attribution evidence displays up to the top five nodes and top five
+  connections. The displayed weights are normalized unsigned median salience
+  weights across restarts, not probabilities or causal effects; direction comes
+  from the separate counterfactual rank effect.
+- The published 19-case bundle contains factors and attribution rows for all
+  19 hybrid explanations. Its narrative payloads use prompt version `v4`,
+  while the old UI narrative validator only accepted `v1`, so the narrative
+  fallback appeared even though explanation evidence existed. The visible
+  GNN explanation path now shows highest-attribution evidence directly and
+  does not render the narrative panel.
+- Factor cards keep measured counterfactual rank effect separate from restart
+  support. The effect is `ablated_hybrid_rank - original_hybrid_rank`; restart
+  support describes whether the explainer selected the factor consistently
+  across deterministic restarts. A case can therefore show a large measured
+  effect even when no factor is consistently selected.
+- Published recovery narratives are LLM outputs from local Gemma
+  `gemma4:12b` with prompt version `v4`; the schema-3 UI now accepts that
+  provenance and renders the validated summary and claims in an `LLM
+  explanation` panel above attribution and factor evidence. Keep the
+  deterministic-template `v1` path for fixtures/fallback artifacts.
+- The client narrative source-reference allowlist must mirror the producer's
+  v4 `attributions.*`, `component_pooling.*`, and `rank_fusion.*` claim paths;
+  rejecting those paths makes valid published LLM output appear unavailable.
+- Visible counterfactual factor cards omit factors whose ablation leaves the
+  published Hybrid rank unchanged. Positive and countervailing non-zero rank
+  effects remain visible; restart consistency remains a separate signal.
+
+## 2026-08-06: stacked recovery explanation panels
+
+- The schema-3 GNN explanation row now uses a single full-width CSS grid column.
+  Its DOM order is Highest-attribution evidence, Key counterfactual factors,
+  then the LLM explanation, so visual and keyboard reading order match. The
+  structural-only fallback remains unchanged. Focused UI and dashboard-builder
+  tests pass (361 total), and the generated V9 dashboard was rebuilt.

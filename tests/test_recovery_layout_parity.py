@@ -325,7 +325,8 @@ def _draw(explanation, **overrides):
         "{hopCounts[entry[0]]=entry[1];}}"
         "\nconsole.log(JSON.stringify({"
         "available:result.available,reason:result.reason,"
-        "nodes:result.nodes,layoutSource:result.layoutSource,"
+        "nodes:result.nodes,tableNodes:result.tableNodes,"
+        "layoutSource:result.layoutSource,"
         "stats:result.stats?Object.assign({},result.stats,{hopCounts}):null,"
         "adjacency}));"
     )
@@ -335,21 +336,29 @@ def _draw(explanation, **overrides):
     return json.loads(completed.stdout)
 
 
+# ``nodes``/``edges`` are the stage-filtered canvas slice, which was introduced
+# after this file was written and is bounded for canvas performance. Layout is a
+# property of the whole projection, so these read ``tableNodes`` — the complete
+# projection every node is positioned in — rather than whatever the selected
+# stage happens to draw.
 def test_draw_commands_place_nodes_with_the_hop_ring_layout():
     result = _draw(_explanation())
 
     assert result["available"] is True
     assert result["layoutSource"] == "hop_rings"
-    positions = {node["id"]: (node["x"], node["y"]) for node in result["nodes"]}
+    positions = {node["id"]: (node["x"], node["y"]) for node in result["tableNodes"]}
     assert positions[TARGET] == (0.5, 0.5)
     # The payload put every node at y=0.9; the ring layout must have replaced it.
     assert all(y != 0.9 for _, y in positions.values())
-    assert {node["id"]: node["hop"] for node in result["nodes"]} == {
+    assert {node["id"]: node["hop"] for node in result["tableNodes"]} == {
         TARGET: 0,
         "a000": 1,
         "a001": 1,
         "b000": 2,
     }
+    # Whatever the stage draws is positioned by the same layout.
+    drawn = {node["id"]: (node["x"], node["y"]) for node in result["nodes"]}
+    assert drawn and all(positions[node_id] == point for node_id, point in drawn.items())
 
 
 def test_draw_commands_fall_back_to_payload_coordinates_without_hops():
@@ -357,10 +366,90 @@ def test_draw_commands_fall_back_to_payload_coordinates_without_hops():
 
     assert result["available"] is True
     assert result["layoutSource"] == "payload"
-    positions = {node["id"]: (node["x"], node["y"]) for node in result["nodes"]}
+    positions = {node["id"]: (node["x"], node["y"]) for node in result["tableNodes"]}
     assert positions[TARGET] == (0.1, 0.9)
     assert positions["b000"] == pytest.approx((0.4, 0.9))
-    assert all(node["hop"] is None for node in result["nodes"])
+    assert all(node["hop"] is None for node in result["tableNodes"])
+
+
+def test_layout_is_scoped_to_the_drawn_projection_not_the_whole_community():
+    """Ring radii come from the projection's deepest hop, so laying out over the
+    whole community would squeeze every drawn node into the innermost sliver of
+    a ring sized for members that are never drawn.  The chunked schema-3 sidecar
+    hands the UI all 35k community members while only ~600 reach the canvas.
+    """
+    from gnn.sage_explainer import DISPLAY_LAYOUT_RADIUS, MAX_DISPLAY_RING_BANDS
+
+    # 1600 hop-1 members overflow the 1500-node display bound, and the hop-3
+    # members sort last so they are the ones the projection drops.
+    nodes = [{"node_id": "p000", "message_distance": 0, "x": 0.5, "y": 0.5}]
+    edges = []
+    for index in range(1600):
+        node_id = f"a{index:05d}"
+        nodes.append({"node_id": node_id, "message_distance": 1, "x": 0.5, "y": 0.5})
+        edges.append(
+            {
+                "edge_id": f"e{index:05d}",
+                "u": "p000",
+                "v": node_id,
+                "edge_type": "COTRAVEL",
+                "message_hop": 1,
+                "explainer_median": 0.0,
+            }
+        )
+    for index in range(5):
+        nodes.append(
+            {"node_id": f"z{index:03d}", "message_distance": 3, "x": 0.5, "y": 0.5}
+        )
+    explanation = {
+        "person_id": "p000",
+        "community": {
+            "complete": True,
+            "nodes": nodes,
+            "edges": edges,
+            "provenance_expansions": [],
+        },
+        "flow_stages": [
+            {"stage_id": "first_hop", "edge_rule": {"max_message_hop": 1}},
+            {"stage_id": "second_hop", "edge_rule": {"max_message_hop": 2}},
+            {
+                "stage_id": "component_pool",
+                "edge_rule": {"edge_type": "COTRAVEL", "both_pooled_members": True},
+            },
+            {"stage_id": "rank_fusion", "edge_rule": {"match_none": True}},
+        ],
+    }
+
+    result = _draw(explanation)
+    assert result["available"] is True, result.get("reason")
+    assert result["layoutSource"] == "hop_rings"
+
+    drawn = {
+        node["id"]: (node["x"], node["y"])
+        for node in result["nodes"]
+        if node["id"] != "p000"
+    }
+    radii = {round(math.hypot(x - 0.5, y - 0.5), 9) for x, y in drawn.values()}
+    # Every drawn member is hop 1, so the projection's deepest ring is 1. Laying
+    # out over the whole community would size the rings for its hop-3 members
+    # and pull ring 1 more than halfway back towards the centre.
+    scoped = DISPLAY_LAYOUT_RADIUS * 1 / (1 + 0.5)
+    whole_community = DISPLAY_LAYOUT_RADIUS * 1 / (3 + 0.5)
+    # 1499 members overflow the band capacity, so hop 1 spreads over its
+    # concentric bands; the innermost band sits at the scoped ring radius.
+    assert len(radii) == MAX_DISPLAY_RING_BANDS
+    assert min(radii) == pytest.approx(scoped, abs=1e-9)
+    assert max(radii) <= DISPLAY_LAYOUT_RADIUS
+    assert scoped > whole_community
+    # The dropped hop-3 members never reach the canvas.
+    assert not any(node_id.startswith("z") for node_id in drawn)
+    # Rows outside the display bound are not laid out and keep payload x/y, so
+    # the complete data table still renders them.
+    undrawn = [
+        node for node in result["tableNodes"] if node["id"].startswith("z")
+    ]
+    assert len(undrawn) == 5
+    assert all((node["x"], node["y"]) == (0.5, 0.5) for node in undrawn)
 
 
 def test_draw_commands_report_counts_for_the_density_readout():

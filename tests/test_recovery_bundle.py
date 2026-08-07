@@ -1,5 +1,6 @@
 import json
 import hashlib
+import inspect
 import os
 from pathlib import Path
 
@@ -7,6 +8,18 @@ import pytest
 
 from gnn.recovery_bundle import RecoveryBundleError, RecoveryBundleWriter
 from Documents.Data.scripts import v9_recovery_sidecars
+
+
+def test_recovery_sidecars_are_schema3_only():
+    source = inspect.getsource(v9_recovery_sidecars)
+    for legacy_symbol in (
+        "publish_prepackaged_manifest",
+        "package_recovery_sidecars",
+        "_verify_prepackaged_references",
+    ):
+        assert legacy_symbol not in source
+    with pytest.raises(ValueError, match="schema_version 3.0"):
+        v9_recovery_sidecars._validate_artifact({"schema_version": "2.0"})
 
 
 def _community(key="community:a"):
@@ -1798,247 +1811,18 @@ def test_case_attempt_phases_persist_and_are_capped_across_resume(tmp_path):
         resumed.begin_case_attempt("case:h", "deferred_retry")
 
 
-def test_dashboard_physical_copy_fails_free_space_preflight_before_staging(
-    tmp_path, monkeypatch
-):
-    diagnostics = tmp_path / "diagnostics"
-    writer = RecoveryBundleWriter(
-        tmp_path / "stage",
-        diagnostics / "recovery",
-        run_fingerprint={"run_identity": {"checkpoint_id": "abc"}},
-        sidecar_prefix="recovery",
-    )
-    writer.write_community(_community())
-    writer.write_case("baseline_only", _case("case:b"))
-    manifest = writer.finalize(
-        expected_hybrid_case_ids=set(),
-        expected_baseline_case_ids={"case:b"},
-        policy={
-            "observability_seed": 0,
-            "gnn_arm": "sage",
-            "surrounding_results_seeds": [0, 1, 2],
-            "inspections_per_day": 5,
-        },
-        summary={
-            "overlap_ids_available": True,
-            "baseline_recovered": 1,
-            "recovered_by_both": 0,
-            "hybrid_only_recovered": 0,
-            "baseline_only_recovered": 1,
-            "hybrid_total": 0,
-            "net_gain": -1,
-        },
-    )
-    monkeypatch.delattr(v9_recovery_sidecars.os, "clonefile", raising=False)
-    monkeypatch.setattr(
-        v9_recovery_sidecars.shutil,
-        "disk_usage",
-        lambda path: v9_recovery_sidecars.shutil._ntuple_diskusage(1, 1, 0),
-    )
-    output = tmp_path / "dashboard" / "recovery"
-
-    with pytest.raises(ValueError, match="insufficient free space"):
-        v9_recovery_sidecars.publish_prepackaged_manifest(
-            manifest, diagnostics / "demo.json", output
-        )
-
-    assert not output.exists()
 
 
-def test_dashboard_publication_rejects_mismatched_source_manifest(tmp_path):
-    diagnostics = tmp_path / "diagnostics"
-    writer = RecoveryBundleWriter(
-        tmp_path / "stage",
-        diagnostics / "recovery",
-        run_fingerprint={"run_identity": {"checkpoint_id": "abc"}},
-        sidecar_prefix="recovery",
-    )
-    writer.write_community(_community())
-    writer.write_case("baseline_only", _case("case:b"))
-    manifest = writer.finalize(
-        expected_hybrid_case_ids=set(),
-        expected_baseline_case_ids={"case:b"},
-        policy={
-            "observability_seed": 0,
-            "gnn_arm": "sage",
-            "surrounding_results_seeds": [0, 1, 2],
-            "inspections_per_day": 5,
-        },
-        summary={
-            "overlap_ids_available": True,
-            "baseline_recovered": 1,
-            "recovered_by_both": 0,
-            "hybrid_only_recovered": 0,
-            "baseline_only_recovered": 1,
-            "hybrid_total": 0,
-            "net_gain": -1,
-        },
-    )
-    source_manifest = (
-        diagnostics / "recovery" / manifest["bundle_path"] / "manifest.json"
-    )
-    source_manifest.write_text("{}", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="source manifest"):
-        v9_recovery_sidecars.publish_prepackaged_manifest(
-            manifest, diagnostics / "demo.json", tmp_path / "dashboard"
-        )
 
 
-def test_dashboard_publication_copies_only_verified_reference_closure(tmp_path):
-    diagnostics = tmp_path / "diagnostics"
-    writer = RecoveryBundleWriter(
-        tmp_path / "stage",
-        diagnostics / "recovery",
-        run_fingerprint={"run_identity": {"checkpoint_id": "abc"}},
-        sidecar_prefix="recovery",
-    )
-    writer.write_community(_community())
-    writer.write_case("baseline_only", _case("case:b"))
-    manifest = writer.finalize(
-        expected_hybrid_case_ids=set(),
-        expected_baseline_case_ids={"case:b"},
-        policy={
-            "observability_seed": 0,
-            "gnn_arm": "sage",
-            "surrounding_results_seeds": [0, 1, 2],
-            "inspections_per_day": 5,
-        },
-        summary={
-            "overlap_ids_available": True,
-            "baseline_recovered": 1,
-            "recovered_by_both": 0,
-            "hybrid_only_recovered": 0,
-            "baseline_only_recovered": 1,
-            "hybrid_total": 0,
-            "net_gain": -1,
-        },
-    )
-    source_bundle = diagnostics / "recovery" / manifest["bundle_path"]
-    (source_bundle / "orphan.json").write_text("{}", encoding="utf-8")
-
-    v9_recovery_sidecars.publish_prepackaged_manifest(
-        manifest, diagnostics / "demo.json", tmp_path / "dashboard"
-    )
-
-    target = tmp_path / "dashboard" / manifest["bundle_path"]
-    assert not (target / "orphan.json").exists()
 
 
-def test_clone_runtime_fallback_preflights_before_physical_copy(
-    tmp_path, monkeypatch
-):
-    diagnostics = tmp_path / "diagnostics"
-    writer = RecoveryBundleWriter(
-        tmp_path / "stage",
-        diagnostics / "recovery",
-        run_fingerprint={"run_identity": {"checkpoint_id": "abc"}},
-        sidecar_prefix="recovery",
-    )
-    writer.write_community(_community())
-    writer.write_case("baseline_only", _case("case:b"))
-    manifest = writer.finalize(
-        expected_hybrid_case_ids=set(),
-        expected_baseline_case_ids={"case:b"},
-        policy={
-            "observability_seed": 0,
-            "gnn_arm": "sage",
-            "surrounding_results_seeds": [0, 1, 2],
-            "inspections_per_day": 5,
-        },
-        summary={
-            "overlap_ids_available": True,
-            "baseline_recovered": 1,
-            "recovered_by_both": 0,
-            "hybrid_only_recovered": 0,
-            "baseline_only_recovered": 1,
-            "hybrid_total": 0,
-            "net_gain": -1,
-        },
-    )
-    physical_copies = []
-
-    def unsupported_clone(source, destination):
-        raise OSError(v9_recovery_sidecars.errno.ENOTSUP, "unsupported")
-
-    monkeypatch.setattr(
-        v9_recovery_sidecars.os, "clonefile", unsupported_clone, raising=False
-    )
-    monkeypatch.setattr(
-        v9_recovery_sidecars.shutil,
-        "disk_usage",
-        lambda path: v9_recovery_sidecars.shutil._ntuple_diskusage(1, 1, 0),
-    )
-    monkeypatch.setattr(
-        v9_recovery_sidecars.shutil,
-        "copy2",
-        lambda source, destination: physical_copies.append((source, destination)),
-    )
-
-    with pytest.raises(ValueError, match="insufficient free space"):
-        v9_recovery_sidecars.publish_prepackaged_manifest(
-            manifest, diagnostics / "demo.json", tmp_path / "dashboard"
-        )
-
-    assert physical_copies == []
 
 
-def test_legacy_sidecar_packager_caps_input_before_community_materialization(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(v9_recovery_sidecars, "_validate_artifact", lambda value: None)
-    artifact = {
-        "communities": {
-            f"community:{index}": {"community_key": f"community:{index}"}
-            for index in range(101)
-        }
-    }
-
-    with pytest.raises(ValueError, match="legacy sidecar package limit"):
-        v9_recovery_sidecars.package_recovery_sidecars(
-            artifact, tmp_path / "legacy"
-        )
 
 
-@pytest.mark.parametrize("nested_field", ["nodes", "edges"])
-def test_legacy_packager_counts_nested_expansion_evidence_before_materializing(
-    tmp_path, monkeypatch, nested_field
-):
-    monkeypatch.setattr(v9_recovery_sidecars, "_validate_artifact", lambda value: None)
-    expansion = {"nodes": [], "edges": []}
-    expansion[nested_field] = [{} for _ in range(10_001)]
-    artifact = {
-        "communities": [
-            {
-                "nodes": [],
-                "edges": [],
-                "provenance_expansions": [expansion],
-            }
-        ]
-    }
-
-    with pytest.raises(ValueError, match="legacy sidecar package limit"):
-        v9_recovery_sidecars.package_recovery_sidecars(
-            artifact, tmp_path / "legacy"
-        )
 
 
-@pytest.mark.parametrize("nested_field", ["observations", "source_row_ids"])
-def test_legacy_packager_counts_nested_edge_rows_before_materializing(
-    tmp_path, monkeypatch, nested_field
-):
-    monkeypatch.setattr(v9_recovery_sidecars, "_validate_artifact", lambda value: None)
-    edge = {nested_field: [f"row:{index}" for index in range(10_001)]}
-    artifact = {
-        "communities": [
-            {"nodes": [], "edges": [edge], "provenance_expansions": []}
-        ]
-    }
-
-    with pytest.raises(ValueError, match="legacy sidecar package limit"):
-        v9_recovery_sidecars.package_recovery_sidecars(
-            artifact, tmp_path / "legacy"
-        )
 
 
 @pytest.mark.parametrize(

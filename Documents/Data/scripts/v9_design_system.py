@@ -79,32 +79,34 @@ def strip_google_fonts_import(html: str) -> str:
     return html[:start] + html[end + 1 :]
 
 
-# Layer 1: tokens. Every neutral is verified >= 4.5:1 against --bg (#0a0a0c),
-# --surface (#131316), --elevated (#1a1a1f) and --sunk (#08080a).
+# Layer 1: tokens. Every neutral is verified >= 4.5:1 against --bg (#0c1117),
+# --surface (#141c24), --elevated (#1d2832) and --sunk (#070b10).
 _TOKENS = """
 :root{
-  /* Neutral ramp. Minimum contrast across all four surface tokens:
-     text1 14.19:1, text2 6.77:1, text3 4.69:1. --text-dim is 3.44:1 and is
-     reserved for non-essential decoration, never for label or body copy. */
-  --text1:#e8e8ec;--text2:#a1a1ab;--text3:#84848f;--text-dim:#6e6e78;
+  --bg:#0c1117;--surface:#141c24;--elevated:#1d2832;--sunk:#070b10;
 
-  /* One accent for the whole dashboard. 9.02:1 on --bg. */
-  --accent:#34d399;--accent-hover:#6ee7b7;
-  --accent-soft:rgba(52,211,153,.10);--accent-glow:rgba(52,211,153,.16);
+  /* Neutral ramp. Minimum contrast across all four surface tokens:
+     text1, text2 and text3 stay readable across every surface. --text-dim is
+     reserved for non-essential decoration, never for label or body copy. */
+  --text1:#f4f7fa;--text2:#c0cbd5;--text3:#93a1ad;--text-dim:#71808c;
+
+  /* One accent for the whole dashboard. Approximately 12.81:1 on --bg. */
+  --accent:#5eead4;--accent-hover:#99f6e4;
+  --accent-soft:rgba(94,234,212,.12);--accent-glow:rgba(94,234,212,.18);
 
   /* Semantic. Replaces the 600-level values that were authored for light
      backgrounds and failed AA on this shell. */
-  --positive:#34d399;--warning:#fbbf24;
-  --negative:#f87171;--negative-soft:rgba(248,113,113,.10);
+  --positive:#5eead4;--warning:#fbbf24;
+  --negative:#fb7185;--negative-soft:rgba(251,113,133,.14);
 
   /* Series colours. Paired with dash and marker redundancy below, because
      colour alone cannot separate three series on a dark background. */
-  --data-baseline:#cbd5e1;--data-hybrid:#34d399;--data-gnn:#60a5fa;
-  --data-context:#6e6e78;
+  --data-baseline:#e2e8f0;--data-hybrid:#5eead4;--data-gnn:#60a5fa;
+  --data-context:#93a1ad;
 
-  /* Type scale, replacing 13 ad-hoc sizes. 10px is the floor. */
-  --fs-micro:10px;--fs-xs:11px;--fs-sm:12px;--fs-base:13px;
-  --fs-md:14px;--fs-lg:18px;--fs-xl:24px;
+  /* Type scale, replacing 13 ad-hoc sizes. 11px is the floor. */
+  --fs-micro:11px;--fs-xs:12px;--fs-sm:13px;--fs-base:14px;
+  --fs-md:15px;--fs-lg:19px;--fs-xl:26px;
 
   /* Radius scale, replacing 9 ad-hoc values. */
   --r-sm:6px;--r-md:10px;--r-full:999px;
@@ -167,8 +169,6 @@ _PALETTE_UNIFICATION = """
   border-color:rgba(251,191,36,.45);background:rgba(251,191,36,.08)}
 #tab-v9Results .v9-recovery-stat.is-warning b,
 #tab-v9Results .v9-recovery-stat.is-warning span{color:var(--warning)}
-#tab-v9Results .v9-recovery-warning{
-  border-left-color:var(--warning);background:rgba(251,191,36,.08);color:var(--warning)}
 #tab-v9Results .v9-recovery-scope{border-color:rgba(52,211,153,.30)}
 #tab-v9Results .v9-recovery-case[aria-current="true"]{border-color:rgba(52,211,153,.45)}
 """
@@ -180,7 +180,7 @@ _SERIES_REDUNDANCY = """
 #tab-v9Results .v9-found-chart-line.baseline{stroke-dasharray:7 4}
 #tab-v9Results .v9-found-chart-line.gnn{stroke-dasharray:2 3}
 #tab-v9Results .v9-found-chart-line.hybrid{stroke-dasharray:none}
-#tab-v9Results .v9-volume-line{stroke-dasharray:1 4}
+#tab-v9Results .v9-volume-line{stroke-dasharray:none;opacity:.72;stroke-width:2}
 #tab-v9Results .v9-chart-key{position:relative}
 #tab-v9Results .v9-chart-key.baseline{border-radius:2px}
 #tab-v9Results .v9-chart-key.gnn{
@@ -206,6 +206,7 @@ _SHAPE_AND_ELEVATION = """
 .chart-panel,.map-container,.filter-panel,.network-canvas,.network-side,
 .xp-canvas,.xp-side,.xp-tools,.uad-card,.uad-figure,
 #tab-v9Results .v9-card,#tab-v9Results .v9-recovery-workspace{
+  background:var(--surface);border-color:var(--border-strong);
   border-radius:var(--r-md)}
 
 .mode-chip,.xp-chip,.v9-pill,#tab-v9Results .v9-recovery-source,
@@ -236,15 +237,19 @@ _SHAPE_AND_ELEVATION = """
 # defined focus-visible inside the newest section, leaving global navigation,
 # legends and map controls with no keyboard affordance at all.
 _INTERACTION = """
+:where(main,#tab-v9Results,#v9-gnn-architecture-comparison,.v9-chart-stack,.v9-chart-block){min-width:0}
+#v9-gnn-architecture-comparison .gnn-chart-wrap{min-width:0;max-width:100%}
+
 :where(button,a,select,input,textarea,summary,[tabindex]):focus-visible{
   outline:2px solid var(--accent-hover);outline-offset:2px}
 nav.tabs button:focus-visible{outline-offset:-2px}
 .legend-item:focus-visible,.mode-chip:focus-visible,.xp-chip:focus-visible{
   outline:2px solid var(--accent-hover);outline-offset:2px}
 
-nav.tabs button{color:var(--text3)}
+nav.tabs{background:var(--sunk);border-bottom-color:var(--border-strong)}
+nav.tabs button{color:var(--text2);font-size:13px;padding:15px 18px}
 nav.tabs button:hover{color:var(--text1)}
-nav.tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+nav.tabs button.active{color:var(--accent-hover);border-bottom-color:var(--accent)}
 
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{
@@ -258,7 +263,7 @@ nav.tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
 # Layer 7: provenance header. For a research dashboard the run it came from is
 # the credibility signal, so it belongs on screen rather than in a filename.
 _PROVENANCE = """
-header{align-items:center;gap:var(--sp-5)}
+header{background:var(--surface);border-bottom-color:var(--border-strong);align-items:center;gap:var(--sp-5)}
 .header-left h1{font-size:var(--fs-md)}
 .header-meta{
   display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2) var(--sp-5);
@@ -280,12 +285,14 @@ header{align-items:center;gap:var(--sp-5)}
 _RHYTHM = """
 .metrics{gap:var(--sp-5) var(--sp-6);margin-bottom:var(--sp-6)}
 .metric-value{font-size:var(--fs-xl);font-variant-numeric:tabular-nums}
-.metric-label{color:var(--text3)}
-.metric-sub{color:var(--text3)}
+.metric-label,.metric-sub{color:var(--text2)}
 .section{padding-top:var(--sp-6);margin-top:var(--sp-6)}
-.section-head{font-size:var(--fs-base);color:var(--text1)}
+.section-head{font-size:var(--fs-md);color:var(--text1)}
 .section-note{color:var(--text2)}
-.chart-title{color:var(--text3)}
+.chart-title{color:var(--text2)}
+.axis .tick text{fill:var(--text2);font-size:12px}
+.grid line{stroke:var(--border-strong);opacity:.72}
+.v9-found-chart-rule,.v9-volume-rule{stroke:var(--border-strong);opacity:.72}
 main{padding:var(--sp-7) var(--sp-7) var(--sp-6)}
 @media(max-width:900px){main{padding:var(--sp-5) var(--sp-4)}}
 """

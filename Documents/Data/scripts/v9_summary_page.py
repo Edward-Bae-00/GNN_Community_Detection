@@ -20,6 +20,85 @@ function summaryDashboardPositiveSafeInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+function summaryDashboardSafeText(value, fallback) {
+  return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+function summaryDashboardSortedCounts(value) {
+  if (!summaryDashboardRecord(value)) return [];
+  return Object.keys(value).map(function(label) {
+    return {label: label, count: value[label]};
+  }).filter(function(item) {
+    return summaryDashboardNonNegativeSafeInteger(item.count);
+  }).sort(function(left, right) {
+    return right.count - left.count || left.label.localeCompare(right.label);
+  });
+}
+
+function summaryBuildDatasetSnapshot(meta, overview, demo) {
+  var metadata = summaryDashboardRecord(meta) ? meta : {};
+  var totals = {
+    nodes: summaryDashboardNonNegativeSafeInteger(metadata.total_nodes)
+      ? metadata.total_nodes : null,
+    edges: summaryDashboardNonNegativeSafeInteger(metadata.total_edges)
+      ? metadata.total_edges : null,
+    events: summaryDashboardNonNegativeSafeInteger(metadata.total_events)
+      ? metadata.total_events : null,
+    communities: summaryDashboardNonNegativeSafeInteger(metadata.total_communities)
+      ? metadata.total_communities : null
+  };
+  var totalsAvailable = Object.keys(totals).every(function(key) {
+    return totals[key] !== null;
+  });
+  var dataOverview = summaryDashboardRecord(overview) ? overview : {};
+  var dataDemo = summaryDashboardRecord(demo) ? demo : {};
+  var arms = summaryDashboardRecord(dataDemo.model_arms) ? dataDemo.model_arms : {};
+  var models = {};
+  var baselineArm = summaryDashboardRecord(arms.baseline) ? arms.baseline : null;
+  var hybridArm = summaryDashboardRecord(arms.hybrid) ? arms.hybrid : null;
+  var oracleArm = summaryDashboardRecord(arms.hybrid_oracle) ? arms.hybrid_oracle : null;
+  if (baselineArm) {
+    models.baseline = {
+      label: summaryDashboardSafeText(baselineArm.label, 'HGB tabular baseline'),
+      description: summaryDashboardSafeText(baselineArm.looks_for, 'Leak-safe tabular model using own history and event context.'),
+      featureCount: Array.isArray(dataDemo.features) ? dataDemo.features.length : null
+    };
+  }
+  if (hybridArm) {
+    var seeds = Array.isArray(dataDemo.gnn_seeds)
+      && dataDemo.gnn_seeds.every(function(seed) { return summaryDashboardNonNegativeSafeInteger(seed); })
+      ? dataDemo.gnn_seeds.length : null;
+    models.hybrid = {
+      label: summaryDashboardSafeText(hybridArm.label, 'Baseline + GraphSAGE rank-fusion Hybrid'),
+      description: summaryDashboardSafeText(hybridArm.looks_for, 'Deployable score fusion of the tabular baseline and as-of GNN risk score.'),
+      gnnArm: dataDemo.gnn_arm === 'sage' ? 'GraphSAGE' : summaryDashboardSafeText(dataDemo.gnn_arm, null),
+      seeds: seeds,
+      fusionWeight: typeof dataDemo.hybrid_fusion_w_gnn === 'number'
+        && Number.isFinite(dataDemo.hybrid_fusion_w_gnn)
+        && dataDemo.hybrid_fusion_w_gnn >= 0
+        && dataDemo.hybrid_fusion_w_gnn <= 1
+        ? dataDemo.hybrid_fusion_w_gnn : null,
+      trainBucket: summaryDashboardSafeText(dataDemo.train_bucket, null),
+      epochs: summaryDashboardPositiveSafeInteger(dataDemo.epochs) ? dataDemo.epochs : null
+    };
+  }
+  if (oracleArm) {
+    models.oracle = {
+      label: summaryDashboardSafeText(oracleArm.label, 'Oracle Hybrid ceiling'),
+      description: summaryDashboardSafeText(oracleArm.looks_for, 'Synthetic-only oracle ceiling; not deployable.')
+    };
+  }
+  return {
+    available: totalsAvailable,
+    corpus: summaryDashboardSafeText(metadata.corpus, null),
+    generatedAt: summaryDashboardSafeText(metadata.generated_at, null),
+    totals: totals,
+    nodeTypes: summaryDashboardSortedCounts(dataOverview.node_type_counts),
+    edgeTypes: summaryDashboardSortedCounts(dataOverview.edge_type_counts),
+    models: models
+  };
+}
+
 function summaryBuildResearchSummary(demo, recovery) {
   var canonicalUnavailable = {
     available: false,
@@ -49,34 +128,6 @@ function summaryBuildResearchSummary(demo, recovery) {
       netPeople: canonical.net_people
     };
   }
-
-  var eventDepth = {
-    available: false,
-    reason: 'No mutually available event depth is embedded.'
-  };
-  var overall = summaryDashboardRecord(demo) ? demo.overall : null;
-  var baseline = summaryDashboardRecord(overall) && summaryDashboardRecord(overall.baseline)
-    ? overall.baseline : null;
-  var hybrid = summaryDashboardRecord(overall) && summaryDashboardRecord(overall.hybrid)
-    ? overall.hybrid : null;
-  [2000, 5000, 1000, 500, 200, 100, 50].some(function(k) {
-    var key = 'found@' + k;
-    if (!baseline || !hybrid
-        || !summaryDashboardNonNegativeSafeInteger(baseline[key])
-        || baseline[key] > k
-        || !summaryDashboardNonNegativeSafeInteger(hybrid[key])
-        || hybrid[key] > k) {
-      return false;
-    }
-    eventDepth = {
-      available: true,
-      k: k,
-      baselineEventHits: baseline[key],
-      hybridEventHits: hybrid[key],
-      netEventHits: hybrid[key] - baseline[key]
-    };
-    return true;
-  });
 
   var observability = {
     available: false,
@@ -115,7 +166,6 @@ function summaryBuildResearchSummary(demo, recovery) {
 
   return {
     canonicalOperational: canonicalOperational,
-    eventDepth: eventDepth,
     observability: observability
   };
 }
@@ -123,6 +173,7 @@ function summaryBuildResearchSummary(demo, recovery) {
 var DashboardRuntime = (typeof DashboardRuntime === 'object' && DashboardRuntime)
   ? DashboardRuntime : {};
 DashboardRuntime.buildResearchSummary = summaryBuildResearchSummary;
+DashboardRuntime.buildDatasetSnapshot = summaryBuildDatasetSnapshot;
 """
 
 
@@ -156,7 +207,26 @@ SUMMARY_PAGE_CSS = r"""
 .metric-semantics dl{display:grid;grid-template-columns:minmax(150px,.35fr) minmax(0,1fr);gap:9px 18px;margin-top:14px;color:var(--text2);font-size:12px;line-height:1.5}
 .metric-semantics dt{color:var(--text1);font-weight:600}
 .metric-semantics dd{margin:0}
+.dataset-snapshot{display:grid;gap:18px;margin-top:18px}
+.dataset-total-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.dataset-total{min-width:0;padding:14px;border:1px solid var(--border);background:var(--elevated)}
+.dataset-total .metric-value{font-size:18px}
+.dataset-breakdown-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.dataset-breakdown{min-width:0;padding:14px;border:1px solid var(--border);background:var(--surface)}
+.dataset-breakdown h4{margin:0 0 10px;color:var(--text1);font-size:12px;font-weight:600}
+.dataset-breakdown ul{display:grid;gap:7px;margin:0;padding:0;list-style:none}
+.dataset-breakdown li{display:flex;justify-content:space-between;gap:12px;color:var(--text2);font-size:12px;line-height:1.35}
+.dataset-breakdown li span:first-child{min-width:0;overflow-wrap:anywhere}
+.dataset-breakdown li b{flex:none;color:var(--text1);font:500 12px/1.35 var(--font-mono)}
+.dataset-model-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.dataset-model-card{min-width:0;padding:16px;border:1px solid var(--border-strong);background:var(--surface)}
+.dataset-model-card h4{margin:0;color:var(--text1);font-size:13px;font-weight:600}
+.dataset-model-card p{margin:7px 0 0;color:var(--text2);font-size:12px;line-height:1.5}
+.dataset-model-meta{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:12px;color:var(--text2);font-size:11px}
+.dataset-model-meta b{color:var(--text1);font-family:var(--font-mono);font-weight:500}
+.dataset-unavailable{color:var(--text2);font-size:13px;line-height:1.5}
 @media(max-width:768px){.overview-layout{grid-template-columns:1fr;gap:24px}.research-brief{position:static;padding:0 0 24px;border-right:0;border-bottom:1px solid var(--border)}.research-brief h2{max-width:none}.evidence-console{gap:24px}.evidence-metrics,.mechanism-list{grid-template-columns:1fr}.metric-semantics dl{grid-template-columns:1fr;gap:4px 0}.metric-semantics dd{margin-bottom:9px}}
+@media(max-width:768px){.dataset-total-grid,.dataset-breakdown-grid,.dataset-model-grid{grid-template-columns:1fr}}
 """
 
 
@@ -176,49 +246,61 @@ SUMMARY_PAGE_RENDERER_JS = r'''overview:{rendered:false,render(){
   const layout=document.createElement('div');layout.className='overview-layout';el.appendChild(layout);
   const brief=document.createElement('aside');brief.className='research-brief';layout.appendChild(brief);
   text(brief,'V9 designed positive control','brief-kicker');
-  heading(brief,'h2','Relational signal changes recovery at depth.');
-  para(brief,'V9 is a designed positive control: relational signal is injected through connected co-travel, shared plate, and residence structure so caught labels can propagate through a connected population. Scores and labels obey strict as-of semantics: only evidence available before each event time is used. This does not replace the V8 honest track, where graph signal is intentionally thin.');
+  heading(brief,'h2','A graph helps recover more people at operational depth.');
+  para(brief,'V9 is a deliberately connected synthetic positive control. It asks whether an as-of graph signal can help a deployable Hybrid recover people that a strong tabular baseline misses.');
 
   const console=document.createElement('div');console.className='evidence-console';layout.appendChild(console);
-  const operational=block(console,'operational-evidence','Operational evidence');
-  const canonical=summary&&summary.canonicalOperational;
-  if(canonical&&canonical.available){
-    para(operational,'Canonical three-seed operational comparison; values are unique-person recovery.');
-    const metrics=document.createElement('div');metrics.className='evidence-metrics';operational.appendChild(metrics);
-    metric(metrics,'Inspections per day',canonical.inspectionsPerDay,'operational depth');metric(metrics,'Baseline unique-person recovery',canonical.baselinePeople,'unique people');metric(metrics,'Hybrid unique-person recovery',canonical.hybridPeople,'unique people');metric(metrics,'Net unique-person recovery',canonical.netPeople,'hybrid minus baseline');
-  }else{
-    para(operational,'Canonical operational comparison unavailable.');
-    para(operational,canonical&&canonical.reason?canonical.reason:'Canonical operational fields are unavailable.','evidence-status');
-    if(summary&&summary.eventDepth&&summary.eventDepth.available)para(operational,'Artifact-supported event-depth evidence is available in the Event depth section below.','evidence-status');
-  }
-
-  const depthBlock=block(console,'event-depth-evidence','Event depth');
-  const depth=summary&&summary.eventDepth;
-  if(depth&&depth.available){
-    para(depthBlock,'Artifact-supported ranking depth; every value below is event hits.');
-    const metrics=document.createElement('div');metrics.className='evidence-metrics';depthBlock.appendChild(metrics);
-    metric(metrics,'K',depth.k,'event depth');metric(metrics,'Baseline event hits',depth.baselineEventHits,'event hits');metric(metrics,'Hybrid event hits',depth.hybridEventHits,'event hits');metric(metrics,'Net event hits',depth.netEventHits,'event hits');
-  }else para(depthBlock,depth&&depth.reason?depth.reason:'Event-depth comparison unavailable.','evidence-status');
-
-  const mechanism=block(console,'mechanism-evidence','Mechanism and ceiling');
+  const snapshot=DashboardRuntime.buildDatasetSnapshot(D.meta,D.overview,D.v9Demo);
+  const mechanism=block(console,'mechanism-evidence','Why the graph can help');
   const hidden=demo&&demo.stratum_hidden&&typeof demo.stratum_hidden==='object'?demo.stratum_hidden:null;
   if(hidden&&safeCount(hidden.observable)&&safeCount(hidden.dark)&&safeCount(hidden.lone)){
-    para(mechanism,'The designed signal propagates through co-travel, shared plate, and residence links. These strata describe the ceiling imposed by observability, not a forecast.');
+    para(mechanism,'The positive-control signal propagates through co-travel, shared plate, and residence links. The model may use only graph edges and caught labels available strictly before each event time T.');
     const mechanisms=document.createElement('div');mechanisms.className='mechanism-list';mechanism.appendChild(mechanisms);
     [['Observable population',hidden.observable,'visible relational context'],['Dark population',hidden.dark,'limited observed context'],['Lone population',hidden.lone,'no connected propagation path']].forEach(item=>{const node=document.createElement('div');node.className='mechanism-item';text(node,item[0],'mechanism-label');text(node,item[1],'mechanism-value');text(node,item[2],'mechanism-note');mechanisms.appendChild(node);});
   }else para(mechanism,'Artifact stratum_hidden counts are unavailable or malformed.','evidence-status');
 
-  const limits=block(console,'limits-evidence','Limits and provenance');
-  const list=document.createElement('div');list.className='limits-list';limits.appendChild(list);
-  para(list,'Positive-control status: V9 is deliberately engineered to contain relational signal; interpret it as a capability check, not a claim about the V8 honest track.');
-  para(list,'Connected-population dependence and top-K wash limit recovery when people are dark or isolated.');
-  para(list,'As-of evidence is required: graph edges and caught labels must precede each row time T.');
-  const provenance=[];
-  if(canonical&&canonical.available)provenance.push('canonical operational artifact available');else provenance.push('canonical operational artifact unavailable');
-  if(depth&&depth.available)provenance.push('event-depth artifact available');else provenance.push('event-depth artifact unavailable');
   const obs=summary&&summary.observability;
-  if(obs&&obs.available)provenance.push('single-seed artifact available');else provenance.push('single-seed artifact unavailable');
-  para(list,'Seeds and artifact availability: '+provenance.join('; ')+'.');
+  const dataset=block(console,'dataset-model-evidence','Dataset and models');
+  para(dataset,snapshot&&snapshot.available
+    ? 'Synthetic V9 corpus snapshot and the deployable comparison arms used in this positive-control demonstration.'
+    : 'Dataset and model metadata is unavailable or failed validation.','dataset-unavailable');
+  const totals=snapshot&&snapshot.totals?snapshot.totals:{};
+  const totalValue=value=>value===null||value===undefined?'—':Number(value).toLocaleString();
+  const totalGrid=document.createElement('div');totalGrid.className='dataset-total-grid dataset-snapshot';dataset.appendChild(totalGrid);
+  metric(totalGrid,'Total nodes',totalValue(totals.nodes),'heterogeneous corpus nodes');
+  metric(totalGrid,'Total edges',totalValue(totals.edges),'heterogeneous corpus edges');
+  metric(totalGrid,'Total events',totalValue(totals.events),'crossing events');
+  metric(totalGrid,'Total communities',totalValue(totals.communities),'connected components');
+  totalGrid.querySelectorAll('.evidence-metric').forEach(function(node){node.classList.add('dataset-total');});
+  const breakdownGrid=document.createElement('div');breakdownGrid.className='dataset-breakdown-grid';dataset.appendChild(breakdownGrid);
+  const breakdown=function(parent,title,items,className){
+    const panel=document.createElement('div');panel.className='dataset-breakdown '+className;
+    heading(panel,'h4',title);
+    const list=document.createElement('ul');panel.appendChild(list);
+    (items||[]).slice(0,6).forEach(function(item){const row=document.createElement('li');text(row,item.label);const count=document.createElement('b');count.textContent=Number(item.count).toLocaleString();row.appendChild(count);list.appendChild(row);});
+    if(!(items||[]).length) para(panel,'Breakdown unavailable.','dataset-unavailable');
+    parent.appendChild(panel);
+  };
+  breakdown(breakdownGrid,'Node types',snapshot&&snapshot.nodeTypes,'node-type-breakdown');
+  breakdown(breakdownGrid,'Edge types',snapshot&&snapshot.edgeTypes,'edge-type-breakdown');
+  const modelGrid=document.createElement('div');modelGrid.className='dataset-model-grid';dataset.appendChild(modelGrid);
+  const modelCard=function(id,fallbackLabel,fallbackDescription){
+    const model=snapshot&&snapshot.models&&snapshot.models[id]?snapshot.models[id]:{};
+    const card=document.createElement('article');card.className='dataset-model-card';
+    heading(card,'h4',model.label||fallbackLabel);
+    para(card,model.description||fallbackDescription);
+    const metaLine=document.createElement('div');metaLine.className='dataset-model-meta';card.appendChild(metaLine);
+    const addMeta=function(label,value){if(value===null||value===undefined)return;const item=document.createElement('span');item.textContent=label+': ';const strong=document.createElement('b');strong.textContent=String(value);item.appendChild(strong);metaLine.appendChild(item);};
+    if(id==='baseline') addMeta('Features',model.featureCount);
+    if(id==='hybrid'){addMeta('GNN',model.gnnArm);addMeta('Seeds',model.seeds);addMeta('GNN weight',model.fusionWeight===null?null:Number(model.fusionWeight).toFixed(2));addMeta('Train bucket',model.trainBucket);addMeta('Epochs',model.epochs);}
+    modelGrid.appendChild(card);
+  };
+  modelCard('baseline','HGB tabular baseline','Leak-safe tabular model using own history, observed demographics, and event context.');
+  modelCard('hybrid','Baseline + GraphSAGE rank-fusion Hybrid','Deployable late fusion of the baseline and an as-of GraphSAGE risk score.');
+  if(snapshot&&snapshot.models&&snapshot.models.oracle){
+    const oracle=document.createElement('p');oracle.className='dataset-unavailable';oracle.textContent=snapshot.models.oracle.label+' is synthetic-only and not deployable.';dataset.appendChild(oracle);
+  }
+
   if(obs&&obs.available){
     const diagnostic=block(console,'observability-evidence','Single-seed observability diagnostic');
     para(diagnostic,'Seed-0 diagnostic only; values below are unique-person recovery and are separate from event hits.');

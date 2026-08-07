@@ -1737,6 +1737,26 @@ def test_ablation_specs_are_deterministic_complete_and_relation_qualified():
     assert pooling.edge_source_row_ids == ("cot", "cot-duplicate")
 
 
+def test_ablation_pair_factor_does_not_duplicate_existing_pair_prefix():
+    engine, _ = _explanation_fixture()
+    snapshot = engine.snapshot(SCORING_DAY)
+    community = engine.community("target", SCORING_DAY)
+    snapshot.active_edges.loc[
+        snapshot.active_edges["source_row_id"].isin(["cot", "cot-duplicate"]),
+        "canonical_pair_group_id",
+    ] = "pair:g1"
+
+    specs = build_ablation_specs(snapshot, "target", community)
+
+    pair_ids = [
+        spec.factor_id
+        for spec in specs
+        if spec.kind == "pair_relation"
+    ]
+    assert "pair:g1:rel:0" in pair_ids
+    assert "pair:pair:g1:rel:0" not in pair_ids
+
+
 def test_cotravel_pool_factors_exclude_groups_with_redundant_pair_connectivity():
     active_edges = pd.DataFrame(
         {

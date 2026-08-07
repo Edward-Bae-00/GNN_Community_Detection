@@ -2,55 +2,66 @@
 
 
 V9_RECOVERY_EXPLAINER_CSS = r"""
-#tab-v9Results .v9-recovery { margin: 30px 0; padding: 24px 0; border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); }
-#tab-v9Results .v9-recovery-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 18px; }
+#tab-v9Results .v9-recovery { margin: 30px 0; padding: 24px 0 32px; border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); }
+#tab-v9Results .v9-recovery-header { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 24px; margin-bottom: 18px; padding: 22px 24px; border: 1px solid var(--border); border-radius: 12px 12px 0 0; background: var(--surface); }
+#tab-v9Results .v9-recovery-header-copy { min-width: 0; }
 #tab-v9Results .v9-recovery-eyebrow { color: var(--accent-hover); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-#tab-v9Results .v9-recovery-title { margin: 6px 0; color: var(--text1); font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
-#tab-v9Results .v9-recovery-intro { max-width: 720px; margin: 0; color: var(--text2); font-size: 12px; line-height: 1.55; }
-#tab-v9Results .v9-recovery-scope { flex: 0 0 auto; max-width: 270px; padding: 10px 12px; border: 1px solid rgba(52,211,153,.32); border-radius: 999px; background: var(--accent-soft); color: var(--accent-hover); font-size: 10px; font-weight: 700; line-height: 1.4; text-align: center; }
-#tab-v9Results .v9-recovery-scope small { display: block; margin-top: 2px; color: var(--text2); font-size: 9px; font-weight: 500; }
-#tab-v9Results .v9-recovery-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+#tab-v9Results .v9-recovery-title { margin: 6px 0; color: var(--text1); font-size: clamp(22px, 2.5vw, 30px); font-weight: 700; letter-spacing: -.02em; text-wrap: balance; }
+#tab-v9Results .v9-recovery-intro { max-width: 68ch; margin: 0; color: var(--text2); font-size: 12px; line-height: 1.55; }
+#tab-v9Results .v9-recovery-scope { flex: 0 0 auto; max-width: 280px; padding: 10px 12px; border: 1px solid rgba(52,211,153,.32); border-radius: 999px; background: var(--accent-soft); color: var(--accent-hover); font-size: 10px; font-weight: 700; line-height: 1.4; text-align: right; }
+#tab-v9Results .v9-recovery-scope small { display: block; margin-top: 2px; color: var(--text2); font-size: 10px; font-weight: 500; }
+#tab-v9Results .v9-recovery-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 #tab-v9Results .v9-recovery-stat { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 #tab-v9Results .v9-recovery-stat b { display: block; color: var(--text1); font-family: var(--font-mono); font-size: 18px; font-variant-numeric: tabular-nums; }
-#tab-v9Results .v9-recovery-stat span { display: block; margin-top: 4px; color: var(--text2); font-size: 9px; line-height: 1.3; letter-spacing: .045em; text-transform: uppercase; }
+#tab-v9Results .v9-recovery-stat span { display: block; margin-top: 4px; color: var(--text2); font-size: 10px; line-height: 1.3; letter-spacing: .045em; text-transform: uppercase; }
 #tab-v9Results .v9-recovery-stat.is-warning { border-color: rgba(245,158,11,.5); background: rgba(245,158,11,.08); }
 #tab-v9Results .v9-recovery-stat.is-warning b, #tab-v9Results .v9-recovery-stat.is-warning span { color: #fbbf24; }
-#tab-v9Results .v9-recovery-containment, #tab-v9Results .v9-recovery-warning, #tab-v9Results .v9-recovery-status { margin-top: 9px; padding: 9px 11px; border-left: 3px solid var(--accent); background: var(--accent-soft); color: var(--text2); font-size: 11px; line-height: 1.45; }
-#tab-v9Results .v9-recovery-warning { border-left-color: #f59e0b; background: rgba(245,158,11,.08); color: #fbbf24; }
+#tab-v9Results .v9-recovery-status { margin-top: 9px; padding: 9px 11px; border-left: 3px solid var(--accent); background: var(--accent-soft); color: var(--text2); font-size: 11px; line-height: 1.45; }
 #tab-v9Results .v9-recovery-status { border-left-color: var(--border-strong); background: var(--elevated); color: var(--text2); }
 #tab-v9Results .v9-recovery-coverage { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0 18px; color: var(--text2); font-size: 10px; }
-#tab-v9Results .v9-recovery-workspace { display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr); min-height: 620px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
-#tab-v9Results .v9-recovery-rail { min-width: 0; padding: 14px; border-right: 1px solid var(--border); background: var(--sunk); }
-#tab-v9Results .v9-recovery-filter-grid { display: grid; gap: 8px; }
-#tab-v9Results .v9-recovery-field { display: grid; gap: 4px; color: var(--text2); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 #tab-v9Results .v9-recovery-select, #tab-v9Results .v9-recovery-search { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text1); padding: 7px 8px; font: inherit; font-size: 11px; }
-#tab-v9Results .v9-recovery-case-count { margin: 12px 0 7px; color: var(--text2); font-size: 10px; }
-#tab-v9Results .v9-recovery-case-list { display: grid; gap: 6px; max-height: 470px; overflow: auto; }
 #tab-v9Results .v9-recovery-case { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text2); text-align: left; cursor: pointer; }
 #tab-v9Results .v9-recovery-case:hover { border-color: var(--border-strong); color: var(--text1); }
 #tab-v9Results .v9-recovery-case[aria-current="true"] { border-color: rgba(52,211,153,.5); box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
-#tab-v9Results .v9-recovery-case-top { display: flex; justify-content: space-between; gap: 8px; color: var(--text1); font-size: 11px; font-weight: 700; }
-#tab-v9Results .v9-recovery-case-ranks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 8px; font-family: var(--font-mono); font-size: 9px; }
-#tab-v9Results .v9-recovery-case-meta { margin-top: 7px; color: var(--text2); font-size: 9px; line-height: 1.35; }
+#tab-v9Results .v9-recovery-case-meta { margin-top: 7px; color: var(--text2); font-size: 10px; line-height: 1.35; }
 #tab-v9Results .v9-recovery-case-evidence { margin-top: 4px; color: var(--accent-hover); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-#tab-v9Results .v9-recovery-detail { min-width: 0; padding: 18px; }
 #tab-v9Results .v9-recovery-case-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
 #tab-v9Results .v9-recovery-case-header h4 { margin: 0 0 4px; color: var(--text1); font-size: 15px; }
 #tab-v9Results .v9-recovery-case-header p { margin: 0; color: var(--text2); font-size: 10px; }
-#tab-v9Results .v9-recovery-ranks { display: grid; grid-template-columns: repeat(3, minmax(90px, 1fr)); gap: 6px; }
+#tab-v9Results .v9-recovery-ranks { display: grid; grid-template-columns: repeat(2, minmax(90px, 1fr)); gap: 1px; border: 1px solid var(--border); border-top: 0; background: var(--border); }
 #tab-v9Results .v9-recovery-rank { padding: 8px; border-left: 2px solid var(--border-strong); background: var(--elevated); }
-#tab-v9Results .v9-recovery-rank b { display: block; color: var(--text1); font-family: var(--font-mono); font-size: 13px; }
-#tab-v9Results .v9-recovery-rank span { display: block; margin-top: 2px; color: var(--text2); font-size: 8px; letter-spacing: .04em; text-transform: uppercase; }
+#tab-v9Results .v9-recovery-rank.is-primary { border-left-color: var(--accent); background: var(--accent-soft); }
+#tab-v9Results .v9-recovery-rank b { display: block; color: var(--text1); font-family: var(--font-mono); font-size: 21px; font-variant-numeric: tabular-nums; }
+#tab-v9Results .v9-recovery-rank span { display: block; margin-top: 2px; color: var(--text2); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+#tab-v9Results .v9-recovery-rank-delta { grid-column: 1 / -1; color: var(--text2); font-size: 10px; line-height: 1.35; }
+#tab-v9Results .v9-recovery-header-copy,
+#tab-v9Results .v9-recovery-title,
+#tab-v9Results .v9-recovery-intro,
+#tab-v9Results .v9-recovery-narrative { font-family: Outfit, var(--font-sans), sans-serif; }
+#tab-v9Results .v9-recovery-rank,
+#tab-v9Results .v9-recovery-rank b,
+#tab-v9Results .v9-attribution-weight,
+#tab-v9Results .v9-recovery-table { font-family: 'JetBrains Mono', var(--font-mono), monospace; }
+#tab-v9Results .v9-recovery-rank { min-height: 78px; padding: 12px; border-top: 2px solid var(--border-strong); border-left: 0; }
+#tab-v9Results .v9-recovery-rank.is-primary { border-top-color: var(--accent); background: var(--accent-soft); }
+#tab-v9Results .v9-recovery-rank-delta { color: var(--accent-hover); font-size: 12px; }
+#tab-v9Results .v9-recovery-narrative { padding: 18px; border-radius: 10px; }
+#tab-v9Results .v9-recovery-narrative p { font-size: 13px; line-height: 1.6; }
+#tab-v9Results .v9-recovery-button,
+#tab-v9Results .v9-recovery-case,
+#tab-v9Results .v9-recovery-factor { min-height: 44px; }
 #tab-v9Results .v9-recovery-evidence-grid { display: grid; grid-template-columns: minmax(190px, .62fr) minmax(0, 1.38fr); gap: 12px; }
+#tab-v9Results .v9-recovery-evidence-grid > * { width: 100%; min-width: 0; }
 #tab-v9Results .v9-recovery-panel { min-width: 0; border: 1px solid var(--border); border-radius: 9px; background: var(--elevated); }
+#tab-v9Results .v9-recovery-v3 .v9-recovery-panel { overflow: hidden; border-radius: 10px; background: var(--surface); }
 #tab-v9Results .v9-recovery-panel-head { padding: 11px 12px; border-bottom: 1px solid var(--border); }
 #tab-v9Results .v9-recovery-panel-head h5 { margin: 0; color: var(--text1); font-size: 11px; }
-#tab-v9Results .v9-recovery-panel-head p { margin: 4px 0 0; color: var(--text2); font-size: 9px; line-height: 1.4; }
+#tab-v9Results .v9-recovery-panel-head p { margin: 4px 0 0; color: var(--text2); font-size: 10px; line-height: 1.4; }
 #tab-v9Results .v9-recovery-factor-list { display: grid; gap: 1px; background: var(--border); }
-#tab-v9Results .v9-recovery-factor { width: 100%; padding: 10px 12px; border: 0; background: var(--surface); color: var(--text2); text-align: left; cursor: pointer; }
+#tab-v9Results .v9-recovery-factor { width: 100%; min-width: 0; padding: 10px 12px; border: 0; background: var(--surface); color: var(--text2); text-align: left; cursor: pointer; }
 #tab-v9Results .v9-recovery-factor[aria-pressed="true"] { box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
-#tab-v9Results .v9-recovery-factor strong { display: block; color: var(--text1); font-size: 10px; line-height: 1.35; }
-#tab-v9Results .v9-recovery-factor span { display: block; margin-top: 4px; color: var(--text2); font-family: var(--font-mono); font-size: 9px; }
+#tab-v9Results .v9-recovery-factor strong { display: block; min-width: 0; color: var(--text1); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; word-break: break-word; }
+#tab-v9Results .v9-recovery-factor span { display: block; margin-top: 4px; color: var(--text2); font-family: var(--font-mono); font-size: 10px; }
 #tab-v9Results .v9-recovery-narrative { margin-top: 12px; padding: 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
 #tab-v9Results .v9-recovery-narrative h5 { margin: 0 0 8px; color: var(--text1); font-size: 11px; }
 #tab-v9Results .v9-recovery-narrative p { margin: 6px 0; color: var(--text2); font-size: 11px; line-height: 1.55; }
@@ -63,51 +74,81 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
 #tab-v9Results .v9-attribution-row { display: grid; gap: 5px; padding: 7px 0; border-top: 1px solid var(--border); color: var(--text2); font-size: 10px; }
 #tab-v9Results .v9-attribution-row:first-of-type { border-top: 0; padding-top: 0; }
 #tab-v9Results .v9-attribution-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-#tab-v9Results .v9-attribution-rank { color: var(--accent-hover); font-family: var(--font-mono); font-size: 9px; font-weight: 700; }
+#tab-v9Results .v9-attribution-rank { color: var(--accent-hover); font-family: var(--font-mono); font-size: 10px; font-weight: 700; }
 #tab-v9Results .v9-attribution-id { min-width: 0; overflow-wrap: anywhere; color: var(--text1); font-family: var(--font-mono); }
 #tab-v9Results .v9-attribution-connection { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
-#tab-v9Results .v9-attribution-relation { padding: 2px 5px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--accent-hover); font-size: 8px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+#tab-v9Results .v9-attribution-relation { padding: 2px 5px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--accent-hover); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 #tab-v9Results .v9-attribution-weight { color: var(--text1); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 #tab-v9Results .v9-attribution-bar { height: 6px; overflow: hidden; border-radius: 999px; background: var(--sunk); }
 #tab-v9Results .v9-attribution-bar-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
 #tab-v9Results .v9-recovery-source-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-#tab-v9Results .v9-recovery-source { padding: 2px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font-family: var(--font-mono); font-size: 8px; }
-#tab-v9Results .v9-recovery-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px; border-bottom: 1px solid var(--border); }
-#tab-v9Results .v9-recovery-toolgroup { display: inline-flex; align-items: center; gap: 3px; }
-#tab-v9Results .v9-recovery-button { min-height: 29px; padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text2); font: inherit; font-size: 9px; cursor: pointer; }
-#tab-v9Results .v9-recovery-button:hover { color: var(--text1); border-color: var(--text2); }
-#tab-v9Results .v9-recovery-button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-hover); }
-#tab-v9Results .v9-recovery-search { width: 118px; min-height: 29px; padding: 5px 7px; font-size: 9px; }
-#tab-v9Results .v9-recovery-toolbar .v9-recovery-select { width: auto; min-height: 29px; padding: 5px 7px; font-size: 9px; }
-#tab-v9Results .v9-recovery-canvas-note { padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text2); font-size: 9px; line-height: 1.4; }
+#tab-v9Results .v9-recovery-source { padding: 2px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font-family: var(--font-mono); font-size: 10px; }
+#tab-v9Results .v9-recovery-toolbar { display:grid; grid-template-columns:repeat(auto-fit,minmax(178px,1fr)); gap:12px 14px; padding:13px 14px; border-bottom: 1px solid var(--border); background: var(--sunk); }
+#tab-v9Results .v9-recovery-control-group { display:grid; gap:6px; align-content:start; min-width:0; }
+#tab-v9Results .v9-recovery-control-label { color:var(--text2); font-size:9px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
+#tab-v9Results .v9-recovery-control-items { display:flex; flex-wrap:wrap; gap:4px; min-width:0; }
+#tab-v9Results .v9-recovery-control-items .v9-recovery-button { min-height:36px; }
+#tab-v9Results .v9-recovery-button { display:inline-flex; align-items:center; gap:6px; min-height: 29px; padding: 5px 9px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text2); font: inherit; font-size: 10px; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }
+#tab-v9Results .v9-recovery-button:hover { color: var(--text1); border-color: var(--text2); background: var(--elevated); }
+#tab-v9Results .v9-recovery-button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-hover); box-shadow: inset 0 -2px 0 var(--accent); }
+#tab-v9Results .v9-recovery-button-count { padding: 1px 5px; border-radius: 999px; background: rgba(255,255,255,.08); color: var(--text2); font-family: var(--font-mono); font-size: 9px; font-variant-numeric: tabular-nums; }
+#tab-v9Results .v9-recovery-button[aria-pressed="true"] .v9-recovery-button-count { background: rgba(52,211,153,.2); color: var(--accent-hover); }
+#tab-v9Results .v9-recovery-search { width: 100%; min-height: 36px; padding: 5px 8px; font-size: 10px; }
+#tab-v9Results .v9-recovery-toolbar .v9-recovery-select { width: 100%; min-height: 36px; padding: 5px 8px; font-size: 10px; }
+#tab-v9Results .v9-recovery-canvas-note { padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text2); font-size: 10px; line-height: 1.4; }
+#tab-v9Results .v9-recovery-canvas-note.is-fine-print { border-bottom: 0; border-top: 1px solid var(--border); color: var(--text2); font-size: 9px; opacity: .78; }
 #tab-v9Results .v9-recovery-canvas-wrap { position: relative; height: 410px; min-height: 300px; background: var(--sunk); }
 #tab-v9Results .v9-recovery-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 #tab-v9Results .v9-recovery-canvas:active { cursor: grabbing; }
 #tab-v9Results .v9-recovery-case:focus-visible, #tab-v9Results .v9-recovery-factor:focus-visible, #tab-v9Results .v9-recovery-button:focus-visible, #tab-v9Results .v9-recovery-select:focus-visible, #tab-v9Results .v9-recovery-search:focus-visible, #tab-v9Results .v9-recovery-canvas:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
 #tab-v9Results .v9-recovery-empty { padding: 28px; border: 1px dashed var(--border-strong); border-radius: 9px; color: var(--text2); font-size: 12px; line-height: 1.55; text-align: center; }
-#tab-v9Results .v9-recovery-cohorts { display: inline-flex; gap: 4px; padding: 4px; margin: 12px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--elevated); }
-#tab-v9Results .v9-recovery-cohorts button { border: 0; border-radius: 5px; padding: 8px 12px; background: transparent; color: var(--text2); cursor: pointer; }
-#tab-v9Results .v9-recovery-cohorts button[aria-pressed="true"] { background: var(--surface); color: var(--text1); box-shadow: 0 1px 2px rgba(15,23,42,.12); }
-#tab-v9Results .v9-recovery-v2-grid { display: grid; grid-template-columns: minmax(220px,.4fr) minmax(0,1fr); gap: 16px; }
-#tab-v9Results .v9-recovery-v2-list, #tab-v9Results .v9-recovery-v2-detail { display: grid; gap: 8px; align-content: start; min-width: 0; }
-#tab-v9Results .v9-recovery-v2-panels { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
-#tab-v9Results .v9-recovery-v2-panel { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
-#tab-v9Results .v9-recovery-v2-panel h5 { margin: 0 0 7px; color: var(--text1); }
-#tab-v9Results .v9-recovery-v2-panel pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text2); font: 9px/1.5 var(--font-mono); }
-#tab-v9Results .v9-recovery-progress { color: var(--text2); font: 9px/1.5 var(--font-mono); }
-#tab-v9Results .v9-recovery-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-#tab-v9Results .v9-recovery-legend-item { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font-size: 10px; line-height: 1.25; }
+#tab-v9Results .v9-recovery-loading { display: grid; gap: 12px; min-height: 520px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+#tab-v9Results .v9-recovery-skeleton { border-radius: 7px; background: var(--elevated); animation: v9-recovery-pulse 1.4s ease-in-out infinite; }
+#tab-v9Results .v9-recovery-skeleton.is-graph { min-height: 390px; }
+#tab-v9Results .v9-recovery-skeleton.is-copy { min-height: 54px; }
+#tab-v9Results .v9-recovery-skeleton.is-copy.is-short { width: 64%; }
+#tab-v9Results .v9-recovery-error, #tab-v9Results .v9-recovery-empty-state { padding: 24px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text2); }
+#tab-v9Results .v9-recovery-error h4, #tab-v9Results .v9-recovery-empty-state h4 { margin: 0; color: var(--text1); font-size: 15px; }
+#tab-v9Results .v9-recovery-error p, #tab-v9Results .v9-recovery-empty-state p { margin: 8px 0 0; color: var(--text2); font-size: 12px; line-height: 1.55; }
+#tab-v9Results .v9-recovery-retry { margin-top: 12px; }
+#tab-v9Results .v9-recovery-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@keyframes v9-recovery-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+#tab-v9Results .v9-recovery-v3-grid { display: grid; grid-template-columns: 214px minmax(0, 1fr); gap: 16px; align-items: start; margin-top: 16px; }
+#tab-v9Results .v9-recovery-v3-list { position: sticky; top: 16px; max-height: min(70vh, 720px); overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--sunk); scrollbar-gutter: stable; }
+#tab-v9Results .v9-recovery-v3-picker { display: none; width: 100%; min-height: 44px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text1); padding: 9px 10px; font: inherit; }
+#tab-v9Results .v9-recovery-v3-detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; min-width: 0; }
+#tab-v9Results .v9-recovery-v3-panel { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+#tab-v9Results .v9-recovery-v3-panel h5 { margin: 0 0 7px; color: var(--text1); }
+#tab-v9Results .v9-recovery-graph-panel { min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+#tab-v9Results .v9-recovery-legend { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+#tab-v9Results .v9-recovery-legend-item { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 3px 9px 3px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font-size: 10px; line-height: 1.25; white-space: nowrap; }
 #tab-v9Results .v9-recovery-legend-swatch { display: inline-block; flex: 0 0 auto; width: 18px; height: 8px; border-radius: 999px; background: #7f8798; box-shadow: 0 0 0 1px rgba(255,255,255,.2); }
-#tab-v9Results .v9-recovery-legend-swatch.is-context { opacity: .45; }
-#tab-v9Results .v9-recovery-legend-swatch.is-evidence { height: 10px; background: #fbbf24; box-shadow: 0 0 8px rgba(251,191,36,.55); }
+#tab-v9Results .v9-recovery-legend-swatch.is-cotravel { height:3px; background:#34d399; box-shadow:none; }
+#tab-v9Results .v9-recovery-legend-swatch.is-residence { height:3px; background:repeating-linear-gradient(90deg,#60a5fa 0 8px,transparent 8px 13px); box-shadow:none; }
+#tab-v9Results .v9-recovery-legend-swatch.is-shared-plate { height:3px; background:repeating-linear-gradient(90deg,#a78bfa 0 3px,transparent 3px 8px); box-shadow:none; }
+#tab-v9Results .v9-recovery-legend-swatch.is-other-relation { height:3px; background:repeating-linear-gradient(90deg,#8b8b96 0 11px,transparent 11px 17px); box-shadow:none; }
+#tab-v9Results .v9-recovery-legend-swatch.is-attributed-node { width:10px; height:10px; border:2px solid #fbbf24; border-radius:50%; background:transparent; box-shadow:none; }
+#tab-v9Results .v9-recovery-legend-swatch.is-evidence { height:9px; background:#fbbf24; box-shadow:none; opacity:.72; }
 #tab-v9Results .v9-recovery-legend-swatch.is-target { width: 10px; height: 10px; border: 2px solid #34d399; border-radius: 50%; background: transparent; }
 #tab-v9Results .v9-recovery-legend-swatch.is-caught { width: 10px; height: 10px; border-radius: 50%; background: #60a5fa; }
-#tab-v9Results .v9-recovery-legend-swatch.is-weight { background: linear-gradient(90deg, rgba(251,191,36,.35), #fbbf24); }
-#tab-v9Results .v9-recovery-sampled { display: inline-block; margin: 8px 9px 0; padding: 4px 8px; border: 1px solid rgba(251,191,36,.42); border-radius: 999px; background: rgba(251,191,36,.1); color: #fbbf24; font-size: 9px; font-weight: 700; line-height: 1.35; }
-#tab-v9Results .v9-recovery-v3 .v9-recovery-canvas-wrap { height: 470px; min-height: 360px; background: radial-gradient(circle at 18% 0%, rgba(52,211,153,.16), transparent 42%), radial-gradient(circle at 84% 100%, rgba(96,165,250,.12), transparent 48%), linear-gradient(145deg, #071018, #0b1019 58%, #111827); }
+#tab-v9Results .v9-recovery-sampled { display: inline-block; margin: 8px 9px 0; padding: 4px 8px; border: 1px solid rgba(251,191,36,.42); border-radius: 999px; background: rgba(251,191,36,.1); color: #fbbf24; font-size: 10px; font-weight: 700; line-height: 1.35; }
+#tab-v9Results .v9-recovery-v3 .v9-recovery-canvas-wrap { height: clamp(460px, 58vh, 640px); min-height: 460px; background-color: #080d14; background-image: linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px), linear-gradient(155deg, #0b131d, #070c13 60%, #0d1420); background-size: 34px 34px, 34px 34px, auto; box-shadow: inset 0 1px 0 rgba(255,255,255,.06), inset 0 0 90px rgba(0,0,0,.5); }
 #tab-v9Results .v9-recovery-v3 .v9-recovery-canvas { background: transparent; }
-#tab-v9Results .v9-recovery-v3 .v9-recovery-legend { padding: 4px 9px; border-top: 1px solid rgba(255,255,255,.08); border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(5,10,16,.62); }
+#tab-v9Results .v9-recovery-v3 .v9-recovery-legend { padding: 6px 11px; margin: 0; border-top: 1px solid rgba(255,255,255,.08); border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(5,10,16,.62); }
 #tab-v9Results .v9-recovery-v3 .v9-recovery-legend-item { border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.05); color: #d5d9e2; }
+#tab-v9Results .v9-recovery-explanation-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+#tab-v9Results .v9-recovery-explanation-row > * { min-width: 0; }
+#tab-v9Results .v9-recovery-disclosures { display: grid; gap: 8px; margin-top: 14px; }
+#tab-v9Results .v9-recovery-disclosure { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+#tab-v9Results .v9-recovery-disclosure-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; padding: 11px 14px; color: var(--text1); font-size: 11px; font-weight: 600; cursor: pointer; list-style: none; transition: background .16s ease, color .16s ease, transform .08s ease; }
+#tab-v9Results .v9-recovery-disclosure-summary::-webkit-details-marker { display: none; }
+#tab-v9Results .v9-recovery-disclosure-summary::marker { content: ''; }
+#tab-v9Results .v9-recovery-disclosure-summary::after { content: '+'; color: var(--accent); font-family: var(--font-mono); font-size: 16px; line-height: 1; }
+#tab-v9Results .v9-recovery-disclosure[open] .v9-recovery-disclosure-summary::after { content: '-'; }
+#tab-v9Results .v9-recovery-disclosure-summary:hover { background: var(--accent-soft); color: var(--accent-hover); }
+#tab-v9Results .v9-recovery-disclosure-summary:active { transform: translateY(1px); }
+#tab-v9Results .v9-recovery-disclosure-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#tab-v9Results .v9-recovery-disclosure-body { padding: 0 14px 14px; }
 #tab-v9Results .v9-recovery-v3 button:focus:not(:focus-visible), #tab-v9Results .v9-recovery-v3 input:focus:not(:focus-visible), #tab-v9Results .v9-recovery-v3 select:focus:not(:focus-visible), #tab-v9Results .v9-recovery-v3 canvas:focus:not(:focus-visible) { outline: none; }
 #tab-v9Results .v9-recovery-table-wrap { margin-top: 12px; overflow-x: auto; }
 #tab-v9Results .v9-recovery-table-wrap h6 { margin: 0 0 4px; color: var(--text1); font-size: 11px; }
@@ -117,40 +158,100 @@ V9_RECOVERY_EXPLAINER_CSS = r"""
 #tab-v9Results .v9-recovery-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 14px; color: var(--text2); font-size: 10px; }
 #tab-v9Results .v9-recovery-pager .v9-recovery-button { min-height: 44px; }
 @media(max-width:900px){
-  #tab-v9Results .v9-recovery-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  #tab-v9Results .v9-recovery-workspace { grid-template-columns: 1fr; }
-  #tab-v9Results .v9-recovery-rail { border-right: 0; border-bottom: 1px solid var(--border); }
-  #tab-v9Results .v9-recovery-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  #tab-v9Results .v9-recovery-case-list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 260px; }
-  #tab-v9Results .v9-recovery-v2-grid, #tab-v9Results .v9-recovery-v2-panels { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-header { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-scope { max-width: none; text-align: left; }
+  #tab-v9Results .v9-recovery-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #tab-v9Results .v9-recovery-v3-grid { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-v3-list { display: none; }
+  #tab-v9Results .v9-recovery-v3-picker { display: block; margin-bottom: 12px; }
+  #tab-v9Results .v9-recovery-v3 .v9-recovery-canvas-wrap { height: clamp(360px, 48vh, 470px); min-height: 360px; }
+  #tab-v9Results .v9-recovery-evidence-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media(max-width:700px){
-  #tab-v9Results .v9-recovery { margin: 24px 0; padding: 20px 0; }
+  #tab-v9Results .v9-recovery { margin: 24px 0; padding: 20px 0 24px; }
+  #tab-v9Results .v9-recovery-header { padding: 18px; }
   #tab-v9Results .v9-recovery-header, #tab-v9Results .v9-recovery-case-header { display: block; }
   #tab-v9Results .v9-recovery-scope { max-width: none; margin-top: 12px; }
-  #tab-v9Results .v9-recovery-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #tab-v9Results .v9-recovery-filter-grid, #tab-v9Results .v9-recovery-case-list, #tab-v9Results .v9-recovery-evidence-grid, #tab-v9Results .v9-attribution-grid { grid-template-columns: 1fr; }
-  #tab-v9Results .v9-recovery-detail { padding: 12px; }
-  #tab-v9Results .v9-recovery-ranks { margin-top: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  #tab-v9Results .v9-recovery-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  #tab-v9Results .v9-recovery-toolgroup { flex: 0 0 auto; }
+  #tab-v9Results .v9-recovery-summary { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-evidence-grid, #tab-v9Results .v9-attribution-grid { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-ranks { margin-top: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #tab-v9Results .v9-recovery-rank { min-height: 68px; padding: 11px 12px; }
+  #tab-v9Results .v9-recovery-explanation-row { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-toolbar { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-control-items { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+  #tab-v9Results .v9-recovery-control-items > * { width:100%; min-width:0; }
+  #tab-v9Results .v9-recovery-control-items .v9-recovery-button { min-height:44px; }
+  #tab-v9Results .v9-recovery-toolbar > .v9-recovery-search, #tab-v9Results .v9-recovery-toolbar .v9-recovery-select { width:100%; min-width:0; }
   #tab-v9Results .v9-recovery-button, #tab-v9Results .v9-recovery-toolbar .v9-recovery-select, #tab-v9Results .v9-recovery-search { min-height: 44px; }
   #tab-v9Results .v9-recovery-canvas-wrap { height: 340px; }
   #tab-v9Results .v9-recovery-v3 .v9-recovery-canvas-wrap { height: 340px; min-height: 300px; }
 }
+@media(max-width:700px){
+  #tab-v9Results .v9-recovery-v3 .v9-recovery-canvas-wrap { height: 340px; min-height: 300px; }
+}
+@media(max-width:359px){
+  #tab-v9Results .v9-recovery-ranks { grid-template-columns: 1fr; }
+  #tab-v9Results .v9-recovery-rank-delta { grid-column: 1; }
+}
 @media(prefers-reduced-motion: reduce){
+  #tab-v9Results .v9-recovery-skeleton { animation: none; }
   #tab-v9Results .v9-recovery-v3 *, #tab-v9Results .v9-recovery-v3 *::before, #tab-v9Results .v9-recovery-v3 *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
 """
 
 
 V9_RECOVERY_EXPLAINER_JS = r"""
+function recoveryFormatNumber(value){
+  if(value===null||value===undefined||value==='')return 'not available';
+  const number=Number(value);
+  if(!Number.isFinite(number))return 'not available';
+  if(Object.is(number,-0))return '0';
+  return new Intl.NumberFormat('en-US',{
+    maximumFractionDigits:3,
+    useGrouping:true
+  }).format(number);
+}
+
+function recoveryFormatSigned(value){
+  if(value===null||value===undefined||value==='')return 'not available';
+  const number=Number(value);
+  if(!Number.isFinite(number))return 'not available';
+  return (number>0?'+':'')+recoveryFormatNumber(number);
+}
+
+function recoveryFormatDateOnly(value){
+  if(!recoveryNonBlankString(value))return 'not available';
+  const trimmed=value.trim();
+  return /^\d{4}-\d{2}-\d{2}(?:$|T)/.test(trimmed)
+    ?trimmed.slice(0,10):'not available';
+}
+
+function recoveryCompactIdentifier(value){
+  const identifier=recoveryNonBlankString(value)?value.trim():'';
+  return identifier.length<=18
+    ?identifier:identifier.slice(0,9)+'…'+identifier.slice(-6);
+}
+
+function recoveryRankDelta(record){
+  return recoverySafeInteger(record&&record.baseline_rank,false)
+    &&recoverySafeInteger(record&&record.seed0_hybrid_rank,false)
+    ?record.baseline_rank-record.seed0_hybrid_rank:null;
+}
+
 function recoveryIsRecord(value){
   return value!==null&&typeof value==='object'&&!Array.isArray(value);
 }
 
 function recoveryNonBlankString(value){
   return typeof value==='string'&&value.trim().length>0;
+}
+
+function recoveryNormalizeCaseId(value){
+  return recoveryNonBlankString(value)?value.trim():null;
+}
+
+function recoveryCanonicalCaseId(value){
+  return recoveryNonBlankString(value)&&value===value.trim()?value:null;
 }
 
 function recoveryUniqueStrings(value){
@@ -166,6 +267,9 @@ function recoveryAllowedSourceRef(value){
   return recoveryNonBlankString(value)&&[
     /^scope\.observability_seed$/,
     /^ranks\.(?:baseline|seed0_gnn|seed0_hybrid)$/,
+    /^attributions\.(?:top_local_nodes\.0\.(?:node_id|explainer_median)|top_edges\.0\.(?:edge_id|explainer_median)|top_features\.0\.(?:feature_name|node_id|explainer_median))$/,
+    /^component_pooling\.top_members_by_absolute_contribution\.0\.(?:person_id|pooled_logit_contribution)$/,
+    /^rank_fusion\.(?:blend_weight|baseline_weighted_term|seed0_gnn_weighted_term|hybrid_score|daily_budget)$/,
     /^factors_by_id\.[^.]+\.(?:label|stability|counterfactual\.(?:original_hybrid_rank|ablated_hybrid_rank))$/,
     /^visible_paths\.(?:0|[1-9][0-9]*)\.(?:relation|u|v)$/,
     /^caveats\.[12]$/
@@ -183,106 +287,6 @@ function recoverySafeInteger(value,allowNegative){
 
 function recoveryUnavailable(reason){
   return {available:false,reason};
-}
-
-function recoveryValidCase(item){
-  if(!recoveryIsRecord(item)) return false;
-  const positiveRanks=['baseline_rank','seed0_gnn_rank','seed0_hybrid_rank'];
-  const finiteMetrics=['hybrid_rank_uplift','gnn_percentile_uplift'];
-  return ['case_id','person_id','event_id','scoring_day']
-      .every(key=>recoveryNonBlankString(item[key]))
-    &&positiveRanks.every(key=>recoverySafeInteger(item[key],false)&&item[key]>0)
-    &&finiteMetrics.every(key=>typeof item[key]==='number'&&Number.isFinite(item[key]))
-    &&recoveryUniqueStrings(item.relationship_categories)
-    &&['stable','unstable','not_explained'].includes(item.stable_factor_status);
-}
-
-function buildRecoveryEvidenceViewModel(artifact){
-  if(!recoveryIsRecord(artifact)||artifact.schema_version!=='1.0'){
-    return recoveryUnavailable('unsupported-or-missing-artifact');
-  }
-  const policy=artifact.policy;
-  const validScope=recoveryIsRecord(policy)
-    &&policy.observability_seed===0
-    &&policy.gnn_arm==='sage'
-    &&policy.inspections_per_day===25
-    &&Array.isArray(policy.surrounding_results_seeds)
-    &&policy.surrounding_results_seeds.length===3
-    &&policy.surrounding_results_seeds.every((seed,index)=>seed===index)
-    &&recoveryNonBlankString(policy.percentile_reference_id);
-  if(!validScope) return recoveryUnavailable('invalid-observability-scope');
-
-  if(!Array.isArray(artifact.hybrid_only_cases)
-      ||!Array.isArray(artifact.explanations)){
-    return recoveryUnavailable('invalid-case-collections');
-  }
-  const cases=artifact.hybrid_only_cases;
-  const explanations=artifact.explanations;
-  if(!cases.every(recoveryValidCase)
-      ||!explanations.every(item=>recoveryIsRecord(item)
-        &&recoveryNonBlankString(item.case_id)
-        &&recoveryNonBlankString(item.person_id))){
-    return recoveryUnavailable('invalid-case-records');
-  }
-  const caseIds=cases.map(item=>item.case_id);
-  const explanationIds=explanations.map(item=>item.case_id);
-  if(new Set(caseIds).size!==caseIds.length
-      ||new Set(explanationIds).size!==explanationIds.length){
-    return recoveryUnavailable('duplicate-case-id');
-  }
-  const caseById=new Map(cases.map(item=>[item.case_id,item]));
-  if(explanations.some(item=>!caseById.has(item.case_id)
-      ||caseById.get(item.case_id).person_id!==item.person_id)){
-    return recoveryUnavailable('invalid-case-records');
-  }
-
-  const summary=artifact.summary;
-  let summaryView;
-  if(!recoveryIsRecord(summary)||summary.overlap_ids_available!==true){
-    summaryView={unavailable:true,reason:'overlap-ids-unavailable'};
-  }else{
-    const required=[
-      'baseline_recovered','recovered_by_both','hybrid_only_recovered',
-      'baseline_only_recovered','hybrid_total','net_gain'
-    ];
-    const numericTypes=required.every(key=>recoverySafeInteger(
-      summary[key],key==='net_gain'
-    ));
-    const values=Object.fromEntries(required.map(key=>[key,summary[key]]));
-    const validAlgebra=numericTypes
-      &&values.baseline_recovered===values.recovered_by_both
-        +values.baseline_only_recovered
-      &&values.hybrid_total===values.recovered_by_both
-        +values.hybrid_only_recovered
-      &&values.net_gain===values.hybrid_total-values.baseline_recovered;
-    if(!validAlgebra){
-      summaryView={unavailable:true,reason:'invalid-set-algebra'};
-    }else{
-      const containment=values.baseline_only_recovered===0;
-      summaryView={
-        values,
-        containment,
-        tone:containment?'success':'warning'
-      };
-      if(!containment){
-        summaryView.warning='Baseline-only recoveries are present; containment is not claimed.';
-      }
-    }
-  }
-
-  return {
-    available:true,
-    scope:{
-      seed:policy.observability_seed,
-      arm:policy.gnn_arm,
-      inspectionsPerDay:policy.inspections_per_day,
-      surroundingResultsSeeds:policy.surrounding_results_seeds.slice()
-    },
-    summary:summaryView,
-    coverage:recoveryIsRecord(artifact.coverage)?{...artifact.coverage}:{},
-    cases:cases.slice(),
-    explanations:new Map(explanations.map(item=>[item.case_id,item]))
-  };
 }
 
 function validateRecoveryNarrative(narrative){
@@ -304,9 +308,12 @@ function validateRecoveryNarrative(narrative){
   if(!validClaims){
     return {visible:false,reason:'missing-claim-sources'};
   }
-  const validProvenance=narrative.prompt_version==='v1'
-    &&((narrative.source==='llm'&&narrative.model==='gemma4:12b')
-      ||(narrative.source==='deterministic_template'&&narrative.model===null));
+  const validProvenance=(narrative.source==='llm'
+      &&narrative.model==='gemma4:12b'
+      &&narrative.prompt_version==='v4')
+    ||(narrative.source==='deterministic_template'
+      &&narrative.model===null
+      &&narrative.prompt_version==='v1');
   if(!validProvenance){
     return {visible:false,reason:'invalid-narrative-metadata'};
   }
@@ -366,7 +373,7 @@ function recoveryAttributionRows(records,kind){
   rows.sort((left,right)=>useRanks
     ?left.rank-right.rank||recoveryCompareId(left.id,right.id)
     :right.weight-left.weight||recoveryCompareId(left.id,right.id));
-  return rows.slice(0,3).map((row,index)=>kind==='node'?{
+  return rows.slice(0,5).map((row,index)=>kind==='node'?{
     rank:index+1,
     nodeId:row.id,
     weight:row.weight
@@ -400,6 +407,7 @@ function recoveryAttributionBar(doc,weight,label){
   const bar=recoveryElement(doc,'div','v9-attribution-bar');
   bar.setAttribute('role','progressbar');
   bar.setAttribute('aria-label',label);
+  bar.setAttribute('title',label);
   bar.setAttribute('aria-valuemin','0');
   bar.setAttribute('aria-valuemax','1');
   bar.setAttribute('aria-valuenow',String(weight));
@@ -414,7 +422,7 @@ function renderHighestAttributionPanel(doc,explanation){
   panel.setAttribute('aria-label','Highest-attribution evidence');
   panel.appendChild(recoveryElement(doc,'h5','', 'Highest-attribution evidence'));
   panel.appendChild(recoveryElement(doc,'p','v9-attribution-caveat',
-    'Unsigned median attribution weights show salience across deterministic explainer restarts, not causal direction.'));
+    'Shows the top 5 nodes and top 5 connections with normalized unsigned median salience weights across deterministic explainer restarts, not causal direction.'));
   const view=buildHighestAttributionViewModel(explanation);
   if(!view.available){
     panel.appendChild(recoveryElement(doc,'div','v9-recovery-status',
@@ -433,22 +441,31 @@ function renderHighestAttributionPanel(doc,explanation){
     for(const row of rows){
       const item=recoveryElement(doc,'div','v9-attribution-row');
       const head=recoveryElement(doc,'div','v9-attribution-row-head');
-      const label=title==='Nodes'?row.nodeId:row.u+' ↔ '+row.v;
+      const fullLabel=title==='Nodes'?row.nodeId:
+        row.relation+' · '+row.u+' ↔ '+row.v+' · edge '+row.edgeId;
       const identifier=recoveryElement(doc,'div','v9-attribution-connection');
-      identifier.appendChild(recoveryElement(doc,'span','v9-attribution-rank','#'+row.rank));
-      identifier.appendChild(recoveryElement(doc,'span','v9-attribution-id',label));
-      if(title==='Connections'){
+      identifier.setAttribute('title',fullLabel);
+      identifier.appendChild(recoveryElement(doc,'span','v9-attribution-rank',
+        '#'+recoveryFormatNumber(row.rank)));
+      if(title==='Nodes'){
+        identifier.appendChild(recoveryElement(doc,'span','v9-attribution-id',row.nodeId));
+      }else{
         identifier.appendChild(recoveryElement(doc,'span','v9-attribution-relation',row.relation));
-        identifier.appendChild(recoveryElement(doc,'span','v9-attribution-id','edge '+row.edgeId));
+        const endpoints=recoveryElement(doc,'span','v9-attribution-id',
+          recoveryCompactIdentifier(row.u)+' ↔ '+recoveryCompactIdentifier(row.v));
+        endpoints.setAttribute('title',row.u+' ↔ '+row.v);
+        identifier.appendChild(endpoints);
       }
       head.appendChild(identifier);
-      head.appendChild(recoveryElement(doc,'span','v9-attribution-weight',row.weight.toFixed(3)));
+      head.appendChild(recoveryElement(doc,'span','v9-attribution-weight',
+        recoveryFormatNumber(row.weight)));
       item.appendChild(head);
       item.appendChild(recoveryAttributionBar(doc,row.weight,
         title==='Nodes'
-          ?'Nodes attribution weight for '+label
-          :'Connections attribution weight for '+label+' relation '+row.relation
-            +' edge '+row.edgeId));
+          ?'Nodes attribution weight for '+row.nodeId
+          :'Connections attribution weight for '+row.u+' ↔ '+row.v
+            +' relation '+row.relation+' edge '+row.edgeId));
+      item.setAttribute('title',fullLabel);
       section.appendChild(item);
     }
     grid.appendChild(section);
@@ -471,33 +488,6 @@ function validateRecoveryEvidenceBoundary(explanation,scoringDay){
     edgeRule:boundary.edge_rule,
     caughtRule:boundary.caught_rule
   };
-}
-
-function filterAndSortRecoveryCases(cases,options){
-  if(!Array.isArray(cases)) return [];
-  const settings=recoveryIsRecord(options)?options:{};
-  const stable=recoveryNonBlankString(settings.stableStatus)
-    ?settings.stableStatus:'all';
-  const relation=recoveryNonBlankString(settings.relationshipCategory)
-    ?settings.relationshipCategory:'all';
-  const allowedSorts=['hybrid_rank_uplift','gnn_percentile_uplift'];
-  const sortBy=allowedSorts.includes(settings.sortBy)
-    ?settings.sortBy:'hybrid_rank_uplift';
-  const explainedIds=Array.isArray(settings.explainedIds)
-    ?new Set(settings.explainedIds.filter(recoveryNonBlankString)):null;
-  const evidence=settings.evidence==='explained'&&explainedIds?'explained':'all';
-  return cases.filter(item=>recoveryValidCase(item)
-      &&(stable==='all'||item.stable_factor_status===stable)
-      &&(relation==='all'||item.relationship_categories.includes(relation))
-      &&(evidence==='all'||explainedIds.has(item.case_id)))
-    .slice()
-    .sort((left,right)=>
-      (explainedIds?Number(explainedIds.has(right.case_id))
-        -Number(explainedIds.has(left.case_id)):0)
-      ||right[sortBy]-left[sortBy]
-      ||right.hybrid_rank_uplift-left.hybrid_rank_uplift
-      ||recoveryCompareId(left.person_id,right.person_id)
-      ||recoveryCompareId(left.case_id,right.case_id));
 }
 
 function buildCommunityStageView(explanation,options){
@@ -675,6 +665,19 @@ function buildRecoveryGraphSlice(fullNodes,fullEdges,personId){
   };
 }
 
+function filterRecoveryStageSlice(slice,stageEdgeIds,personId){
+  const edges=slice.edges.filter(edge=>stageEdgeIds.has(edge.edge_id));
+  const nodeIds=new Set([personId]);
+  for(const edge of edges){
+    nodeIds.add(edge.u);nodeIds.add(edge.v);
+  }
+  return {
+    ...slice,
+    nodes:slice.nodes.filter(node=>nodeIds.has(node.id||node.node_id)),
+    edges
+  };
+}
+
 function buildCommunityDrawCommands(explanation,options){
   const stageView=buildCommunityStageView(explanation,options);
   if(!stageView.available) return stageView;
@@ -702,6 +705,12 @@ function buildCommunityDrawCommands(explanation,options){
   }
   const selectedStage=stagesById.get(stageView.stageId);
   const nodesById=new Map(community.nodes.map(node=>[node.node_id,node]));
+  const stageEdgeIds=new Set((stageView.stageId==='first_hop'
+    ||stageView.stageId==='second_hop'
+    ?community.edges.filter(edge=>
+      recoveryStageEmphasizes(selectedStage,edge,nodesById))
+    :community.edges)
+    .map(edge=>edge.edge_id));
   const overlayNodes=Array.isArray(explanation.overlayNodes)
     ?explanation.overlayNodes:[];
   const overlayEdges=Array.isArray(explanation.overlayEdges)
@@ -718,11 +727,16 @@ function buildCommunityDrawCommands(explanation,options){
       ?row.explainer_median:0;
   const nodes=community.nodes.map(node=>{
     const overlay=overlayNodesById.get(node.node_id);
+    const distance=Number(node.message_distance);
     return {
       node_id:node.node_id,
       id:node.node_id,
+      // Payload x/y is the fallback; the hop-ring pass below overwrites it
+      // whenever message_distance is available.
       x:node.x,
       y:node.y,
+      message_distance:node.message_distance,
+      hop:Number.isFinite(distance)?Math.trunc(distance):null,
       target:node.node_id===explanation.person_id,
       pooledMember:node.pooled_member===true,
       caughtBeforeSnapshot:node.caught_before_snapshot===true,
@@ -747,11 +761,31 @@ function buildCommunityDrawCommands(explanation,options){
       rank:overlay&&Number.isSafeInteger(overlay.rank)?overlay.rank
         :(Number.isSafeInteger(edge.rank)?edge.rank:null),
       emphasized:stageView.mode==='all'||attributed
-        ||recoveryStageEmphasizes(selectedStage,edge,nodesById)
+        ||stageEdgeIds.has(edge.edge_id)
     };
   });
   const slice=buildRecoveryGraphSlice(nodes,edges,explanation.person_id);
   if(!slice.available) return slice;
+  // Published x/y from the chunked sidecars is a sqrt(N) grid indexed by sorted
+  // node_id, so position encodes alphabetical rank and every edge is a line
+  // between two unrelated cells. Recompute the hop rings here so already
+  // published artifacts read structurally without being regenerated.
+  //
+  // Lay out over the bounded projection that can actually be drawn
+  // (slice.nodes), not over the complete row set (slice.tableNodes) and not
+  // over community.nodes: rings sized for a 35k-member community leave the few
+  // hundred drawn nodes in slivers of one hopelessly overcrowded ring. Rows are
+  // shared by reference with the canvas slice below, so assigning here updates
+  // every view, and positions stay put when the stage selection changes.
+  const layout=recoveryHopRingLayout(slice.nodes,slice.edges);
+  if(layout){
+    for(const node of slice.nodes){
+      const point=layout.get(node.id);
+      if(point){node.x=point.x;node.y=point.y;}
+    }
+  }
+  const canvasSlice=filterRecoveryStageSlice(
+    slice,stageEdgeIds,explanation.person_id);
 
   const provenanceNodes=[];
   const provenanceEdges=[];
@@ -833,19 +867,88 @@ function buildCommunityDrawCommands(explanation,options){
       recoveryCompareId(a.id,b.id)));
     provenanceEdges.sort((a,b)=>recoveryCompareId(a.id,b.id));
   }
+  // Neighbour index for click-to-focus. Seeded with the node itself so a
+  // focused node is always inside its own neighbourhood. Built over the
+  // complete projection, not the stage-filtered canvas slice, so focusing does
+  // not depend on which stage happens to be selected.
+  const adjacency=new Map();
+  for(const node of slice.nodes) adjacency.set(node.id,new Set([node.id]));
+  for(const edge of slice.edges){
+    if(adjacency.has(edge.u)&&adjacency.has(edge.v)){
+      adjacency.get(edge.u).add(edge.v);
+      adjacency.get(edge.v).add(edge.u);
+    }
+  }
+  const hopCounts=new Map();
+  for(const node of slice.tableNodes){
+    const key=node.hop===null?'?':String(node.hop);
+    hopCounts.set(key,(hopCounts.get(key)||0)+1);
+  }
+  const policy=recoveryIsRecord(community.projection_policy)
+    ?community.projection_policy:{};
+  const maxNodes=recoverySafeInteger(policy.max_nodes,false)?policy.max_nodes:null;
+  const maxEdges=recoverySafeInteger(policy.max_edges,false)?policy.max_edges:null;
   return {
     available:true,
     mode:stageView.mode,
     stageId:stageView.stageId,
-    nodes:slice.nodes,
-    edges:slice.edges,
+    nodes:canvasSlice.nodes,
+    edges:canvasSlice.edges,
     tableNodes:slice.tableNodes,
     tableEdges:slice.tableEdges,
     sampled:slice.sampled,
     fullNodeCount:slice.fullNodeCount,
     fullEdgeCount:slice.fullEdgeCount,
     provenanceNodes,
-    provenanceEdges
+    provenanceEdges,
+    adjacency,
+    layoutSource:layout?'hop_rings':'payload',
+    stats:{
+      nodeCount:slice.tableNodes.length,
+      edgeCount:slice.tableEdges.length,
+      emphasizedEdgeCount:slice.tableEdges.filter(edge=>edge.emphasized).length,
+      hopCounts,
+      maxNodes,
+      maxEdges,
+      // The projection bound is a cap, so hitting it exactly is the signal that
+      // the community was larger than what is drawn.
+      clipped:(maxNodes!==null&&slice.tableNodes.length>=maxNodes)
+        ||(maxEdges!==null&&slice.tableEdges.length>=maxEdges)
+    }
+  };
+}
+
+function selectRecoveryEvidenceEdges(edges,limit){
+  const rows=(Array.isArray(edges)?edges:[]).filter(edge=>
+    edge&&edge.attributed===true&&recoveryFiniteUnit(edge.importance));
+  const ranked=rows.length>0&&rows.every(edge=>
+    Number.isSafeInteger(edge.rank)&&edge.rank>0)
+    &&new Set(rows.map(edge=>edge.rank)).size===rows.length;
+  rows.sort((left,right)=>ranked
+    ?left.rank-right.rank||recoveryCompareId(left.id,right.id)
+    :right.importance-left.importance||recoveryCompareId(left.id,right.id));
+  return rows.slice(0,Math.max(0,Number.isSafeInteger(limit)?limit:3));
+}
+
+function recoveryEvidenceBounds(commands){
+  const nodes=Array.isArray(commands&&commands.nodes)?commands.nodes:[];
+  const byId=new Map(nodes.map(node=>[node.id,node]));
+  const ids=new Set(nodes.filter(node=>node&&node.target===true).map(node=>node.id));
+  for(const edge of Array.isArray(commands&&commands.edges)?commands.edges:[]){
+    if(edge&&edge.attributed===true){ids.add(edge.u);ids.add(edge.v);}
+  }
+  let points=Array.from(ids).map(id=>byId.get(id)).filter(Boolean);
+  if(points.length<2)points=nodes.slice();
+  if(!points.length)return {minX:0,minY:0,maxX:1,maxY:1};
+  const minX=Math.min(...points.map(point=>point.x));
+  const maxX=Math.max(...points.map(point=>point.x));
+  const minY=Math.min(...points.map(point=>point.y));
+  const maxY=Math.max(...points.map(point=>point.y));
+  return {
+    minX:Math.max(0,Number((minX-0.08).toFixed(6))),
+    minY:Math.max(0,Number((minY-0.08).toFixed(6))),
+    maxX:Math.min(1,Number((maxX+0.08).toFixed(6))),
+    maxY:Math.min(1,Number((maxY+0.08).toFixed(6)))
   };
 }
 
@@ -856,8 +959,14 @@ function graphPoint(point,viewport){
   const scale=Number(viewport.scale);
   const offsetX=Number(viewport.offsetX);
   const offsetY=Number(viewport.offsetY);
-  const baseX=padding+point.x*Math.max(0,width-padding*2);
-  const baseY=padding+point.y*Math.max(0,height-padding*2);
+  const bounds=recoveryIsRecord(viewport.bounds)
+    ?viewport.bounds:{minX:0,minY:0,maxX:1,maxY:1};
+  const spanX=Math.max(0.12,bounds.maxX-bounds.minX);
+  const spanY=Math.max(0.12,bounds.maxY-bounds.minY);
+  const normalizedX=(point.x-bounds.minX)/spanX;
+  const normalizedY=(point.y-bounds.minY)/spanY;
+  const baseX=padding+normalizedX*Math.max(0,width-padding*2);
+  const baseY=padding+normalizedY*Math.max(0,height-padding*2);
   return {
     x:(baseX-width/2)*scale+width/2+offsetX,
     y:(baseY-height/2)*scale+height/2+offsetY
@@ -876,43 +985,6 @@ function recoveryElement(doc,tag,className,text){
   return element;
 }
 
-function recoverySetData(element,action,value){
-  element.dataset.recoveryAction=action;
-  if(value!==undefined) element.dataset.recoveryValue=String(value);
-  return element;
-}
-
-function recoveryRestoreFocus(root,datasetKey,action,value){
-  const selector=datasetKey==='recoveryAction'
-    ?'[data-recovery-action]':'[data-recovery-change]';
-  const expectedValue=value===undefined?null:String(value);
-  for(const control of root.querySelectorAll(selector)){
-    const matchesAction=control.dataset
-      &&control.dataset[datasetKey]===action;
-    const matchesValue=expectedValue===null
-      ||control.dataset.recoveryValue===expectedValue;
-    if(matchesAction&&matchesValue){
-      control.focus();
-      return true;
-    }
-  }
-  return false;
-}
-
-function recoverySelect(doc,labelText,action,options,value){
-  const label=recoveryElement(doc,'label','v9-recovery-field',labelText);
-  const select=recoveryElement(doc,'select','v9-recovery-select');
-  select.dataset.recoveryChange=action;
-  for(const option of options){
-    const node=recoveryElement(doc,'option','',option.label);
-    node.value=option.value;
-    select.appendChild(node);
-  }
-  select.value=value;
-  label.appendChild(select);
-  return label;
-}
-
 function recoveryAppendSources(doc,parent,refs){
   const row=recoveryElement(doc,'div','v9-recovery-source-row');
   for(const ref of refs){
@@ -921,41 +993,428 @@ function recoveryAppendSources(doc,parent,refs){
   parent.appendChild(row);
 }
 
-function recoveryRelationColor(relation){
-  const key=String(relation||'').toUpperCase();
-  if(key==='COTRAVEL') return '#34d399';
-  if(key==='RESIDENCE') return '#60a5fa';
-  if(key==='SHARED_PLATE') return '#a78bfa';
-  return '#8b8b96';
+function recoveryRelationPresentation(relation){
+  const key=String(relation===null||relation===undefined?'':relation)
+    .trim().toUpperCase();
+  if(!key) return {key:'RELATION',label:'Relation',color:'#8b8b96',dash:[12,6]};
+  const known={
+    COTRAVEL:{label:'Co-travel',color:'#34d399',dash:[]},
+    RESIDENCE:{label:'Residence',color:'#60a5fa',dash:[9,5]},
+    SHARED_PLATE:{label:'Shared plate',color:'#a78bfa',dash:[2,5]},
+    OTHER_LINK:{label:'Other link',color:'#8b8b96',dash:[12,6]}
+  };
+  if(known[key]) return {key,label:known[key].label,color:known[key].color,
+    dash:known[key].dash.slice()};
+  const words=key.split('_').filter(Boolean).map(word=>word.toLowerCase());
+  const label=words.length
+    ?words[0].charAt(0).toUpperCase()+words[0].slice(1)
+      +(words.length>1?' '+words.slice(1).join(' '):'')
+    :'';
+  return {key,label,color:'#8b8b96',dash:[12,6]};
 }
 
-function recoveryDrawArrow(context,from,to,color){
-  const angle=Math.atan2(to.y-from.y,to.x-from.x);
-  const x=from.x+(to.x-from.x)*.62;
-  const y=from.y+(to.y-from.y)*.62;
+function recoveryRelationLegendDescription(relation){
+  const key=String(relation===null||relation===undefined?'':relation)
+    .trim().toUpperCase();
+  const cue={
+    COTRAVEL:'green solid line',
+    RESIDENCE:'blue dashed line',
+    SHARED_PLATE:'violet dotted line'
+  }[key]||'gray long-dash line';
+  return cue+': observable relationship type';
+}
+
+function recoveryRelationColor(relation){
+  return recoveryRelationPresentation(relation).color;
+}
+
+function recoveryGraphRelationshipOptions(edges){
+  const present=new Set();
+  for(const edge of Array.isArray(edges)?edges:[]){
+    const key=recoveryRelationPresentation(edge&&edge.relation).key;
+    if(key) present.add(key);
+  }
+  const known=['COTRAVEL','RESIDENCE','SHARED_PLATE'];
+  const ordered=known.filter(key=>present.has(key)).concat(
+    Array.from(present).filter(key=>!known.includes(key)).sort());
+  return [{key:'all',label:'All types'},...ordered.map(key=>({
+    key,label:recoveryRelationPresentation(key).label
+  }))];
+}
+
+function filterRecoveryGraphCommands(commands,relationship){
+  const input=commands&&typeof commands==='object'?commands:{};
+  const tableNodes=Array.isArray(input.tableNodes)?input.tableNodes.slice():[];
+  const tableEdges=Array.isArray(input.tableEdges)?input.tableEdges.slice():[];
+  const sourceNodes=Array.isArray(input.nodes)?input.nodes.slice():[];
+  const sourceEdges=Array.isArray(input.edges)?input.edges.slice():[];
+  const relationshipOptions=recoveryGraphRelationshipOptions(sourceEdges);
+  const available=new Set(relationshipOptions.map(option=>option.key));
+  const requestedRaw=String(relationship===null||relationship===undefined?'':relationship)
+    .trim();
+  const requested=requestedRaw==='all'?'all':requestedRaw.toUpperCase();
+  const selected=available.has(requested)?requested:'all';
+  const cloneArrays={...input,
+    nodes:sourceNodes,edges:sourceEdges,tableNodes,tableEdges,
+    provenanceNodes:Array.isArray(input.provenanceNodes)
+      ?input.provenanceNodes.slice():[],
+    provenanceEdges:Array.isArray(input.provenanceEdges)
+      ?input.provenanceEdges.slice():[],
+    relationship:selected,relationshipOptions};
+  if(selected==='all') return cloneArrays;
+  const filteredEdges=sourceEdges.filter(edge=>
+    recoveryRelationPresentation(edge&&edge.relation).key===selected);
+  const targetIds=new Set(sourceNodes.filter(node=>node&&node.target===true)
+    .map(node=>node.id||node.node_id).filter(Boolean));
+  const nodeIds=new Set(targetIds);
+  for(const edge of filteredEdges){
+    if(edge&&edge.u) nodeIds.add(edge.u);
+    if(edge&&edge.v) nodeIds.add(edge.v);
+  }
+  return {...cloneArrays,
+    nodes:sourceNodes.filter(node=>node&&nodeIds.has(node.id||node.node_id)),
+    edges:filteredEdges,
+    provenanceNodes:[],provenanceEdges:[]};
+}
+
+const RECOVERY_LAYOUT_RADIUS=0.46;
+// A ring wider than this many nodes is split across concentric sub-rings.
+const RECOVERY_LAYOUT_BAND_CAPACITY=120;
+const RECOVERY_LAYOUT_MAX_BANDS=4;
+
+function recoveryHopRingLayout(nodes,edges){
+  // Mirror of display_hop_ring_layout in gnn/sage_explainer.py: target at the
+  // centre, one ring per message_distance, each ring ordered so a node lands in
+  // the arc belonging to its nearest-hop neighbour. Recomputed here rather than
+  // trusted from the payload so artifacts published before the producer emitted
+  // hop-ring coordinates still read structurally. Returns null when the inputs
+  // cannot support a layout, and the caller then falls back to payload x/y.
+  if(!Array.isArray(nodes)||nodes.length===0) return null;
+  let target=null;
+  for(const node of nodes){
+    if(node.target===true){target=node.node_id;break;}
+  }
+  const ringOf=new Map();
+  for(const node of nodes){
+    const distance=Number(node.message_distance);
+    if(!Number.isFinite(distance)) return null;
+    ringOf.set(
+      node.node_id,
+      node.node_id===target?0:Math.max(1,Math.trunc(distance))
+    );
+  }
+  const neighbours=new Map();
+  for(const node of nodes) neighbours.set(node.node_id,new Set());
+  for(const edge of Array.isArray(edges)?edges:[]){
+    if(!ringOf.has(edge.u)||!ringOf.has(edge.v)||edge.u===edge.v) continue;
+    neighbours.get(edge.u).add(edge.v);
+    neighbours.get(edge.v).add(edge.u);
+  }
+  const byRing=new Map();
+  for(const entry of ringOf){
+    if(!byRing.has(entry[1])) byRing.set(entry[1],[]);
+    byRing.get(entry[1]).push(entry[0]);
+  }
+  const maxRing=Math.max.apply(null,Array.from(byRing.keys()));
+  const positions=new Map();
+  const angles=new Map();
+  for(const nodeId of byRing.get(0)||[]){
+    positions.set(nodeId,{x:0.5,y:0.5});
+    angles.set(nodeId,0);
+  }
+  for(let ring=1;ring<=maxRing;ring+=1){
+    const ringNodes=(byRing.get(ring)||[]).slice().sort(recoveryCompareId);
+    if(!ringNodes.length) continue;
+    const groups=new Map();
+    const orphans=[];
+    for(const nodeId of ringNodes){
+      const parents=Array.from(neighbours.get(nodeId)||[])
+        .filter(other=>ringOf.get(other)===ring-1).sort(recoveryCompareId);
+      if(parents.length){
+        if(!groups.has(parents[0])) groups.set(parents[0],[]);
+        groups.get(parents[0]).push(nodeId);
+      }else{
+        orphans.push(nodeId);
+      }
+    }
+    const ordered=[];
+    const parentIds=Array.from(groups.keys()).sort((left,right)=>{
+      const leftAngle=angles.has(left)?angles.get(left):0;
+      const rightAngle=angles.has(right)?angles.get(right):0;
+      return leftAngle===rightAngle
+        ?recoveryCompareId(left,right):leftAngle-rightAngle;
+    });
+    for(const parent of parentIds){
+      ordered.push(...groups.get(parent).slice().sort(recoveryCompareId));
+    }
+    ordered.push(...orphans);
+    // A ring with hundreds of members collapses into a solid band of dots at a
+    // single radius, which is what the 512-node projection produces at hop 2.
+    // Spread a crowded ring over a few concentric sub-rings instead, and keep
+    // consecutive (same-parent) nodes on one angular slot so a parent's
+    // children read as a short radial spoke rather than an arc of noise.
+    const bands=Math.min(RECOVERY_LAYOUT_MAX_BANDS,
+      Math.max(1,Math.ceil(ordered.length/RECOVERY_LAYOUT_BAND_CAPACITY)));
+    const slots=Math.ceil(ordered.length/bands);
+    // Even spacing over the whole ring keeps groups from overlapping while the
+    // parent-angle sweep keeps them near their connector.
+    const step=2*Math.PI/slots;
+    // The half-ring of headroom is what the outermost band expands into, so
+    // every band still lands inside RECOVERY_LAYOUT_RADIUS.
+    const baseRadius=RECOVERY_LAYOUT_RADIUS*ring/(maxRing+0.5);
+    const bandStep=RECOVERY_LAYOUT_RADIUS*0.5/(maxRing+0.5)/bands;
+    for(let index=0;index<ordered.length;index+=1){
+      const angle=step*(Math.floor(index/bands)+0.5);
+      const radius=baseRadius+index%bands*bandStep;
+      angles.set(ordered[index],angle);
+      positions.set(ordered[index],{
+        x:0.5+radius*Math.cos(angle),
+        y:0.5+radius*Math.sin(angle)
+      });
+    }
+  }
+  return positions;
+}
+
+function recoveryStableHash(value){
+  const text=String(value===null||value===undefined?'':value);
+  let hash=2166136261;
+  for(let index=0;index<text.length;index+=1){
+    hash=(hash^text.charCodeAt(index))>>>0;
+    hash=Math.imul(hash,16777619)>>>0;
+  }
+  return hash>>>0;
+}
+
+// Published node coordinates frequently place three or more community members on
+// one line, so straight edges pass through unrelated markers. A deterministic
+// per-edge arc separates them without moving any published position.
+function recoveryEdgeCurveOffset(edge,from,to){
+  const fromX=Number(from&&from.x);const fromY=Number(from&&from.y);
+  const toX=Number(to&&to.x);const toY=Number(to&&to.y);
+  if(![fromX,fromY,toX,toY].every(Number.isFinite))return 0;
+  const length=Math.hypot(toX-fromX,toY-fromY);
+  if(!Number.isFinite(length)||length<1)return 0;
+  const key=recoveryNonBlankString(edge&&edge.id)?edge.id
+    :recoveryNonBlankString(edge&&edge.edge_id)?edge.edge_id:'';
+  const hash=recoveryStableHash(key);
+  const magnitude=Math.min(44,Math.max(10,length*0.12));
+  const lane=1+(hash%3);
+  const sign=((hash>>>3)%2)===0?1:-1;
+  return Math.round(sign*magnitude*(lane/3)*100)/100;
+}
+
+function recoveryEdgeCurve(from,to,offset){
+  const midX=(from.x+to.x)/2;const midY=(from.y+to.y)/2;
+  const length=Math.hypot(to.x-from.x,to.y-from.y);
+  if(!Number.isFinite(offset)||offset===0||!Number.isFinite(length)||length<1){
+    return {control:{x:midX,y:midY},apex:{x:midX,y:midY},curved:false};
+  }
+  const normalX=-(to.y-from.y)/length;const normalY=(to.x-from.x)/length;
+  return {
+    control:{x:midX+normalX*offset*2,y:midY+normalY*offset*2},
+    apex:{x:midX+normalX*offset,y:midY+normalY*offset},
+    curved:true
+  };
+}
+
+function recoveryCurvePoint(from,control,to,t){
+  const inverse=1-t;
+  return {
+    x:inverse*inverse*from.x+2*inverse*t*control.x+t*t*to.x,
+    y:inverse*inverse*from.y+2*inverse*t*control.y+t*t*to.y
+  };
+}
+
+// Evidence weight is judged against the strongest attributed edge that is
+// actually on screen. Without this the underlay saturates whenever a case
+// happens to attribute most of its edges at high absolute weight.
+function recoveryEvidenceScale(edges){
+  let maximum=0;
+  for(const edge of Array.isArray(edges)?edges:[]){
+    if(!edge||edge.attributed!==true)continue;
+    const value=typeof edge.importance==='number'&&Number.isFinite(edge.importance)
+      ?Math.max(0,Math.min(1,edge.importance)):0;
+    if(value>maximum)maximum=value;
+  }
+  return maximum>0?maximum:1;
+}
+
+function recoveryDrawArrow(context,tip,angle,color,alpha){
   context.beginPath();
-  context.moveTo(x,y);
-  context.lineTo(x-7*Math.cos(angle-Math.PI/6),y-7*Math.sin(angle-Math.PI/6));
-  context.lineTo(x-7*Math.cos(angle+Math.PI/6),y-7*Math.sin(angle+Math.PI/6));
+  context.moveTo(tip.x,tip.y);
+  context.lineTo(tip.x-8*Math.cos(angle-Math.PI/7),
+    tip.y-8*Math.sin(angle-Math.PI/7));
+  context.lineTo(tip.x-8*Math.cos(angle+Math.PI/7),
+    tip.y-8*Math.sin(angle+Math.PI/7));
   context.closePath();
   context.fillStyle=color;
+  context.globalAlpha=typeof alpha==='number'?alpha:1;
   context.fill();
+  context.globalAlpha=1;
 }
 
-function recoveryEdgeStyle(edge){
+function recoveryEdgeStyle(edge,scale){
   const importance=typeof edge.importance==='number'
     &&Number.isFinite(edge.importance)
     ?Math.max(0,Math.min(1,edge.importance)):0;
+  const reference=typeof scale==='number'&&Number.isFinite(scale)&&scale>0
+    ?Math.min(1,scale):1;
+  const relative=Math.max(0,Math.min(1,importance/reference));
   if(edge.attributed===true){
     return {
-      alpha:0.45+0.5*importance,
-      lineWidth:1.5+3*importance,
-      color:'#fbbf24'
+      alpha:Math.round((0.9+0.05*relative)*100)/100,
+      lineWidth:1.6+1.4*relative,
+      evidenceAlpha:Math.round((0.16+0.32*relative)*100)/100,
+      evidenceLineWidth:Math.round((2.5+5.5*relative)*100)/100
     };
   }
   return edge.emphasized
-    ?{alpha:0.45+0.5*importance,lineWidth:1.5+3*importance}
-    :{alpha:0.18+0.12*importance,lineWidth:0.85+0.65*importance};
+    ?{alpha:0.5,lineWidth:1.35,evidenceAlpha:0,evidenceLineWidth:0}
+    :{alpha:0.14,lineWidth:0.75,evidenceAlpha:0,evidenceLineWidth:0};
+}
+
+function recoveryTraceEdgePath(context,from,curve,to){
+  context.beginPath();
+  context.moveTo(from.x,from.y);
+  if(curve.curved)context.quadraticCurveTo(curve.control.x,curve.control.y,to.x,to.y);
+  else context.lineTo(to.x,to.y);
+}
+
+function recoveryStrokeGraphEdge(context,from,to,edge,scale){
+  const relation=recoveryRelationPresentation(edge.relation);
+  const style=recoveryEdgeStyle(edge,scale);
+  const curve=recoveryEdgeCurve(from,to,recoveryEdgeCurveOffset(edge,from,to));
+  context.lineCap='round';
+  if(style.evidenceLineWidth>0){
+    // The evidence channel reads as a halo around the relationship stroke. A
+    // flat band underneath a dashed stroke shows through the gaps and turns
+    // both channels into one muddy colour.
+    context.setLineDash([]);
+    recoveryTraceEdgePath(context,from,curve,to);
+    context.strokeStyle='#fbbf24';context.globalAlpha=style.evidenceAlpha;
+    context.lineWidth=style.evidenceLineWidth;
+    context.shadowColor='rgba(251,191,36,.85)';
+    context.shadowBlur=style.evidenceLineWidth*1.5;
+    context.stroke();
+    context.shadowBlur=0;context.shadowColor='transparent';
+  }
+  context.setLineDash(relation.dash);
+  recoveryTraceEdgePath(context,from,curve,to);
+  context.strokeStyle=relation.color;context.globalAlpha=style.alpha;
+  context.lineWidth=style.lineWidth;context.stroke();
+  context.setLineDash([]);context.globalAlpha=1;
+  return {...relation,curve,style};
+}
+
+function recoveryRectOverlaps(left,right){
+  return left.x<right.x+right.width&&left.x+left.width>right.x
+    &&left.y<right.y+right.height&&left.y+left.height>right.y;
+}
+
+function recoveryDrawEvidenceLabels(context,edges,positionById,nodeBoxes,
+    viewportWidth,viewportHeight){
+  const occupied=(Array.isArray(nodeBoxes)?nodeBoxes:[]).slice();
+  const margin=6;
+  const hasWidth=Number.isFinite(viewportWidth)&&viewportWidth>0;
+  const hasHeight=Number.isFinite(viewportHeight)&&viewportHeight>0;
+  context.font='700 9px JetBrains Mono, monospace';
+  for(const edge of selectRecoveryEvidenceEdges(edges,3)){
+    const from=positionById.get(edge.u);const to=positionById.get(edge.v);
+    if(!from||!to)continue;
+    const relation=recoveryRelationPresentation(edge.relation);
+    const rank=Number.isSafeInteger(edge.rank)?'#'+edge.rank:'Evidence';
+    let text=rank+' '+relation.label+' '+recoveryFormatNumber(edge.importance);
+    let width=Math.ceil(context.measureText(text).width)+14;
+    if(hasWidth&&width>viewportWidth-margin*2){
+      const maxTextWidth=Math.max(0,viewportWidth-margin*2-14);
+      let clipped=text;
+      while(clipped.length>1&&context.measureText(clipped+'…').width>maxTextWidth){
+        clipped=clipped.slice(0,-1);
+      }
+      text=clipped.length<text.length?clipped+'…':clipped;
+      width=Math.min(viewportWidth-margin*2,
+        Math.ceil(context.measureText(text).width)+14);
+    }
+    const curve=recoveryEdgeCurve(from,to,recoveryEdgeCurveOffset(edge,from,to));
+    const anchor=curve.apex;
+    const maxX=hasWidth?Math.max(margin,viewportWidth-margin-width):Infinity;
+    const maxY=hasHeight?Math.max(margin,viewportHeight-margin-18):Infinity;
+    // Try progressively further placements instead of dropping the label, so a
+    // published evidence rank never silently disappears from the canvas.
+    const candidates=[[8,-23],[-width-8,-23],[8,7],[-width-8,7],
+      [-width/2,-34],[-width/2,18],[16,-40],[-width-16,-40]];
+    let box=null;
+    for(const [deltaX,deltaY] of candidates){
+      const next={
+        x:Math.min(Math.max(margin,anchor.x+deltaX),maxX),
+        y:Math.min(Math.max(margin,anchor.y+deltaY),maxY),
+        width,height:18};
+      if(!occupied.some(other=>recoveryRectOverlaps(next,other))){box=next;break;}
+    }
+    if(!box)continue;
+    context.beginPath();context.moveTo(anchor.x,anchor.y);
+    context.lineTo(box.x+box.width/2,box.y+box.height/2);
+    context.strokeStyle=relation.color;context.globalAlpha=.55;
+    context.lineWidth=1;context.stroke();context.globalAlpha=1;
+    recoveryFillRoundedRect(context,box.x,box.y,box.width,box.height,5);
+    context.fillStyle='rgba(12,17,26,.94)';context.fill();
+    context.strokeStyle=relation.color;context.globalAlpha=.5;
+    context.lineWidth=1;context.stroke();context.globalAlpha=1;
+    context.fillStyle='#eef2f8';context.fillText(text,box.x+7,box.y+12);
+    occupied.push(box);
+  }
+  context.globalAlpha=1;context.setLineDash([]);
+}
+
+function recoveryFillRoundedRect(context,x,y,width,height,radius){
+  const limit=Math.max(0,Math.min(radius,width/2,height/2));
+  context.beginPath();
+  context.moveTo(x+limit,y);
+  context.lineTo(x+width-limit,y);
+  context.quadraticCurveTo(x+width,y,x+width,y+limit);
+  context.lineTo(x+width,y+height-limit);
+  context.quadraticCurveTo(x+width,y+height,x+width-limit,y+height);
+  context.lineTo(x+limit,y+height);
+  context.quadraticCurveTo(x,y+height,x,y+height-limit);
+  context.lineTo(x,y+limit);
+  context.quadraticCurveTo(x,y,x+limit,y);
+  context.closePath();
+}
+
+// The marker box and the label box must never overlap, or a collision-checked
+// label rejects itself against its own node.
+function recoveryNodeMarkerBox(point,radius){
+  return {x:point.x-radius-5,y:point.y-radius-5,
+    width:(radius+5)*2,height:(radius+5)*2};
+}
+
+function recoveryNodeLabelBox(point,radius,textWidth){
+  return {x:point.x+radius+7,y:point.y-8,
+    width:Math.ceil(textWidth)+4,height:14};
+}
+
+// Lower is more important. Identity labels the reader asked for (target, search
+// match, hover) are placed unconditionally; the rest yield to collisions.
+function recoveryNodeLabelPriority(node,hoverId,emphasizedNodes,density){
+  if(node.target===true)return 0;
+  if(node.matched===true)return 1;
+  if(node.id===hoverId)return 2;
+  if(density==='none')return null;
+  if(density==='all')return 300;
+  if(density!=='key'&&density!=='auto')return null;
+  if(node.attributed===true){
+    return Number.isSafeInteger(node.rank)&&node.rank>0
+      ?10+Math.min(node.rank,180):200;
+  }
+  return emphasizedNodes&&emphasizedNodes.has(node.id)?250:null;
+}
+
+function recoveryDrawHaloText(context,text,x,y){
+  context.strokeStyle='rgba(6,10,16,.92)';
+  context.lineWidth=3;context.lineJoin='round';
+  context.strokeText(text,x,y);
+  context.fillText(text,x,y);
 }
 
 function bindRecoveryCanvas(canvas,commands,state){
@@ -966,9 +1425,17 @@ function bindRecoveryCanvas(canvas,commands,state){
   let lastPoint=null;
   let lastPinchDistance=null;
   let observer=null;
+  let active=commands;
+  let hoverId=null;
   const positionById=new Map();
+  const radiusById=new Map();
+
+  function nodeRadius(node){
+    return node.target?8:(node.pooledMember?6:4.5);
+  }
 
   function draw(){
+    const commands=active;
     const rect=canvas.getBoundingClientRect();
     const width=Math.max(1,Math.round(rect.width||canvas.clientWidth||640));
     const height=Math.max(1,Math.round(rect.height||canvas.clientHeight||410));
@@ -977,36 +1444,48 @@ function bindRecoveryCanvas(canvas,commands,state){
     canvas.height=Math.round(height*dpr);
     context.setTransform(dpr,0,0,dpr,0,0);
     context.clearRect(0,0,width,height);
+    const bounds=state.mode==='flow'
+      ?recoveryEvidenceBounds(commands)
+      :{minX:0,minY:0,maxX:1,maxY:1};
     const viewport={
       width,
       height,
       padding:42,
       scale:state.scale,
       offsetX:state.offsetX,
-      offsetY:state.offsetY
+      offsetY:state.offsetY,
+      bounds
     };
-    positionById.clear();
+    positionById.clear();radiusById.clear();
     for(const node of commands.nodes.concat(commands.provenanceNodes)){
       positionById.set(node.id,graphPoint(node,viewport));
     }
+    for(const node of commands.nodes)radiusById.set(node.id,nodeRadius(node));
+    const hoverEdges=new Set();
+    if(hoverId!==null){
+      for(const edge of commands.edges){
+        if(edge.u===hoverId||edge.v===hoverId)hoverEdges.add(edge.id);
+      }
+    }
+    const evidenceScale=recoveryEvidenceScale(commands.edges);
     context.lineCap='round';
     for(const edge of commands.edges){
       const from=positionById.get(edge.u);
       const to=positionById.get(edge.v);
       if(!from||!to)continue;
-      const color=recoveryRelationColor(edge.relation);
-      const style=recoveryEdgeStyle(edge);
-      context.beginPath();
-      context.setLineDash([]);
-      context.moveTo(from.x,from.y);
-      context.lineTo(to.x,to.y);
-      context.strokeStyle=style.color||color;
-      context.globalAlpha=style.alpha;
-      context.lineWidth=style.lineWidth;
-      context.stroke();
-      if(commands.mode==='flow'&&edge.emphasized){
-        context.globalAlpha=.95;
-        recoveryDrawArrow(context,from,to,style.color||color);
+      const dimmed=hoverId!==null&&!hoverEdges.has(edge.id);
+      if(dimmed)context.globalAlpha=1;
+      const stroke=recoveryStrokeGraphEdge(context,from,to,
+        dimmed?{...edge,attributed:false,emphasized:false}:edge,evidenceScale);
+      // Direction only where the model actually relied on the link; a marker on
+      // every context edge reads as noise.
+      if(!dimmed&&edge.attributed===true){
+        const radius=(radiusById.get(edge.v)||5)+6;
+        const near=recoveryCurvePoint(from,stroke.curve.control,to,0.86);
+        const angle=Math.atan2(to.y-near.y,to.x-near.x);
+        recoveryDrawArrow(context,
+          {x:to.x-Math.cos(angle)*radius,y:to.y-Math.sin(angle)*radius},
+          angle,stroke.color,.9);
       }
     }
     for(const edge of commands.provenanceEdges){
@@ -1036,21 +1515,33 @@ function bindRecoveryCanvas(canvas,commands,state){
     }
     const emphasizedNodes=new Set(commands.edges.filter(edge=>edge.emphasized)
       .flatMap(edge=>[edge.u,edge.v]));
+    const nodeBoxes=[];
+    const labelQueue=[];
     for(const node of commands.nodes){
       const point=positionById.get(node.id);
       if(!point)continue;
-      const radius=node.target?8:(node.pooledMember?6:4.5);
+      const radius=nodeRadius(node);
+      const quiet=hoverId!==null&&node.id!==hoverId
+        &&!hoverEdges.has(node.id)&&!commands.edges.some(edge=>
+          (edge.u===hoverId&&edge.v===node.id)
+          ||(edge.v===hoverId&&edge.u===node.id));
+      context.globalAlpha=quiet?.3:1;
       if(node.attributed){
         context.beginPath();
         context.arc(point.x,point.y,radius+3+2*node.importance,0,Math.PI*2);
         context.strokeStyle='#fbbf24';
-        context.globalAlpha=.65+.3*node.importance;
+        context.globalAlpha=(quiet?.25:1)*(.65+.3*node.importance);
         context.lineWidth=2+node.importance;
         context.stroke();
       }
+      // A dark collar keeps the marker readable where edges pass beneath it.
+      context.globalAlpha=quiet?.3:1;
+      context.beginPath();
+      context.arc(point.x,point.y,radius+1.5,0,Math.PI*2);
+      context.fillStyle='#080d14';
+      context.fill();
       context.beginPath();
       context.arc(point.x,point.y,radius,0,Math.PI*2);
-      context.globalAlpha=1;
       context.fillStyle=node.target?'#34d399':(node.caughtBeforeSnapshot?'#60a5fa':'#8b8b96');
       context.fill();
       if(node.target){
@@ -1066,16 +1557,60 @@ function bindRecoveryCanvas(canvas,commands,state){
         context.lineWidth=2;
         context.stroke();
       }
-      const showLabel=state.labelDensity==='all'
-        ||(state.labelDensity==='auto'
-          &&(node.target||node.matched||emphasizedNodes.has(node.id)));
-      if(showLabel){
-        context.fillStyle='#e8e8ec';
-        context.font='10px JetBrains Mono, monospace';
-        context.fillText(recoveryVisibleText(node.id),point.x+radius+4,point.y+3);
+      if(node.id===hoverId){
+        context.beginPath();
+        context.arc(point.x,point.y,radius+7,0,Math.PI*2);
+        context.strokeStyle='#eef2f8';
+        context.globalAlpha=.85;
+        context.lineWidth=1.5;
+        context.stroke();
+      }
+      context.globalAlpha=1;
+      nodeBoxes.push(recoveryNodeMarkerBox(point,radius));
+      const priority=recoveryNodeLabelPriority(node,hoverId,emphasizedNodes,
+        state.labelDensity);
+      if(priority!==null)labelQueue.push({node,point,radius,quiet,priority});
+    }
+    // Sampled communities can put hundreds of markers in a narrow band, so
+    // labels are placed by priority and skipped when they would collide.
+    labelQueue.sort((left,right)=>left.priority-right.priority
+      ||recoveryCompareId(left.node.id,right.node.id));
+    context.font='10px JetBrains Mono, monospace';
+    for(const entry of labelQueue){
+      const text=recoveryVisibleText(entry.node.id);
+      const box=recoveryNodeLabelBox(entry.point,entry.radius,
+        context.measureText(text).width);
+      const textX=box.x;
+      if(entry.priority>2
+        &&nodeBoxes.some(other=>recoveryRectOverlaps(box,other)))continue;
+      context.fillStyle=entry.quiet?'#8b8b96':'#e8e8ec';
+      context.globalAlpha=entry.quiet?.5:1;
+      recoveryDrawHaloText(context,text,textX,entry.point.y+3);
+      context.globalAlpha=1;
+      nodeBoxes.push(box);
+    }
+    recoveryDrawEvidenceLabels(context,commands.edges,positionById,nodeBoxes,
+      width,height);
+    if(hoverId!==null){
+      const hovered=commands.nodes.find(node=>node.id===hoverId);
+      const point=positionById.get(hoverId);
+      if(hovered&&point){
+        recoveryDrawNodeTooltip(context,hovered,point,width,height);
       }
     }
     context.globalAlpha=1;
+  }
+
+  function hitTest(event){
+    const rect=canvas.getBoundingClientRect();
+    const x=event.clientX-rect.left;const y=event.clientY-rect.top;
+    let bestId=null;let bestDistance=Infinity;
+    for(const [id,point] of positionById){
+      const reach=(radiusById.get(id)||5)+7;
+      const distance=Math.hypot(point.x-x,point.y-y);
+      if(distance<=reach&&distance<bestDistance){bestId=id;bestDistance=distance;}
+    }
+    return bestId;
   }
 
   function pointerDistance(){
@@ -1090,7 +1625,11 @@ function bindRecoveryCanvas(canvas,commands,state){
     lastPinchDistance=pointerDistance();
   }
   function onPointerMove(event){
-    if(!pointers.has(event.pointerId)) return;
+    if(!pointers.has(event.pointerId)){
+      const next=hitTest(event);
+      if(next!==hoverId){hoverId=next;draw();}
+      return;
+    }
     pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
     const distance=pointerDistance();
     if(distance!==null&&lastPinchDistance!==null&&lastPinchDistance>0){
@@ -1108,6 +1647,10 @@ function bindRecoveryCanvas(canvas,commands,state){
     lastPoint=null;
     lastPinchDistance=pointerDistance();
   }
+  function onPointerLeave(){
+    if(hoverId===null)return;
+    hoverId=null;draw();
+  }
   function onWheel(event){
     event.preventDefault();
     state.scale=Math.max(.5,Math.min(4,state.scale*(event.deltaY<0?1.12:.89)));
@@ -1117,6 +1660,7 @@ function bindRecoveryCanvas(canvas,commands,state){
   canvas.addEventListener('pointermove',onPointerMove);
   canvas.addEventListener('pointerup',onPointerUp);
   canvas.addEventListener('pointercancel',onPointerUp);
+  canvas.addEventListener('pointerleave',onPointerLeave);
   canvas.addEventListener('wheel',onWheel,{passive:false});
   const ResizeObserver=view&&view.ResizeObserver;
   if(ResizeObserver){
@@ -1126,15 +1670,60 @@ function bindRecoveryCanvas(canvas,commands,state){
     view.addEventListener('resize',draw);
   }
   draw();
-  return function(){
+  const dispose=function(){
     canvas.removeEventListener('pointerdown',onPointerDown);
     canvas.removeEventListener('pointermove',onPointerMove);
     canvas.removeEventListener('pointerup',onPointerUp);
     canvas.removeEventListener('pointercancel',onPointerUp);
+    canvas.removeEventListener('pointerleave',onPointerLeave);
     canvas.removeEventListener('wheel',onWheel);
     if(observer) observer.disconnect();
     if(!observer&&view) view.removeEventListener('resize',draw);
   };
+  // Exposed so control changes that only alter drawing can repaint the existing
+  // canvas instead of tearing down and rebuilding the explanation DOM.
+  dispose.draw=draw;
+  dispose.setCommands=function(next){
+    if(!next||typeof next!=='object')return;
+    active=next;hoverId=null;draw();
+  };
+  return dispose;
+}
+
+function recoveryDrawNodeTooltip(context,node,point,viewportWidth,viewportHeight){
+  const lines=[recoveryVisibleText(node.id)];
+  const role=node.target?'Selected target'
+    :node.caughtBeforeSnapshot?'Caught before snapshot'
+    :node.pooledMember?'Pooled member':'Community context';
+  lines.push(role);
+  if(node.attributed===true){
+    lines.push('Evidence weight '+recoveryFormatNumber(node.importance)
+      +(Number.isSafeInteger(node.rank)?' / rank #'+node.rank:''));
+  }else{
+    lines.push('No model attribution');
+  }
+  context.font='10px JetBrains Mono, monospace';
+  const width=Math.ceil(Math.max(...lines.map(line=>
+    context.measureText(line).width)))+16;
+  const height=lines.length*14+10;
+  const margin=6;
+  let x=point.x+14;
+  if(Number.isFinite(viewportWidth)&&x+width>viewportWidth-margin){
+    x=point.x-width-14;
+  }
+  x=Math.max(margin,x);
+  let y=point.y-height-12;
+  if(y<margin)y=point.y+14;
+  if(Number.isFinite(viewportHeight)&&y+height>viewportHeight-margin){
+    y=Math.max(margin,viewportHeight-margin-height);
+  }
+  recoveryFillRoundedRect(context,x,y,width,height,6);
+  context.fillStyle='rgba(8,13,20,.96)';context.globalAlpha=1;context.fill();
+  context.strokeStyle='rgba(255,255,255,.22)';context.lineWidth=1;context.stroke();
+  lines.forEach((line,index)=>{
+    context.fillStyle=index===0?'#eef2f8':'#a9b1c0';
+    context.fillText(line,x+8,y+17+index*14);
+  });
 }
 
 function recoveryValidFactor(factor){
@@ -1149,99 +1738,57 @@ function recoveryValidFactor(factor){
     &&counterfactual.ablated_hybrid_rank>0;
 }
 
-function recoverySigned(value){
-  return (value>0?'+':'')+String(value);
+function recoveryFactorStabilityLabel(stability){
+  return stability==='stable'?'consistently selected by explainer'
+    :stability==='unstable'?'varied across restarts'
+    :'mixed signed effects across restarts';
 }
 
-function buildRecoveryManifestViewModel(artifact){
-  if(!recoveryIsRecord(artifact)||artifact.schema_version!=='2.0'){
-    return recoveryUnavailable('unsupported-or-missing-manifest');
-  }
-  const policy=artifact.policy;
-  const coverage=artifact.coverage;
-  const cohorts=artifact.cohorts;
-  const bundleId=artifact.bundle_id;
-  const sidecarBase=artifact.sidecar_base;
-  if(!recoveryIsRecord(policy)||policy.observability_seed!==0
-      ||policy.inspections_per_day!==5||policy.gnn_arm!=='sage'
-      ||JSON.stringify(policy.surrounding_results_seeds)!=='[0,1,2]'
-      ||!recoveryIsRecord(coverage)
-      ||coverage.complete!==true||!recoveryIsRecord(cohorts)
-      ||!Array.isArray(cohorts.hybrid_only)||!Array.isArray(cohorts.baseline_only)
-      ||!recoveryIsRecord(artifact.case_index)
-      ||!recoveryIsRecord(artifact.community_index)
-      ||typeof bundleId!=='string'||!/^[0-9a-f]{24}$/.test(bundleId)
-      ||sidecarBase!=='recovery/bundles/'+bundleId+'/'){
-    return recoveryUnavailable('invalid-manifest-contract');
-  }
-  const counts=['hybrid_only_count','baseline_only_count','explained_count',
-    'llm_validated_count','failed_count'];
-  if(!counts.every(key=>recoverySafeInteger(coverage[key],false))
-      ||coverage.hybrid_only_count!==cohorts.hybrid_only.length
-      ||coverage.baseline_only_count!==cohorts.baseline_only.length
-      ||coverage.explained_count!==coverage.hybrid_only_count
-      ||coverage.llm_validated_count!==coverage.hybrid_only_count
-      ||coverage.failed_count!==0){
-    return recoveryUnavailable('incomplete-coverage');
-  }
-  const cases=[...cohorts.hybrid_only,...cohorts.baseline_only];
-  const hybridIds=cohorts.hybrid_only.map(item=>item&&item.case_id);
-  const baselineIds=cohorts.baseline_only.map(item=>item&&item.case_id);
-  const allIds=[...hybridIds,...baselineIds];
-  if(!cases.every(item=>recoveryIsRecord(item)
-      &&recoveryNonBlankString(item.case_id)
-      &&recoveryNonBlankString(item.person_id)
-      &&recoveryNonBlankString(item.community_key)
-      &&recoveryIsRecord(artifact.case_index[item.case_id]))
-      ||new Set(allIds).size!==allIds.length
-      ||Object.keys(artifact.case_index).length!==allIds.length
-      ||!Object.keys(artifact.case_index).every(caseId=>allIds.includes(caseId))){
-    return recoveryUnavailable('invalid-case-index');
-  }
-  for(const [cohortName,items] of Object.entries({
-    hybrid_only:cohorts.hybrid_only,baseline_only:cohorts.baseline_only})){
-    for(const item of items){
-      const record=artifact.case_index[item.case_id];
-      if(record.cohort!==cohortName||record.community_key!==item.community_key
-          ||!recoveryIsRecord(artifact.community_index[item.community_key])){
-        return recoveryUnavailable('case-index-identity-mismatch');
-      }
-    }
-  }
-  const defaultCohort=cohorts.hybrid_only.length?'hybrid_only':'baseline_only';
-  const summary=recoveryIsRecord(artifact.summary)?{...artifact.summary}:{};
-  const overlapFields=['baseline_recovered','recovered_by_both',
-    'hybrid_only_recovered','baseline_only_recovered','hybrid_total','net_gain'];
-  if(!overlapFields.every(key=>recoverySafeInteger(summary[key],true))
-      ||overlapFields.slice(0,-1).some(key=>summary[key]<0)
-      ||summary.hybrid_only_recovered!==cohorts.hybrid_only.length
-      ||summary.baseline_only_recovered!==cohorts.baseline_only.length
-      ||summary.baseline_recovered!==summary.recovered_by_both+summary.baseline_only_recovered
-      ||summary.hybrid_total!==summary.recovered_by_both+summary.hybrid_only_recovered
-      ||summary.net_gain!==summary.hybrid_total-summary.baseline_recovered){
-    return recoveryUnavailable('invalid-overlap-algebra');
-  }
-  const seedLevelRecovery=recoveryIsRecord(
-    summary.seed_level_unique_person_recovery
-  )?summary.seed_level_unique_person_recovery:null;
-  return {
-    available:true,
-    policy:{...policy},
-    summary,
-    seedLevelRecovery,
-    coverage:{...coverage},
-    coverageComplete:true,
-    cohorts:{
-      hybrid_only:cohorts.hybrid_only.slice(),
-      baseline_only:cohorts.baseline_only.slice()
-    },
-    caseIndex:artifact.case_index,
-    communityIndex:artifact.community_index,
-    catalogIndex:recoveryIsRecord(artifact.catalog_index)?artifact.catalog_index:{},
-    sidecarBase,
-    defaultCohort,
-    defaultCaseId:(cohorts[defaultCohort][0]||{}).case_id||null
-  };
+function recoveryFactorEffectLabel(effect){
+  return effect>0?'measured rank effect'
+    :effect<0?'countervailing effect'
+    :'no measured rank effect';
+}
+
+function recoveryPairFactorParts(factorId){
+  if(!recoveryNonBlankString(factorId))return null;
+  const match=/^pair:(pair:[^:]+|[^:]+):rel:([0-9]+)$/.exec(factorId.trim());
+  return match?{groupId:match[1].startsWith('pair:')
+    ?match[1]:'pair:'+match[1],relationId:Number(match[2])}:null;
+}
+
+function buildRecoveryFactorViewModel(explanation){
+  if(!recoveryIsRecord(explanation)||!Array.isArray(explanation.factors))return [];
+  const edges=recoveryIsRecord(explanation.community)
+    &&Array.isArray(explanation.community.edges)?explanation.community.edges:[];
+  return explanation.factors.filter(recoveryValidFactor).map(factor=>{
+    const pair=recoveryPairFactorParts(factor.factor_id);
+    const publishedEdgeId=pair
+      ?pair.groupId+':rel:'+pair.relationId:null;
+    const edge=pair?edges.find(candidate=>recoveryIsRecord(candidate)
+      &&(candidate.canonical_pair_group_id===pair.groupId
+        ||candidate.pair_group_id===pair.groupId
+        ||candidate.edge_id===publishedEdgeId)
+      &&Number(candidate.rel)===pair.relationId):null;
+    const relation=edge&&recoveryNonBlankString(edge.edge_type)
+      ?edge.edge_type.trim():null;
+    const label=relation&&recoveryNonBlankString(edge.u)
+      &&recoveryNonBlankString(edge.v)
+      ?relation+' · '+edge.u.trim()+' ↔ '+edge.v.trim()
+      :pair?'Pair relation (endpoints unavailable)':factor.label.trim();
+    const effect=factor.counterfactual.ablated_hybrid_rank
+      -factor.counterfactual.original_hybrid_rank;
+    return {
+      factorId:factor.factor_id,
+      technicalId:factor.factor_id,
+      label,
+      effect,
+      effectLabel:recoveryFactorEffectLabel(effect),
+      stability:factor.stability,
+      stabilityLabel:recoveryFactorStabilityLabel(factor.stability),
+      ...(edge?{relation, u:edge.u.trim(), v:edge.v.trim(), edgeId:edge.edge_id.trim()}: {})
+    };
+  });
 }
 
 function recoverySidecarUrl(view,path){
@@ -1320,13 +1867,18 @@ function buildRecoverySchema3ViewModel(artifact){
     return recoveryUnavailable('invalid-schema3-cohorts');
   }
   const allCases=[];const caseIds=new Set();
+  const normalizedCohorts={hybrid_only:[],baseline_only:[],recovered_by_both:[]};
   for(const cohort of cohortNames){
     for(const item of cohorts[cohort]){
+      const normalizedCaseId=recoveryCanonicalCaseId(item&&item.case_id);
       if(!recoverySchema3SummaryRecord(item,cohort)
-          ||caseIds.has(item.case_id)){
+          ||!normalizedCaseId||caseIds.has(normalizedCaseId)){
         return recoveryUnavailable('invalid-schema3-case-records');
       }
-      caseIds.add(item.case_id);allCases.push(item);
+      const normalizedItem={...item,case_id:normalizedCaseId};
+      caseIds.add(normalizedCaseId);
+      allCases.push(normalizedItem);
+      normalizedCohorts[cohort].push(normalizedItem);
     }
   }
   const summary=artifact.summary;
@@ -1335,8 +1887,8 @@ function buildRecoverySchema3ViewModel(artifact){
   if(!recoveryIsRecord(summary)
       ||!summaryFields.every(key=>recoverySafeInteger(summary[key],true))
       ||summaryFields.slice(0,-1).some(key=>summary[key]<0)
-      ||summary.hybrid_only_recovered!==cohorts.hybrid_only.length
-      ||summary.baseline_only_recovered!==cohorts.baseline_only.length
+      ||summary.hybrid_only_recovered!==normalizedCohorts.hybrid_only.length
+      ||summary.baseline_only_recovered!==normalizedCohorts.baseline_only.length
       ||summary.baseline_recovered!==summary.recovered_by_both
         +summary.baseline_only_recovered
       ||summary.hybrid_total!==summary.recovered_by_both
@@ -1345,11 +1897,19 @@ function buildRecoverySchema3ViewModel(artifact){
     return recoveryUnavailable('invalid-schema3-overlap-algebra');
   }
   const selection=artifact.selection;
-  const selected=selection&&selection.selected_ids;
-  if(!recoveryIsRecord(selection)||!recoveryIsRecord(selected)
-      ||!cohortNames.every(name=>Array.isArray(selected[name]))
-      ||selected.recovered_by_both.length!==0){
+  const rawSelected=selection&&selection.selected_ids;
+  if(!recoveryIsRecord(selection)||!recoveryIsRecord(rawSelected)
+      ||!cohortNames.every(name=>Array.isArray(rawSelected[name]))
+      ||rawSelected.recovered_by_both.length!==0){
     return recoveryUnavailable('invalid-schema3-selection');
+  }
+  const selected={};
+  for(const cohort of cohortNames){
+    const values=rawSelected[cohort].map(recoveryCanonicalCaseId);
+    if(values.some(value=>!value)||new Set(values).size!==values.length){
+      return recoveryUnavailable('invalid-schema3-selection');
+    }
+    selected[cohort]=values;
   }
   const selectedSets={};
   const cohortByCaseId=new Map(allCases.map(item=>[item.case_id,item.cohort]));
@@ -1365,19 +1925,37 @@ function buildRecoverySchema3ViewModel(artifact){
   const detailIndex=artifact.detail_index;
   const communityIndex=artifact.community_index;
   const communitySidecarIndex=artifact.community_sidecar_index;
-  const fallbackValues=selection.hybrid_structural_fallback_ids||[];
+  const rawFallbackValues=selection.hybrid_structural_fallback_ids||[];
+  if(!Array.isArray(rawFallbackValues)){
+    return recoveryUnavailable('invalid-schema3-selection');
+  }
+  const fallbackValues=rawFallbackValues.map(recoveryCanonicalCaseId);
   if(!Array.isArray(fallbackValues)
       ||new Set(fallbackValues).size!==fallbackValues.length
       ||fallbackValues.some(caseId=>!caseIds.has(caseId)
         ||cohortByCaseId.get(caseId)!=='hybrid_only')){
     return recoveryUnavailable('invalid-schema3-selection');
   }
+  const normalizeIndex=index=>{
+    const normalized={};
+    for(const [caseId,ref] of Object.entries(index)){
+      const normalizedId=recoveryCanonicalCaseId(caseId);
+      if(!normalizedId||normalized[normalizedId]!==undefined)return null;
+      normalized[normalizedId]=ref;
+    }
+    return normalized;
+  };
+  const normalizedDetailIndex=recoveryIsRecord(detailIndex)
+    ?normalizeIndex(detailIndex):null;
+  const normalizedCommunityIndex=recoveryIsRecord(communityIndex)
+    ?normalizeIndex(communityIndex):null;
   const fallbackSet=new Set(fallbackValues);
   if(!recoveryIsRecord(detailIndex)||!recoveryIsRecord(communityIndex)
       ||!recoveryIsRecord(communitySidecarIndex)
-      ||Object.entries(detailIndex).some(([caseId,ref])=>
+      ||!normalizedDetailIndex||!normalizedCommunityIndex
+      ||Object.entries(normalizedDetailIndex).some(([caseId,ref])=>
         !selectedSets.hybrid_only.has(caseId)||!recoverySchema3Reference(ref))
-      ||Object.entries(communityIndex).some(([caseId,ref])=>
+      ||Object.entries(normalizedCommunityIndex).some(([caseId,ref])=>
         !(selectedSets.baseline_only.has(caseId)||fallbackSet.has(caseId))
           ||!recoverySchema3Reference(ref))
       ||Object.entries(communitySidecarIndex).some(([key,ref])=>
@@ -1393,18 +1971,18 @@ function buildRecoverySchema3ViewModel(artifact){
       ||!Array.isArray(coverage.shortfall_reasons)
       ||coverage.hybrid_selected!==selected.hybrid_only.length
       ||coverage.baseline_selected!==selected.baseline_only.length
-      ||coverage.hybrid_explained!==Object.keys(detailIndex).length
-      ||coverage.baseline_community!==Object.keys(communityIndex).filter(caseId=>
+      ||coverage.hybrid_explained!==Object.keys(normalizedDetailIndex).length
+      ||coverage.baseline_community!==Object.keys(normalizedCommunityIndex).filter(caseId=>
         selectedSets.baseline_only.has(caseId)).length
       ||(coverage.hybrid_structural_fallback!==undefined
-        &&coverage.hybrid_structural_fallback!==Object.keys(communityIndex).filter(
+        &&coverage.hybrid_structural_fallback!==Object.keys(normalizedCommunityIndex).filter(
           caseId=>fallbackSet.has(caseId)).length)
       ||coverage.shortfall!==coverage.hybrid_shortfall+coverage.baseline_shortfall
       ||(coverage.shortfall>0&&!coverage.shortfall_reasons.length)){
     return recoveryUnavailable('invalid-schema3-coverage');
   }
-  const defaultCohort=cohorts.hybrid_only.length?'hybrid_only':
-    (cohorts.baseline_only.length?'baseline_only':'recovered_by_both');
+  const defaultCohort=normalizedCohorts.hybrid_only.length?'hybrid_only':
+    (normalizedCohorts.baseline_only.length?'baseline_only':'recovered_by_both');
   const caseIndex={};
   for(const item of allCases){
     caseIndex[item.case_id]={
@@ -1418,31 +1996,46 @@ function buildRecoverySchema3ViewModel(artifact){
       failureReason:recoveryNonBlankString(item.failure_reason)
         ?item.failure_reason:null,
       explanationUnavailableReason:recoveryNonBlankString(
-        item.explanation_unavailable_reason)?item.explanation_unavailable_reason:null
+      item.explanation_unavailable_reason)?item.explanation_unavailable_reason:null
     };
   }
+  const eligibleExplanationIds=normalizedCohorts.hybrid_only
+    .map(item=>caseIndex[item.case_id])
+    .filter(record=>recoverySchema3ExplanationEligible(
+      record,normalizedDetailIndex))
+    .map(record=>record.caseId);
   return {
     available:true,
     schemaVersion:'3.0',
     policy:{...policy},summary:{...summary},coverage:{...coverage},
     cohorts:{
-      hybrid_only:cohorts.hybrid_only.map(item=>caseIndex[item.case_id]),
-      baseline_only:cohorts.baseline_only.map(item=>caseIndex[item.case_id]),
-      recovered_by_both:cohorts.recovered_by_both.map(item=>caseIndex[item.case_id])
+      hybrid_only:normalizedCohorts.hybrid_only.map(item=>caseIndex[item.case_id]),
+      baseline_only:normalizedCohorts.baseline_only.map(item=>caseIndex[item.case_id]),
+      recovered_by_both:normalizedCohorts.recovered_by_both.map(item=>caseIndex[item.case_id])
     },
     caseIndex,
-    selection:{...selection,selected_ids:{...selected}},
-    detailIndex:{...detailIndex},communityIndex:{...communityIndex},
+    selection:{...selection,selected_ids:{...selected},
+      hybrid_structural_fallback_ids:fallbackValues.slice()},
+    detailIndex:{...normalizedDetailIndex},communityIndex:{...normalizedCommunityIndex},
     communitySidecarIndex:{...communitySidecarIndex},
     catalogIndex:recoveryIsRecord(artifact.catalog_index)?artifact.catalog_index:{},
     sidecarBase,defaultCohort,
-    defaultCaseId:Object.keys(detailIndex)[0]
-      ||(cohorts[defaultCohort][0]||{}).case_id||null
+    eligibleExplanationIds,
+    defaultCaseId:eligibleExplanationIds[0]||null
   };
 }
 
 const RECOVERY_SCHEMA3_FILTERS=['all','hybrid_only','baseline_only',
   'recovered_by_both','gnn_explanation','community_control','all_detail'];
+
+function recoverySchema3ExplanationEligible(record,detailIndex){
+  const caseId=recoveryNormalizeCaseId(record&&record.caseId);
+  return recoveryIsRecord(record)
+    &&record.detailKind==='gnn_explanation'
+    &&record.detailStatus==='available'
+    &&caseId!==null&&recoveryIsRecord(detailIndex)
+    &&Object.prototype.hasOwnProperty.call(detailIndex,caseId);
+}
 
 function filterRecoverySchema3Cases(view,filter){
   if(!recoveryIsRecord(view)||view.available!==true)return [];
@@ -1459,6 +2052,10 @@ function filterRecoverySchema3Cases(view,filter){
     return rows.filter(record=>record.detailKind!==null);
   }
   if(selected==='all')return rows;
+  if(selected==='gnn_explanation'){
+    return rows.filter(record=>recoverySchema3ExplanationEligible(
+      record,view.detailIndex));
+  }
   return rows.filter(record=>record.detailKind===selected);
 }
 
@@ -1521,6 +2118,12 @@ function buildStructuralDrawCommands(control,options){
   }
   const nodesById=new Map(community.nodes.map(node=>[node.node_id,node]));
   const selectedStage=stagesById.get(settings.stageId);
+  const stageEdgeIds=new Set((settings.stageId==='first_hop'
+    ||settings.stageId==='second_hop'
+    ?community.edges.filter(edge=>
+      recoveryStageEmphasizes(selectedStage,edge,nodesById))
+    :community.edges)
+    .map(edge=>edge.edge_id));
   const query=(typeof settings.query==='string'?settings.query:'')
     .trim().toLowerCase();
   const nodes=community.nodes.slice().sort((a,b)=>
@@ -1549,15 +2152,18 @@ function buildStructuralDrawCommands(control,options){
       attributed:false,
       rank:null,
       emphasized:settings.mode==='all'
-        ||recoveryStageEmphasizes(selectedStage,edge,nodesById)
-    }));
+        ||stageEdgeIds.has(edge.edge_id)
+  }));
   const slice=buildRecoveryGraphSlice(nodes,edges,control.person_id);
+  if(!slice.available) return slice;
+  const canvasSlice=filterRecoveryStageSlice(
+    slice,stageEdgeIds,control.person_id);
   return {
     available:true,
     mode:settings.mode,
     stageId:settings.stageId,
-    nodes:slice.nodes,
-    edges:slice.edges,
+    nodes:canvasSlice.nodes,
+    edges:canvasSlice.edges,
     tableNodes:slice.tableNodes,
     tableEdges:slice.tableEdges,
     sampled:slice.sampled,
@@ -1634,14 +2240,21 @@ function mergeRecoverySchema3Overlay(community,overlayNodes,overlayEdges){
   }
 
   const overlayNodeById=new Map();
+  const overlayNodeIds=new Set();
   for(const node of overlayNodes){
-    if(!recoveryIsRecord(node)||!recoveryNonBlankString(node.node_id)
-        ||!recoveryFiniteUnit(node.explainer_median)
-        ||!recoverySafeInteger(node.rank,false)||node.rank<1){
+    if(!recoveryIsRecord(node)||!recoveryNonBlankString(node.node_id)){
       return recoveryUnavailable('invalid-overlay-identity');
     }
     const nodeId=node.node_id.trim();
-    if(overlayNodeById.has(nodeId)){
+    if(overlayNodeIds.has(nodeId)){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    overlayNodeIds.add(nodeId);
+    const hasMedian=Object.prototype.hasOwnProperty.call(node,'explainer_median');
+    const hasRank=Object.prototype.hasOwnProperty.call(node,'rank');
+    if(!hasMedian&&!hasRank)continue;
+    if(!recoveryFiniteUnit(node.explainer_median)
+        ||!recoverySafeInteger(node.rank,false)||node.rank<1){
       return recoveryUnavailable('invalid-overlay-identity');
     }
     if(!baseNodesById.has(nodeId)){
@@ -1651,16 +2264,23 @@ function mergeRecoverySchema3Overlay(community,overlayNodes,overlayEdges){
   }
 
   const overlayEdgeById=new Map();
+  const overlayEdgeIds=new Set();
   for(const edge of overlayEdges){
     if(!recoveryIsRecord(edge)||!recoveryNonBlankString(edge.edge_id)
         ||!recoveryNonBlankString(edge.u)||!recoveryNonBlankString(edge.v)
-        ||!recoveryNonBlankString(edge.edge_type)
-        ||!recoveryFiniteUnit(edge.explainer_median)
-        ||!recoverySafeInteger(edge.rank,false)||edge.rank<1){
+        ||!recoveryNonBlankString(edge.edge_type)){
       return recoveryUnavailable('invalid-overlay-identity');
     }
     const edgeId=edge.edge_id.trim();
-    if(overlayEdgeById.has(edgeId)){
+    if(overlayEdgeIds.has(edgeId)){
+      return recoveryUnavailable('invalid-overlay-identity');
+    }
+    overlayEdgeIds.add(edgeId);
+    const hasMedian=Object.prototype.hasOwnProperty.call(edge,'explainer_median');
+    const hasRank=Object.prototype.hasOwnProperty.call(edge,'rank');
+    if(!hasMedian&&!hasRank)continue;
+    if(!recoveryFiniteUnit(edge.explainer_median)
+        ||!recoverySafeInteger(edge.rank,false)||edge.rank<1){
       return recoveryUnavailable('invalid-overlay-identity');
     }
     const baseEdge=baseEdgesById.get(edgeId);
@@ -1818,28 +2438,6 @@ function recoveryServerHelp(error){
     +String(error&&error.message||error);
 }
 
-function recoveryPage(rows,page,size){
-  const values=Array.isArray(rows)?rows:[];
-  const pageSize=Math.max(1,Number(size)||25);
-  const totalPages=Math.max(1,Math.ceil(values.length/pageSize));
-  const selected=Math.max(0,Math.min(totalPages-1,Number(page)||0));
-  return {rows:values.slice(selected*pageSize,(selected+1)*pageSize),page:selected,totalPages};
-}
-
-function recoveryClusterNodes(nodes,query){
-  const needle=String(query||'').trim().toLowerCase();
-  const groups=new Map();
-  for(const node of Array.isArray(nodes)?nodes:[]){
-    const nodeId=String(node&&node.node_id||'');
-    if(needle&&!nodeId.toLowerCase().includes(needle)) continue;
-    const cluster=String(node.cluster_id||node.kind||'community');
-    if(!groups.has(cluster)) groups.set(cluster,[]);
-    groups.get(cluster).push(nodeId);
-  }
-  return Array.from(groups.entries()).sort((a,b)=>recoveryCompareId(a[0],b[0]))
-    .map(([cluster,nodeIds])=>({cluster,node_ids:nodeIds.sort(recoveryCompareId)}));
-}
-
 function recoveryValidateChunkOwner(owner){
   if(!recoveryIsRecord(owner)||owner.complete!==true
       ||owner.nodes!==undefined||owner.edges!==undefined)return false;
@@ -1888,13 +2486,6 @@ function recoveryValidatedChunkRows(payload,ref,rowField){
       ||payload.offset!==ref.offset||payload.count!==ref.count
       ||payload.count!==payload[rowField].length)return null;
   return payload[rowField];
-}
-
-function recoveryV2Panel(doc,title,value){
-  const panel=recoveryElement(doc,'section','v9-recovery-v2-panel');
-  panel.appendChild(recoveryElement(doc,'h5','',title));
-  panel.appendChild(recoveryElement(doc,'pre','',JSON.stringify(value||null,null,2)));
-  return panel;
 }
 
 async function recoveryResolveCatalogRows(view,rows,kind){
@@ -1973,411 +2564,110 @@ async function recoveryApplyDayView(view,owner,normalized,index,resolvedRows){
     row=>({...row,...(stateById.get(row[dayConfig[2]])||{})}));
 }
 
-function mountRecoveryExplorerV2(root,artifact,tools){
-  const doc=root.ownerDocument;
-  const view=buildRecoveryManifestViewModel(artifact);
-  const fmt=recoveryIsRecord(tools)&&typeof tools.fmt==='function'
-    ?tools.fmt:value=>Number(value||0).toLocaleString();
-  const state={cohort:view.available?view.defaultCohort:'hybrid_only',
-    caseId:view.available?view.defaultCaseId:null,caseData:null,community:null,
-    nodePages:{},edgePages:{},provenancePages:{},membershipPages:{},
-    overlayNodePages:{},overlayEdgePages:{},overlayProvenancePages:{},
-    overlayMembershipPages:{},
-    loadedNodeCount:0,loadedEdgeCount:0,loadedProvenanceCount:0,
-    loadedMembershipCount:0,loadedOverlayNodeCount:0,loadedOverlayEdgeCount:0,
-    loadedOverlayProvenanceCount:0,loadedOverlayMembershipCount:0,
-    loading:false,error:null,nodeQuery:'',relation:'all',nodePage:0,edgePage:0,
-    provenancePage:0,membershipPage:0,overlayNodePage:0,overlayEdgePage:0,
-    overlayProvenancePage:0,overlayMembershipPage:0};
-  let recoveryRequestToken=0;
-  let disposed=false;
-  const rows=()=>view.available?view.cohorts[state.cohort]:[];
-
-  function renderV2Detail(detail){
-    if(state.error){
-      detail.appendChild(recoveryElement(doc,'div','v9-recovery-empty',recoveryServerHelp(state.error)));
-      return;
-    }
-    if(state.loading&&!state.caseData){
-      detail.appendChild(recoveryElement(doc,'div','v9-recovery-status','Loading selected case...'));
-      return;
-    }
-    if(!state.caseData) return;
-    const data=state.caseData;
-    detail.appendChild(recoveryV2Panel(doc,'Selected anchor-event ranks',{
-      baseline_rank:data.case.baseline_rank,seed0_gnn_rank:data.case.seed0_gnn_rank,
-      seed0_hybrid_rank:data.case.seed0_hybrid_rank}));
-    detail.appendChild(recoveryElement(doc,'p','v9-recovery-intro',
-      'B / G / H values are anchor-event ranks among daily candidate events; cohort recovery remains unique-person.'));
-    const panels=recoveryElement(doc,'div','v9-recovery-v2-panels');
-    if(state.cohort==='hybrid_only'){
-      const explanation=data.explanation||{};
-      detail.appendChild(renderHighestAttributionPanel(doc,explanation));
-      const narrative=explanation.llm_narrative||{};
-      const attributions=explanation.attributions||{};
-      const ledger=explanation.decision_ledger||{};
-      const componentPooling=ledger.component_pooling||{};
-      panels.appendChild(recoveryV2Panel(doc,'Validated local Gemma narrative',
-        narrative.validated===true&&narrative.source==='llm'?narrative:{status:'unavailable'}));
-      panels.appendChild(recoveryV2Panel(doc,'attributions.top_edges',attributions.top_edges));
-      panels.appendChild(recoveryV2Panel(doc,'attributions.top_local_nodes',attributions.top_local_nodes));
-      panels.appendChild(recoveryV2Panel(doc,'attributions.top_features',attributions.top_features));
-      panels.appendChild(recoveryV2Panel(doc,
-        'decision_ledger.component_pooling.top_members_by_absolute_contribution',
-        componentPooling.top_members_by_absolute_contribution));
-      panels.appendChild(recoveryV2Panel(doc,'decision_ledger.rank_fusion',ledger.rank_fusion));
-      panels.appendChild(recoveryV2Panel(doc,'Local GNNExplainer overlay',{
-        edge_importance:attributions.top_edges||[],
-        node_importance:attributions.top_local_nodes||[],
-        feature_importance:attributions.top_features||[]
-      }));
-    }else{
-      panels.appendChild(recoveryV2Panel(doc,
-        'No GNN explanation is generated for Baseline-only cases by policy.',
-        {policy:data.explanation_policy}));
-    }
-    detail.appendChild(panels);
-    if(!state.community) return;
-    const membershipTotal=(state.community.provenance_expansion_membership_chunks||[])
-      .reduce((sum,ref)=>sum+Number(ref.count||0),0);
-    const complete=state.loadedNodeCount===state.community.node_count
-      &&state.loadedEdgeCount===state.community.edge_count
-      &&state.loadedProvenanceCount===state.community.provenance_observation_count
-      &&state.loadedMembershipCount===membershipTotal;
-    const communityPanel=recoveryElement(doc,'section','v9-recovery-v2-panel');
-    communityPanel.appendChild(recoveryElement(doc,'h5','',complete
-      ?'Complete community':'Community loading'));
-    communityPanel.appendChild(recoveryElement(doc,'div','v9-recovery-progress',
-      'Nodes '+state.loadedNodeCount+' loaded / '+state.community.node_count
-        +' total; edges '+state.loadedEdgeCount+' loaded / '+state.community.edge_count
-        +' total; provenance '+state.loadedProvenanceCount+' loaded / '
-        +state.community.provenance_observation_count+' total; expansion memberships '
-        +state.loadedMembershipCount+' loaded / '+membershipTotal+' total.'));
-    const search=recoveryElement(doc,'input','v9-recovery-search');
-    search.type='search';search.placeholder='Node search (current node page)';
-    search.value=state.nodeQuery;search.dataset.v2Input='node';
-    search.setAttribute('aria-label','Node search, current node page only');
-    communityPanel.appendChild(search);
-    const relation=recoveryElement(doc,'select','v9-recovery-select');
-    relation.dataset.v2Change='relation';relation.setAttribute('aria-label','Relation filter');
-    const loadedEdges=Object.values(state.edgePages).flat();
-    for(const value of ['all',...new Set(loadedEdges.map(edge=>edge.edge_type||'RELATION'))]){
-      const option=recoveryElement(doc,'option','',value==='all'?'Relation filter: all':value);
-      option.value=value;relation.appendChild(option);
-    }
-    relation.value=state.relation;communityPanel.appendChild(relation);
-    const pageNodes=state.nodePages[state.nodePage]||[];
-    communityPanel.appendChild(recoveryV2Panel(doc,
-      'Clustered nodes (search scope: current node page)',
-      recoveryClusterNodes(pageNodes,state.nodeQuery)));
-    const pageEdges=state.edgePages[state.edgePage]||[];
-    const edges=state.relation==='all'?pageEdges:pageEdges.filter(
-      edge=>(edge.edge_type||'RELATION')===state.relation);
-    const provenanceRows=state.provenancePages[state.provenancePage]||[];
-    const membershipRows=state.membershipPages[state.membershipPage]||[];
-    const nodePageCount=Math.max(1,(state.community.node_chunks||[]).length);
-    const edgePageCount=Math.max(1,(state.community.edge_chunks||[]).length);
-    const provenancePageCount=Math.max(1,(state.community.provenance_chunks||[]).length);
-    const membershipPageCount=Math.max(1,
-      (state.community.provenance_expansion_membership_chunks||[]).length);
-    communityPanel.appendChild(recoveryV2Panel(doc,
-      'Node page (base community) '+(state.nodePage+1)+' / '+nodePageCount,pageNodes));
-    communityPanel.appendChild(recoveryV2Panel(doc,
-      'Edge page (base community) '+(state.edgePage+1)+' / '+edgePageCount,edges));
-    communityPanel.appendChild(recoveryV2Panel(doc,
-      'Provenance page (base community) '+(state.provenancePage+1)+' / '+provenancePageCount,
-      provenanceRows));
-    communityPanel.appendChild(recoveryV2Panel(doc,
-      'Expansion membership page (base community) '+(state.membershipPage+1)+' / '
-        +membershipPageCount,membershipRows));
-    const overlay=data.overlay_evidence;
-    let overlayPageCounts=null;
-    if(overlay){
-      overlayPageCounts={
-        node:Math.max(1,overlay.node_chunks.length),
-        edge:Math.max(1,overlay.edge_chunks.length),
-        provenance:Math.max(1,overlay.provenance_chunks.length),
-        membership:Math.max(1,overlay.provenance_expansion_membership_chunks.length)
-      };
-      communityPanel.appendChild(recoveryElement(doc,'div','v9-recovery-progress',
-        'Case attribution overlay: nodes '+state.loadedOverlayNodeCount+' loaded / '
-          +overlay.node_count+' total; edges '+state.loadedOverlayEdgeCount+' loaded / '
-          +overlay.edge_count+' total; provenance '+state.loadedOverlayProvenanceCount
-          +' loaded / '+overlay.provenance_observation_count+' total.'));
-      communityPanel.appendChild(recoveryV2Panel(doc,
-        'Case attribution overlay node page '+(state.overlayNodePage+1)+' / '
-          +overlayPageCounts.node,state.overlayNodePages[state.overlayNodePage]||[]));
-      communityPanel.appendChild(recoveryV2Panel(doc,
-        'Case attribution overlay edge page '+(state.overlayEdgePage+1)+' / '
-          +overlayPageCounts.edge,state.overlayEdgePages[state.overlayEdgePage]||[]));
-      communityPanel.appendChild(recoveryV2Panel(doc,
-        'Case attribution overlay provenance page '+(state.overlayProvenancePage+1)
-          +' / '+overlayPageCounts.provenance,
-        state.overlayProvenancePages[state.overlayProvenancePage]||[]));
-      communityPanel.appendChild(recoveryV2Panel(doc,
-        'Case attribution overlay expansion membership page '
-          +(state.overlayMembershipPage+1)+' / '+overlayPageCounts.membership,
-        state.overlayMembershipPages[state.overlayMembershipPage]||[]));
-    }
-    const pages=recoveryElement(doc,'div','v9-recovery-toolgroup');
-    const pageButtons=[
-      ['Previous node page','node-prev',state.nodePage===0],
-      ['Next node page','node-next',state.nodePage+1>=nodePageCount],
-      ['Previous edge page','edge-prev',state.edgePage===0],
-      ['Next edge page','edge-next',state.edgePage+1>=edgePageCount],
-      ['Previous provenance page','provenance-prev',state.provenancePage===0],
-      ['Next provenance page','provenance-next',state.provenancePage+1>=provenancePageCount],
-      ['Previous expansion membership page','membership-prev',state.membershipPage===0],
-      ['Next expansion membership page','membership-next',
-        state.membershipPage+1>=membershipPageCount]
-    ];
-    if(overlayPageCounts)pageButtons.push(
-      ['Previous overlay node page','overlay-node-prev',state.overlayNodePage===0],
-      ['Next overlay node page','overlay-node-next',
-        state.overlayNodePage+1>=overlayPageCounts.node],
-      ['Previous overlay edge page','overlay-edge-prev',state.overlayEdgePage===0],
-      ['Next overlay edge page','overlay-edge-next',
-        state.overlayEdgePage+1>=overlayPageCounts.edge],
-      ['Previous overlay provenance page','overlay-provenance-prev',
-        state.overlayProvenancePage===0],
-      ['Next overlay provenance page','overlay-provenance-next',
-        state.overlayProvenancePage+1>=overlayPageCounts.provenance],
-      ['Previous overlay membership page','overlay-membership-prev',
-        state.overlayMembershipPage===0],
-      ['Next overlay membership page','overlay-membership-next',
-        state.overlayMembershipPage+1>=overlayPageCounts.membership]
-    );
-    for(const [label,value,disabled] of pageButtons){
-      const button=recoveryElement(doc,'button','v9-recovery-button',label);
-      button.type='button';button.disabled=disabled;
-      button.setAttribute('data-v2-page',value);pages.appendChild(button);
-    }
-    communityPanel.appendChild(pages);
-    detail.appendChild(communityPanel);
-  }
-
-  function renderV2(){
-    const fragment=doc.createDocumentFragment();
-    const title=recoveryElement(doc,'h3','v9-recovery-title','Why Hybrid recovered different people');
-    title.id='v9-recovery-title';fragment.appendChild(title);
-    fragment.appendChild(recoveryElement(doc,'p','v9-recovery-intro',
-      'Seed-0, K=5 unique-person evidence. Main panels preserve distinct seed, ensemble, event and person semantics.'));
-    if(!view.available){fragment.appendChild(recoveryElement(doc,'div','v9-recovery-empty',view.reason));root.replaceChildren(fragment);return;}
-    fragment.appendChild(recoveryElement(doc,'div','v9-recovery-coverage',
-      fmt(view.coverage.hybrid_only_count)+' Hybrid-only / '
-        +fmt(view.coverage.baseline_only_count)+' Baseline-only / complete validated coverage'));
-    const seedLevel=view.seedLevelRecovery||{};
-    const semantics=recoveryElement(doc,'div','v9-recovery-v2-panels');
-    semantics.appendChild(recoveryV2Panel(doc,'Per-seed unique-person recovery',
-      seedLevel.seeds||null));
-    semantics.appendChild(recoveryV2Panel(doc,
-      'Per-seed mean / Population SD / common_validation_tuned_fusion_weight',{
-        mean:seedLevel.mean,population_sd:seedLevel.population_sd,
-        common_validation_tuned_fusion_weight:seedLevel.common_validation_tuned_fusion_weight
-      }));
-    semantics.appendChild(recoveryV2Panel(doc,
-      'score_averaged_ensemble / separate ensemble ranking',
-      seedLevel.score_averaged_ensemble||null));
-    semantics.appendChild(recoveryV2Panel(doc,'Ensemble ranking / event-level metrics',
-      {semantics:'Main V9 found@K panels count event hits; they do not count unique people.'}));
-    semantics.appendChild(recoveryV2Panel(doc,'Individual unique-person overlap',
-      view.summary));
-    fragment.appendChild(semantics);
-    const cohorts=recoveryElement(doc,'div','v9-recovery-cohorts');
-    for(const [value,label] of [['hybrid_only','Hybrid-only'],['baseline_only','Baseline-only']]){
-      const button=recoveryElement(doc,'button','',label);button.type='button';
-      button.dataset.v2Cohort=value;button.setAttribute('aria-pressed',String(state.cohort===value));
-      cohorts.appendChild(button);
-    }
-    fragment.appendChild(cohorts);
-    const grid=recoveryElement(doc,'div','v9-recovery-v2-grid');
-    const list=recoveryElement(doc,'aside','v9-recovery-v2-list');
-    for(const item of rows()){
-      const button=recoveryElement(doc,'button','v9-recovery-case');button.type='button';
-      button.dataset.v2Case=item.case_id;button.setAttribute('aria-current',String(item.case_id===state.caseId));
-      button.appendChild(recoveryElement(doc,'strong','',item.person_id));
-      button.appendChild(recoveryElement(doc,'div','v9-recovery-case-meta',
-        'B '+fmt(item.baseline_rank)+' / G '+fmt(item.seed0_gnn_rank)+' / H '+fmt(item.seed0_hybrid_rank)));
-      list.appendChild(button);
-    }
-    grid.appendChild(list);const detail=recoveryElement(doc,'div','v9-recovery-v2-detail');
-    renderV2Detail(detail);grid.appendChild(detail);fragment.appendChild(grid);root.replaceChildren(fragment);
-  }
-
-  async function loadSelected(){
-    const requestToken=++recoveryRequestToken;
-    state.loading=true;state.error=null;state.caseData=null;state.community=null;
-    state.nodePages={};state.edgePages={};state.provenancePages={};
-    state.membershipPages={};state.overlayNodePages={};state.overlayEdgePages={};
-    state.overlayProvenancePages={};state.overlayMembershipPages={};
-    state.loadedNodeCount=0;state.loadedEdgeCount=0;
-    state.loadedProvenanceCount=0;state.loadedMembershipCount=0;
-    state.loadedOverlayNodeCount=0;state.loadedOverlayEdgeCount=0;
-    state.loadedOverlayProvenanceCount=0;state.loadedOverlayMembershipCount=0;
-    state.nodePage=0;state.edgePage=0;state.provenancePage=0;
-    state.membershipPage=0;state.overlayNodePage=0;state.overlayEdgePage=0;
-    state.overlayProvenancePage=0;state.overlayMembershipPage=0;renderV2();
-    try{
-      const caseRecord=view.caseIndex[state.caseId];
-      const caseRef=caseRecord.ref||caseRecord;
-      const caseData=await recoveryFetchJson(recoverySidecarUrl(view,caseRef.path),caseRef.sha256);
-      if(disposed||requestToken!==recoveryRequestToken)return;
-      if(!recoveryIsRecord(caseData)||!recoveryIsRecord(caseData.case)
-          ||caseData.case.case_id!==state.caseId||caseData.cohort!==state.cohort
-          ||caseData.cohort!==caseRecord.cohort
-          ||caseData.community_key!==caseRecord.community_key
-          ||caseData.case.community_key!==caseRecord.community_key
-          ||(caseData.overlay_evidence!==null&&caseData.overlay_evidence!==undefined
-            &&!recoveryValidateChunkOwner(caseData.overlay_evidence))){
-        throw new Error('Case sidecar identity or chunk contract is invalid');
-      }
-      const communityRef=view.communityIndex[caseData.community_key];
-      const community=await recoveryFetchJson(
-        recoverySidecarUrl(view,communityRef.path),communityRef.sha256);
-      if(disposed||requestToken!==recoveryRequestToken)return;
-      if(!recoveryValidateChunkOwner(community)
-          ||community.community_key!==caseData.community_key){
-        throw new Error('Community sidecar identity or chunk contract is invalid');
-      }
-      state.caseData=caseData;state.community=community;
-      renderV2();
-      await loadRecoveryChunkPage('node',0,requestToken);
-      await loadRecoveryChunkPage('edge',0,requestToken);
-      await loadRecoveryChunkPage('provenance',0,requestToken);
-      await loadRecoveryChunkPage('membership',0,requestToken);
-      if(caseData.overlay_evidence){
-        await loadRecoveryChunkPage('overlay-node',0,requestToken);
-        await loadRecoveryChunkPage('overlay-edge',0,requestToken);
-        await loadRecoveryChunkPage('overlay-provenance',0,requestToken);
-        await loadRecoveryChunkPage('overlay-membership',0,requestToken);
-      }
-    }catch(error){if(requestToken===recoveryRequestToken)state.error=error;}
-    if(requestToken===recoveryRequestToken){
-      state.loading=false;if(!disposed)renderV2();
-    }
-  }
-  async function loadRecoveryChunkPage(kind,index,requestToken=recoveryRequestToken){
-    if(!state.community||requestToken!==recoveryRequestToken)return;
-    const overlay=kind.startsWith('overlay-');
-    const normalized=overlay?kind.slice(8):kind;
-    const owner=overlay?state.caseData&&state.caseData.overlay_evidence:state.community;
-    const config=(overlay?{
-      node:['node_chunks',state.overlayNodePages,'nodes'],
-      edge:['edge_chunks',state.overlayEdgePages,'edges'],
-      provenance:['provenance_chunks',state.overlayProvenancePages,'observations'],
-      membership:['provenance_expansion_membership_chunks',
-        state.overlayMembershipPages,'memberships']
-    }:{
-      node:['node_chunks',state.nodePages,'nodes'],
-      edge:['edge_chunks',state.edgePages,'edges'],
-      provenance:['provenance_chunks',state.provenancePages,'observations'],
-      membership:['provenance_expansion_membership_chunks',state.membershipPages,
-        'memberships']
-    })[normalized];
-    if(!config)return;
-    const refs=owner&&owner[config[0]];
-    const cache=config[1];
-    if(!Array.isArray(refs)||!refs[index]||cache[index])return;
-    const ref=refs[index];
-    const payload=await recoveryFetchJson(recoverySidecarUrl(view,ref.path),ref.sha256);
-    if(disposed||requestToken!==recoveryRequestToken)return;
-    const rows=recoveryValidatedChunkRows(payload,ref,config[2]);
-    if(rows===null)throw new Error('Chunk offset or count contract is invalid');
-    let resolvedRows=rows;
-    if(!overlay&&['node','edge','provenance'].includes(normalized)){
-      resolvedRows=await recoveryResolveCatalogRows(view,rows,
-        normalized==='node'?'nodes':normalized==='edge'?'edges':'provenance');
-      if(disposed||requestToken!==recoveryRequestToken)return;
-    }
-    if(!overlay&&recoveryIsRecord(owner.day_view)
-        &&(normalized==='node'||normalized==='edge')){
-      resolvedRows=await recoveryApplyDayView(
-        view,owner,normalized,index,resolvedRows);
-      if(disposed||requestToken!==recoveryRequestToken)return;
-    }
-    cache[index]=resolvedRows;
-    state.loadedNodeCount=Object.values(state.nodePages).reduce((sum,rows)=>sum+rows.length,0);
-    state.loadedEdgeCount=Object.values(state.edgePages).reduce((sum,rows)=>sum+rows.length,0);
-    state.loadedProvenanceCount=Object.values(state.provenancePages).reduce((sum,rows)=>sum+rows.length,0);
-    state.loadedMembershipCount=Object.values(state.membershipPages)
-      .reduce((sum,rows)=>sum+rows.length,0);
-    state.loadedOverlayNodeCount=Object.values(state.overlayNodePages)
-      .reduce((sum,rows)=>sum+rows.length,0);
-    state.loadedOverlayEdgeCount=Object.values(state.overlayEdgePages)
-      .reduce((sum,rows)=>sum+rows.length,0);
-    state.loadedOverlayProvenanceCount=Object.values(state.overlayProvenancePages)
-      .reduce((sum,rows)=>sum+rows.length,0);
-    state.loadedOverlayMembershipCount=Object.values(state.overlayMembershipPages)
-      .reduce((sum,rows)=>sum+rows.length,0);
-    if(!disposed)renderV2();
-  }
-  async function onV2Click(event){
-    const target=event.target.closest&&event.target.closest('[data-v2-cohort],[data-v2-case],[data-v2-page]');
-    if(!target||!root.contains(target))return;
-    if(target.dataset.v2Page){
-      const direction=target.dataset.v2Page.endsWith('next')?1:-1;
-      if(target.dataset.v2Page.startsWith('overlay-node')){
-        state.overlayNodePage+=direction;
-        await loadRecoveryChunkPage('overlay-node',state.overlayNodePage);
-      }else if(target.dataset.v2Page.startsWith('overlay-edge')){
-        state.overlayEdgePage+=direction;
-        await loadRecoveryChunkPage('overlay-edge',state.overlayEdgePage);
-      }else if(target.dataset.v2Page.startsWith('overlay-provenance')){
-        state.overlayProvenancePage+=direction;
-        await loadRecoveryChunkPage('overlay-provenance',state.overlayProvenancePage);
-      }else if(target.dataset.v2Page.startsWith('overlay-membership')){
-        state.overlayMembershipPage+=direction;
-        await loadRecoveryChunkPage('overlay-membership',state.overlayMembershipPage);
-      }else if(target.dataset.v2Page.startsWith('node')){
-        state.nodePage+=direction;await loadRecoveryChunkPage('node',state.nodePage);
-      }else if(target.dataset.v2Page.startsWith('edge')){
-        state.edgePage+=direction;await loadRecoveryChunkPage('edge',state.edgePage);
-      }else if(target.dataset.v2Page.startsWith('provenance')){
-        state.provenancePage+=direction;
-        await loadRecoveryChunkPage('provenance',state.provenancePage);
-      }else{
-        state.membershipPage+=direction;
-        await loadRecoveryChunkPage('membership',state.membershipPage);
-      }
-      renderV2();return;
-    }else if(target.dataset.v2Cohort){state.cohort=target.dataset.v2Cohort;
-      state.caseId=(view.cohorts[state.cohort][0]||{}).case_id||null;}
-    else state.caseId=target.dataset.v2Case;
-    if(state.caseId)loadSelected();else renderV2();
-  }
-  function onV2Input(event){if(event.target.dataset.v2Input==='node'){state.nodeQuery=event.target.value;renderV2();}}
-  function onV2Change(event){if(event.target.dataset.v2Change==='relation'){state.relation=event.target.value;state.edgePage=0;renderV2();}}
-  root.addEventListener('click',onV2Click);root.addEventListener('input',onV2Input);root.addEventListener('change',onV2Change);
-  renderV2();if(state.caseId)loadSelected();
-  return function(){disposed=true;recoveryRequestToken++;
-    root.removeEventListener('click',onV2Click);root.removeEventListener('input',onV2Input);
-    root.removeEventListener('change',onV2Change);};
-}
-
 function mountRecoveryExplorerV3(root,artifact,tools){
   const doc=root.ownerDocument;
   const view=buildRecoverySchema3ViewModel(artifact);
-  const fmt=recoveryIsRecord(tools)&&typeof tools.fmt==='function'
-    ?tools.fmt:value=>Number(value||0).toLocaleString();
-  const firstPublishedCaseId=view.available
-    ?Object.keys(view.detailIndex||{})[0]||null:null;
+  const fmt=value=>recoveryFormatNumber(value);
   const state={filter:'gnn_explanation',
-    caseId:firstPublishedCaseId,caseData:null,community:null,
+    caseId:view.available?view.defaultCaseId:null,caseData:null,community:null,
     nodeRows:null,edgeRows:null,overlayNodeRows:null,overlayEdgeRows:null,
     loading:false,error:null,
-    mode:'flow',stageId:'first_hop',selectedFactorId:null,query:'',
-    scale:1,offsetX:0,offsetY:0,labelDensity:'auto',
+    mode:'flow',stageId:'first_hop',relationship:'all',selectedFactorId:null,query:'',
+    scale:1,offsetX:0,offsetY:0,labelDensity:'key',openDisclosures:new Set(),
     nodeTablePage:0,edgeTablePage:0};
   let requestToken=0;let disposed=false;
   let canvasCleanup=function(){};let pendingCanvas=null;
+  let graphContext=null;
 
   function restoreV3Focus(attribute,datasetKey,value){
     for(const control of root.querySelectorAll('['+attribute+']')){
       if(control.dataset&&control.dataset[datasetKey]===String(value)){
-        control.focus();return true;
+        // preventScroll matters: the default focus behaviour scrolls the control
+        // into view, which after a re-render throws the reader back up the page.
+        // Engines without support ignore the argument.
+        control.focus({preventScroll:true});
+        return true;
       }
     }
     return false;
+  }
+  // A re-render replaces live DOM, so the browser loses its scroll anchor.
+  // Pin the element the reader just interacted with to the same viewport row.
+  function measureAnchor(element){
+    if(!element||typeof element.getBoundingClientRect!=='function')return null;
+    const rect=element.getBoundingClientRect();
+    return rect&&Number.isFinite(rect.top)?rect.top:null;
+  }
+  function restoreAnchor(element,top){
+    if(top===null||top===undefined)return;
+    const win=doc.defaultView;
+    if(!win||typeof win.scrollBy!=='function')return;
+    const next=measureAnchor(element);
+    if(next===null)return;
+    const delta=next-top;
+    if(Math.abs(delta)>=1)win.scrollBy(0,delta);
+  }
+  function replaceNode(current,next){
+    if(!current||!next)return false;
+    if(typeof current.replaceWith==='function'){current.replaceWith(next);return true;}
+    const parent=current.parentNode;
+    if(!parent||!Array.isArray(parent.children))return false;
+    const index=parent.children.indexOf(current);
+    if(index<0)return false;
+    parent.children[index]=next;next.parentNode=parent;return true;
+  }
+  // Only the graph panel depends on view, stage, and relationship. Rebuilding
+  // just that panel keeps a control click near-instant instead of re-creating
+  // the header, case list, narrative, factors, and both data tables.
+  function renderGraphOnly(anchorSelector,datasetKey,value){
+    if(!graphContext||!graphContext.panel||!graphContext.detailView){
+      render();return;
+    }
+    const anchorTop=measureAnchor(graphContext.panel);
+    canvasCleanup();canvasCleanup=function(){};pendingCanvas=null;
+    const holder=recoveryElement(doc,'div','v9-recovery-graph-holder');
+    const graph=renderGraph(holder,graphContext.detailView,graphContext.record);
+    if(!graph||!graph.panel||!replaceNode(graphContext.panel,graph.panel)){
+      render();
+      if(anchorSelector)restoreV3Focus(anchorSelector,datasetKey,value);
+      return;
+    }
+    graphContext.panel=graph.panel;
+    if(graph.commands&&graphContext.tablesBody
+        &&typeof graphContext.tablesBody.replaceChildren==='function'){
+      graphContext.tablesBody.replaceChildren();
+      renderGraphTable(graphContext.tablesBody,graph.commands,graphContext.record);
+    }
+    if(pendingCanvas){
+      canvasCleanup=bindRecoveryCanvas(
+        pendingCanvas.canvas,pendingCanvas.commands,state);
+      pendingCanvas=null;
+    }
+    restoreAnchor(graphContext.panel,anchorTop);
+    if(anchorSelector)restoreV3Focus(anchorSelector,datasetKey,value);
+  }
+  function redrawCanvas(){
+    if(typeof canvasCleanup.draw==='function'){canvasCleanup.draw();return true;}
+    return false;
+  }
+  // Search changes only which node is marked, so swap the draw commands on the
+  // live canvas rather than rebuilding the toolbar out from under the input.
+  function refreshCanvasCommands(){
+    if(!graphContext||!graphContext.detailView
+        ||typeof canvasCleanup.setCommands!=='function')return false;
+    const detailView=graphContext.detailView;
+    const control=detailView.kind==='community_control';
+    const built=control
+      ?buildStructuralDrawCommands(detailView.control,{mode:state.mode,
+        stageId:activeStageId(detailView.kind),selectedFactorId:null,
+        query:state.query})
+      :buildCommunityDrawCommands(detailView.explanation,{mode:state.mode,
+        stageId:activeStageId(detailView.kind),selectedFactorId:null,
+        query:state.query});
+    if(!built.available)return false;
+    canvasCleanup.setCommands(
+      filterRecoveryGraphCommands(built,state.relationship));
+    return true;
   }
   function visibleRows(){return filterRecoverySchema3Cases(view,state.filter);}
   function currentRecord(){
@@ -2395,20 +2685,55 @@ function mountRecoveryExplorerV3(root,artifact,tools){
   function addText(parent,tag,className,text){
     parent.appendChild(recoveryElement(doc,tag,className,text));
   }
-  function renderHeader(fragment){
+  function renderDisclosure(parent,key,label,renderBody){
+    const details=recoveryElement(doc,'details','v9-recovery-disclosure');
+    details.dataset.v3Disclosure=key;
+    details.open=state.openDisclosures.has(key);
+    const summary=recoveryElement(doc,'summary','v9-recovery-disclosure-summary',label);
+    summary.setAttribute('aria-label',label);
+    details.appendChild(summary);
+    const body=recoveryElement(doc,'div','v9-recovery-disclosure-body');
+    renderBody(body);
+    details.appendChild(body);
+    parent.appendChild(details);
+    return details;
+  }
+  function eligibleCountLabel(rows){
+    const count=(Array.isArray(rows)?rows:[]).filter(record=>
+      recoverySchema3ExplanationEligible(record,view.detailIndex)).length;
+    return fmt(count)+' published GNN explanation'+(count===1?'':'s');
+  }
+  function renderSelectedHeader(fragment,record,rows){
     const header=recoveryElement(doc,'header','v9-recovery-header');
-    addText(header,'div','v9-recovery-eyebrow','Balanced recovery evidence');
-    addText(header,'h3','v9-recovery-title','Why Hybrid recovered more cases');
-    addText(header,'p','v9-recovery-intro',
-      'Retrospective seed-0 evaluation cohorts with selected technical detail and structural controls.');
+    const copy=recoveryElement(doc,'div','v9-recovery-header-copy');
+    addText(copy,'div','v9-recovery-eyebrow','Published GNN explanations');
+    if(record){
+      const title=recoveryElement(doc,'h3','v9-recovery-title',
+        'Why case '+record.personId+' surfaced');
+      title.id='v9-recovery-title';copy.appendChild(title);
+      const count=eligibleCountLabel(rows);
+      addText(copy,'p','v9-recovery-intro',count+' in this evidence bundle.');
+      addText(copy,'p','v9-recovery-intro',
+        'Event '+record.event_id+' / scoring day '
+          +recoveryFormatDateOnly(record.scoring_day)+'.');
+    }else{
+      const title=recoveryElement(doc,'h3','v9-recovery-title',
+        'Published GNN explanations unavailable');
+      title.id='v9-recovery-title';copy.appendChild(title);
+      addText(copy,'p','v9-recovery-intro',
+        'No published GNN explanation is available for the selected case.');
+    }
+    header.appendChild(copy);
     addText(header,'div','v9-recovery-scope',
-      'Single-seed observability · GraphSAGE seed 0 · Hybrid score is percentile fusion, not probability.');
+      'Single-seed observability · GraphSAGE seed 0 · Hybrid percentile fusion.'
+        +' Hybrid score is percentile fusion, not probability.');
     fragment.appendChild(header);
   }
-  function renderSummary(fragment){
-    if(!view.available)return;
-    const grid=recoveryElement(doc,'div','v9-recovery-summary');
-    grid.setAttribute('aria-label','Schema-3 recovery overlap summary');
+  function renderCohortContext(parent,record){
+    const context=recoveryElement(doc,'section','v9-recovery-v3-panel');
+    addText(context,'h5','','Cohort context');
+    const summary=recoveryElement(doc,'div','v9-recovery-summary');
+    summary.setAttribute('aria-label','Schema-3 recovery overlap summary');
     for(const [key,label] of [
       ['baseline_recovered','Baseline recovered'],
       ['recovered_by_both','Recovered by both'],
@@ -2417,9 +2742,9 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       ['hybrid_total','Hybrid total'],['net_gain','Net gain']]){
       const card=recoveryElement(doc,'article','v9-recovery-stat');
       addText(card,'b','',fmt(view.summary[key]));addText(card,'span','',label);
-      grid.appendChild(card);
+      summary.appendChild(card);
     }
-    fragment.appendChild(grid);
+    context.appendChild(summary);
     const coverage=recoveryElement(doc,'div','v9-recovery-coverage');
     addText(coverage,'span','',
       'Hybrid technical detail '+fmt(view.coverage.hybrid_explained)+' / '
@@ -2431,20 +2756,23 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       addText(coverage,'span','',
         'Hybrid structural fallback '+fmt(view.coverage.hybrid_structural_fallback));
     }
-    fragment.appendChild(coverage);
-    if(view.coverage.shortfall){
-      addText(fragment,'div','v9-recovery-warning',
-        'Partial coverage: '+fmt(view.coverage.shortfall)
-          +' of the requested detail cases have no published evidence. Reasons: '
-          +(view.coverage.shortfall_reasons.join(', ')||'not recorded')+'.');
+    context.appendChild(coverage);
+    if(record){
+      const scores=recoveryElement(doc,'div','v9-recovery-coverage');
+      for(const [key,label] of [
+        ['baseline_raw','Baseline score'],
+        ['baseline_percentile','Baseline percentile'],
+        ['seed0_gnn_percentile','Seed-0 GNN percentile'],
+        ['seed0_gnn_probability','Seed-0 GNN probability'],
+        ['seed0_hybrid_score','Hybrid percentile-fusion score']]){
+        if(typeof record[key]==='number'){
+          addText(scores,'span','',label+': '+fmt(record[key])
+            +(key==='seed0_hybrid_score'?' (percentile fusion, not probability)':''));
+        }
+      }
+      context.appendChild(scores);
     }
-  }
-  function renderFilters(fragment){
-    const status=recoveryElement(doc,'div','v9-recovery-status',
-      'Showing GNN explanations only');
-    status.setAttribute('role','status');
-    status.setAttribute('aria-label','Showing GNN explanations only');
-    fragment.appendChild(status);
+    parent.appendChild(context);
   }
   function renderRecordStatus(detail,record){
     const copy={
@@ -2461,79 +2789,103 @@ function mountRecoveryExplorerV3(root,artifact,tools){
         +String(record.explanationUnavailableReason)
         +'. The exact two-hop input exceeded the explainer limits, so structural community context is published instead.');
   }
-  function renderRanks(detail,record){
-    const panel=recoveryElement(doc,'section','v9-recovery-v2-panel');
-    addText(panel,'h5','',
-      record.detailKind==='gnn_explanation'
-        ?'Hybrid percentile-fusion score and ranks':'Recorded ranks and structural context');
-    const values=[['Baseline rank',record.baseline_rank],
-      ['Seed-0 GNN rank',record.seed0_gnn_rank],
-      ['Seed-0 Hybrid rank',record.seed0_hybrid_rank]];
-    for(const [label,value] of values)addText(panel,'div','',label+': '+fmt(value));
-    if(typeof record.baseline_raw==='number')addText(panel,'div','',
-      'Baseline score: '+String(record.baseline_raw));
-    if(typeof record.baseline_percentile==='number')addText(panel,'div','',
-      'Baseline percentile: '+String(record.baseline_percentile));
-    if(typeof record.seed0_gnn_percentile==='number')addText(panel,'div','',
-      'Seed-0 GNN percentile: '+String(record.seed0_gnn_percentile));
-    if(typeof record.seed0_gnn_probability==='number')addText(panel,'div','',
-      'Seed-0 GNN probability: '+String(record.seed0_gnn_probability));
-    if(typeof record.seed0_hybrid_score==='number')addText(panel,'div','',
-      'Hybrid percentile-fusion score: '+String(record.seed0_hybrid_score)
-        +' (percentile fusion, not probability)');
-    detail.appendChild(panel);
+  function renderLoading(detail){
+    detail.setAttribute('aria-busy','true');
+    const section=recoveryElement(doc,'section','v9-recovery-loading');
+    section.setAttribute('role','status');
+    addText(section,'span','v9-recovery-sr-only','Loading selected evidence');
+    section.appendChild(recoveryElement(doc,'div','v9-recovery-skeleton is-graph'));
+    section.appendChild(recoveryElement(doc,'div','v9-recovery-skeleton is-copy'));
+    section.appendChild(recoveryElement(doc,'div','v9-recovery-skeleton is-copy is-short'));
+    detail.appendChild(section);
   }
-  function renderEvidenceBoundary(detail,boundary){
-    if(!recoveryIsRecord(boundary)
-        ||!recoveryNonBlankString(boundary.snapshot)
-        ||!recoveryNonBlankString(boundary.edge_rule)
-        ||!recoveryNonBlankString(boundary.caught_rule)){
-      addText(detail,'div','v9-recovery-empty',
-        'Strict as-of evidence boundary unavailable. Evidence details are not rendered.');
-      return false;
-    }
-    addText(detail,'div','v9-recovery-status',
-      'Strict as-of evidence boundary: snapshot '+boundary.snapshot
-        +'. Edges: '+boundary.edge_rule+'. Caught labels: '+boundary.caught_rule+'.');
-    return true;
+  function renderError(detail,error){
+    detail.setAttribute('aria-busy','false');
+    const section=recoveryElement(doc,'section','v9-recovery-error');
+    section.setAttribute('role','alert');
+    addText(section,'h4','','Selected evidence could not be loaded');
+    addText(section,'p','',recoveryServerHelp(error));
+    const retry=recoveryElement(doc,'button','v9-recovery-button v9-recovery-retry','Retry evidence');
+    retry.type='button';retry.dataset.v3Retry='true';
+    retry.setAttribute('aria-label','Retry selected GNN evidence');
+    section.appendChild(retry);
+    detail.appendChild(section);
   }
-  function renderNarrative(column,explanation){
-    const panel=recoveryElement(doc,'section','v9-recovery-narrative');
-    addText(panel,'h5','','Grounded narrative');
-    const narrative=validateRecoveryNarrative(explanation.llm_narrative);
-    if(!narrative.visible){
-      addText(panel,'p','',
-        'Validated narrative unavailable. Measured factors remain authoritative.');
-    }else{
-      addText(panel,'p','',narrative.source==='llm'
-        ?'Validated local Gemma: '+narrative.model
-        :'Deterministic evidence summary. Local Gemma output was unavailable or rejected.');
-      addText(panel,'p','',narrative.summary);
-      recoveryAppendSources(doc,panel,narrative.summarySourceRefs);
-      for(const claim of narrative.claims){
-        addText(panel,'p','',claim.text);
-        recoveryAppendSources(doc,panel,claim.source_refs);
-      }
+  function renderRanks(parent,record){
+    const panel=recoveryElement(doc,'section','v9-recovery-v3-panel');
+    addText(panel,'h5','','Rank comparison');
+    const values=[['Baseline rank',record.baseline_rank,false],
+      ['Seed-0 Hybrid rank',record.seed0_hybrid_rank,true]];
+    const ranks=recoveryElement(doc,'div','v9-recovery-ranks');
+    for(const [label,value,primary] of values){
+      const cell=recoveryElement(doc,'div','v9-recovery-rank'+(primary?' is-primary':''));
+      addText(cell,'b','',fmt(value));addText(cell,'span','',label);
+      ranks.appendChild(cell);
     }
-    column.appendChild(panel);
+    const delta=recoveryRankDelta(record);
+    addText(ranks,'div','v9-recovery-rank-delta',
+      delta===null?'Rank movement unavailable'
+        :delta>0?fmt(delta)+' places higher than Baseline'
+        :delta<0?fmt(Math.abs(delta))+' places lower than Baseline'
+        :'No rank movement recorded');
+    panel.appendChild(ranks);
+    parent.appendChild(panel);
+  }
+  function renderCaseNavigation(grid,rows){
+    const list=recoveryElement(doc,'aside','v9-recovery-v3-list');
+    list.setAttribute('aria-label','Published GNN explanations');
+    addText(list,'h4','',eligibleCountLabel(rows));
+    const picker=recoveryElement(doc,'select','v9-recovery-v3-picker');
+    picker.dataset.v3Change='case';
+    picker.setAttribute('aria-label','Select published GNN explanation');
+    for(const record of rows){
+      const option=recoveryElement(doc,'option','',record.personId
+        +' · Hybrid rank '+fmt(record.seed0_hybrid_rank));
+      option.value=record.caseId;picker.appendChild(option);
+    }
+    if(state.caseId)picker.value=state.caseId;
+    if(!rows.length){
+      addText(list,'div','v9-recovery-empty',
+        'No published GNN explanations are available.');
+    }
+    for(const record of rows){
+      const button=recoveryElement(doc,'button','v9-recovery-case');
+      button.type='button';button.dataset.v3Case=record.caseId;
+      button.setAttribute('aria-current',String(record.caseId===state.caseId));
+      button.setAttribute('aria-label','Inspect published GNN explanation for '
+        +record.personId);
+      addText(button,'strong','',record.personId);
+      addText(button,'div','v9-recovery-case-meta',
+        'Hybrid rank '+fmt(record.seed0_hybrid_rank));
+      const delta=recoveryRankDelta(record);
+      addText(button,'div','v9-recovery-case-evidence',
+        delta===null?'Rank movement unavailable'
+          :delta>0?fmt(delta)+' places higher than Baseline'
+          :delta<0?fmt(Math.abs(delta))+' places lower than Baseline'
+          :'No rank movement recorded');
+      list.appendChild(button);
+    }
+    grid.appendChild(list);
+    grid.appendChild(picker);
   }
   function renderFactors(column,explanation){
     const panel=recoveryElement(doc,'section','v9-recovery-panel');
     const head=recoveryElement(doc,'div','v9-recovery-panel-head');
-    addText(head,'h5','','Salient counterfactual factors');
+    addText(head,'h5','','Key counterfactual factors');
     addText(head,'p','',
-      'Signed effect is ablated rank minus original rank. Positive values mean removal worsened rank.');
+      'Measured effect is the rank change when a factor is removed. Zero-rank-movement factors are omitted. Restart support reports whether the explainer selected that factor consistently across deterministic restarts.');
     panel.appendChild(head);
     const factors=Array.isArray(explanation.factors)
-      ?explanation.factors.filter(recoveryValidFactor).slice():[];
+      ?explanation.factors.filter(factor=>recoveryValidFactor(factor)
+        &&factor.counterfactual.ablated_hybrid_rank!==factor.counterfactual.original_hybrid_rank).slice():[];
     factors.sort((left,right)=>
       Number(right.stability==='stable')-Number(left.stability==='stable')
       ||Math.abs(right.counterfactual.ablated_hybrid_rank-right.counterfactual.original_hybrid_rank)
         -Math.abs(left.counterfactual.ablated_hybrid_rank-left.counterfactual.original_hybrid_rank)
       ||recoveryCompareId(left.factor_id,right.factor_id));
-    if(!factors.some(factor=>factor.stability==='stable')){
+    if(factors.length&&!factors.some(factor=>factor.stability==='stable')){
       addText(panel,'div','v9-recovery-status',
-        'No stable factor found; inspect measured effects below.');
+        'No factor was consistently selected across restarts. Measured rank effects are shown separately from restart support below.');
     }
     if(!factors.length){
       addText(panel,'div','v9-recovery-status',
@@ -2543,20 +2895,47 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       for(const factor of factors){
         const button=recoveryElement(doc,'button','v9-recovery-factor');
         button.type='button';button.dataset.v3Factor=factor.factor_id;
+        button.title=factor.factor_id;
         button.setAttribute('aria-pressed',
           String(state.selectedFactorId===factor.factor_id));
+        const readable=buildRecoveryFactorViewModel({
+          factors:[factor],community:explanation.community
+        })[0];
         button.setAttribute('aria-label',
-          'Show measured effect for '+recoveryVisibleText(factor.label));
-        addText(button,'strong','',factor.label+' / '+factor.stability);
-        const effect=factor.counterfactual.ablated_hybrid_rank
-          -factor.counterfactual.original_hybrid_rank;
+          'Show '+readable.effectLabel+' for '+recoveryVisibleText(readable.label)
+            +'; restart support '+readable.stabilityLabel);
+        addText(button,'strong','',readable.label);
+        addText(button,'span','v9-recovery-factor-signal',
+          'Effect: '+recoveryFormatSigned(readable.effect)+' ranks ('
+            +readable.effectLabel+'; ablated minus original)');
         addText(button,'span','',
-          recoverySigned(effect)+' ranks / Ablated minus original');
+          'Restart support: '+readable.stabilityLabel);
         list.appendChild(button);
       }
       panel.appendChild(list);
       addText(panel,'p','v9-recovery-canvas-note',
         'Per-factor provenance is published as separate attribution overlay evidence and is not drawn on the community graph in this view.');
+    }
+    column.appendChild(panel);
+  }
+  function renderNarrative(column,explanation){
+    const narrative=validateRecoveryNarrative(explanation.llm_narrative);
+    const panel=recoveryElement(doc,'section','v9-recovery-narrative');
+    addText(panel,'h5','',narrative.visible&&narrative.source==='llm'
+      ?'LLM explanation':'Evidence explanation');
+    if(!narrative.visible){
+      addText(panel,'p','v9-recovery-status',
+        'LLM explanation unavailable for this published case.');
+    }else{
+      addText(panel,'p','',narrative.source==='llm'
+        ?'Validated local Gemma: '+narrative.model
+        :'Deterministic evidence summary.');
+      addText(panel,'p','',narrative.summary);
+      recoveryAppendSources(doc,panel,narrative.summarySourceRefs);
+      for(const claim of narrative.claims){
+        addText(panel,'p','',claim.text);
+        recoveryAppendSources(doc,panel,claim.source_refs);
+      }
     }
     column.appendChild(panel);
   }
@@ -2591,7 +2970,7 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       'Removing the highest-attribution edges is compared against a matched random control. A larger top-edge drop than its matched control is evidence the attribution tracked the score.');
     addText(panel,'div','',
       'Seed-0 probability before removal: '
-        +String(faithfulness.original_probability));
+        +recoveryFormatNumber(faithfulness.original_probability));
     const table=recoveryElement(doc,'table','v9-recovery-table');
     table.setAttribute('aria-label','Edge removal faithfulness by removed fraction');
     const header=recoveryElement(doc,'tr');
@@ -2604,11 +2983,11 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       if(!recoveryIsRecord(point))continue;
       const row=recoveryElement(doc,'tr');
       const matched=typeof point.matched_random_probability_drop==='number'
-        ?String(point.matched_random_probability_drop)
+        ?recoveryFormatNumber(point.matched_random_probability_drop)
         :'not measured';
-      for(const value of [String(point.fraction),
-        String(point.top_edge_probability_drop),matched,
-        String(point.unmatched_control_count)]){
+      for(const value of [recoveryFormatNumber(point.fraction),
+        recoveryFormatNumber(point.top_edge_probability_drop),matched,
+        recoveryFormatNumber(point.unmatched_control_count)]){
         row.appendChild(recoveryElement(doc,'td','',value));
       }
       table.appendChild(row);
@@ -2622,6 +3001,21 @@ function mountRecoveryExplorerV3(root,artifact,tools){
     if(pressed!==null)button.setAttribute('aria-pressed',String(pressed));
     button.setAttribute('aria-label',ariaLabel||label);
     return button;
+  }
+  function graphControlGroup(label){
+    const group=recoveryElement(doc,'div','v9-recovery-control-group');
+    group.setAttribute('role','group');group.setAttribute('aria-label',label);
+    addText(group,'span','v9-recovery-control-label',label);
+    const controls=recoveryElement(doc,'div','v9-recovery-control-items');
+    group.appendChild(controls);return {group,controls};
+  }
+  function stageDescription(stageId){
+    return {
+      first_hop:'Immediate message-passing relationships around the target.',
+      second_hop:'Relationships available within two message-passing hops.',
+      component_pool:'Co-travel links between members included in component pooling.',
+      rank_fusion:'Attributed explanation evidence at the final rank-fusion stage.'
+    }[stageId]||'Published explanation stage.';
   }
   function renderGraphTable(panel,commands,record){
     const wrap=recoveryElement(doc,'div','v9-recovery-table-wrap');
@@ -2649,8 +3043,9 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       const row=recoveryElement(doc,'tr');
       const nodeId=node.id===undefined?node.node_id:node.id;
       const weight=typeof node.importance==='number'
-        ?node.importance.toFixed(3):'none';
-      const rank=Number.isSafeInteger(node.rank)?String(node.rank):'none';
+        ?recoveryFormatNumber(node.importance):'none';
+      const rank=Number.isSafeInteger(node.rank)
+        ?recoveryFormatNumber(node.rank):'none';
       for(const value of [nodeId,node.target?'yes':'no',
         node.pooledMember?'yes':'no',node.caughtBeforeSnapshot?'yes':'no',
         weight,rank]){
@@ -2662,7 +3057,7 @@ function mountRecoveryExplorerV3(root,artifact,tools){
     const nodeNav=recoveryElement(doc,'div','v9-recovery-pager');
     nodeNav.appendChild(graphButton('Previous members','v3Page','node-prev',null,
       'Previous page of community members'));
-    addText(nodeNav,'span','','Members page '+(nodePage+1)+' / '+nodePages);
+    addText(nodeNav,'span','','Members page '+fmt(nodePage+1)+' / '+fmt(nodePages));
     nodeNav.appendChild(graphButton('Next members','v3Page','node-next',null,
       'Next page of community members'));
     wrap.appendChild(nodeNav);
@@ -2679,8 +3074,9 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       const row=recoveryElement(doc,'tr');
       const edgeId=edge.id===undefined?edge.edge_id:edge.id;
       const weight=typeof edge.importance==='number'
-        ?edge.importance.toFixed(3):'none';
-      const rank=Number.isSafeInteger(edge.rank)?String(edge.rank):'none';
+        ?recoveryFormatNumber(edge.importance):'none';
+      const rank=Number.isSafeInteger(edge.rank)
+        ?recoveryFormatNumber(edge.rank):'none';
       for(const value of [edgeId,edge.relation,edge.u,edge.v,
         edge.emphasized?'yes':'no',weight,rank]){
         row.appendChild(recoveryElement(doc,'td','',String(value)));
@@ -2691,7 +3087,7 @@ function mountRecoveryExplorerV3(root,artifact,tools){
     const edgeNav=recoveryElement(doc,'div','v9-recovery-pager');
     edgeNav.appendChild(graphButton('Previous relationships','v3Page','edge-prev',
       null,'Previous page of community relationships'));
-    addText(edgeNav,'span','','Relationships page '+(edgePage+1)+' / '+edgePages);
+    addText(edgeNav,'span','','Relationships page '+fmt(edgePage+1)+' / '+fmt(edgePages));
     edgeNav.appendChild(graphButton('Next relationships','v3Page','edge-next',null,
       'Next page of community relationships'));
     wrap.appendChild(edgeNav);
@@ -2700,66 +3096,94 @@ function mountRecoveryExplorerV3(root,artifact,tools){
   function renderGraph(column,detailView,record){
     const control=detailView.kind==='community_control';
     const stageId=activeStageId(detailView.kind);
-    const panel=recoveryElement(doc,'section','v9-recovery-panel');
-    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
-    addText(head,'h5','','As-of community context + explanation evidence');
-    addText(head,'p','',control
-      ?'Muted context remains visible. This control has no explanation evidence or attribution mask.'
-      :'Muted context remains visible. Explanation evidence width and brightness follow the unsigned explainer median. This is not a causal claim.');
-    panel.appendChild(head);
-    const toolbar=recoveryElement(doc,'div','v9-recovery-toolbar');
-    toolbar.setAttribute('role','toolbar');
-    toolbar.setAttribute('aria-label','Community graph controls');
-    const modes=recoveryElement(doc,'div','v9-recovery-toolgroup');
-    modes.appendChild(graphButton('All','v3Mode','all',state.mode==='all',
-      'Show all relationships'));
-    modes.appendChild(graphButton('Flow','v3Mode','flow',state.mode==='flow',
-      'Show influence flow emphasis'));
-    toolbar.appendChild(modes);
-    const stages=recoveryElement(doc,'div','v9-recovery-toolgroup');
     const stageLabels={first_hop:'First hop',second_hop:'Second hop',
       component_pool:'Component pool',rank_fusion:'Rank fusion'};
-    for(const value of stageIdsFor(detailView.kind)){
-      stages.appendChild(graphButton(stageLabels[value],'v3Stage',value,
-        stageId===value,'Show '+stageLabels[value].toLowerCase()+' stage'));
-    }
-    toolbar.appendChild(stages);
-    const zoom=recoveryElement(doc,'div','v9-recovery-toolgroup');
-    zoom.appendChild(graphButton('+','v3Zoom','in',null,'Zoom in'));
-    zoom.appendChild(graphButton('-','v3Zoom','out',null,'Zoom out'));
-    zoom.appendChild(graphButton('Reset','v3Zoom','reset',null,'Reset zoom'));
-    zoom.appendChild(graphButton('Fit','v3Zoom','fit',null,'Fit to community'));
-    toolbar.appendChild(zoom);
-    const search=recoveryElement(doc,'input','v9-recovery-search');
-    search.type='search';search.value=state.query;search.placeholder='Find node';
-    search.dataset.v3Input='search';
-    search.setAttribute('aria-label','Search node identifiers');
-    toolbar.appendChild(search);
-    const density=recoveryElement(doc,'select','v9-recovery-select');
-    density.dataset.v3Change='density';
-    density.setAttribute('aria-label','Node label density');
-    for(const pair of [['auto','Labels: auto'],['all','Labels: all'],
-      ['none','Labels: none']]){
-      const option=recoveryElement(doc,'option','',pair[1]);
-      option.value=pair[0];density.appendChild(option);
-    }
-    density.value=state.labelDensity;toolbar.appendChild(density);
-    panel.appendChild(toolbar);
-    const description=recoveryElement(doc,'p','v9-recovery-canvas-note',control
-      ?'Relation colors show observable context, not relation-specific GraphSAGE parameters. No attribution mask is drawn for a community control.'
-      :'Relation colors show observable context, not relation-specific GraphSAGE parameters. Mask values are unsigned evidence weights, not causal claims.');
-    description.id='v9-recovery-v3-canvas-description';
-    panel.appendChild(description);
     const options={mode:state.mode,stageId,
       selectedFactorId:null,query:state.query};
     const commands=control
       ?buildStructuralDrawCommands(detailView.control,options)
       :buildCommunityDrawCommands(detailView.explanation,options);
     if(!commands.available){
+      const panel=recoveryElement(doc,'section','v9-recovery-graph-panel');
+      addText(panel,'h5','','As-of community context + explanation evidence');
       addText(panel,'div','v9-recovery-empty',
         'Strict-bound unavailable: complete community unavailable ('
           +commands.reason+'). The complete data table is not rendered because the graph command failed closed.');
-      column.appendChild(panel);return;
+      column.appendChild(panel);return {commands:null,panel};
+    }
+    const canvasCommands=filterRecoveryGraphCommands(commands,state.relationship);
+    if(canvasCommands.relationship!==state.relationship){
+      state.relationship=canvasCommands.relationship;
+    }
+    const panel=recoveryElement(doc,'section','v9-recovery-graph-panel');
+    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
+    addText(head,'h5','','As-of community context + explanation evidence');
+    addText(head,'p','',control
+      ?'Muted context remains visible. This control has no explanation evidence or attribution mask.'
+      :'Muted context remains visible. Model evidence weight controls explanation-edge width and brightness via the unsigned explainer median. This is not a causal claim.');
+    panel.appendChild(head);
+    const toolbar=recoveryElement(doc,'div','v9-recovery-toolbar');
+    toolbar.setAttribute('role','toolbar');
+    toolbar.setAttribute('aria-label','Community graph controls');
+    const viewGroup=graphControlGroup('Graph view');
+    viewGroup.controls.appendChild(graphButton('Evidence first','v3Mode','flow',
+      state.mode==='flow','Show evidence-first graph view'));
+    viewGroup.controls.appendChild(graphButton('Full community','v3Mode','all',
+      state.mode==='all','Show full community graph view'));
+    toolbar.appendChild(viewGroup.group);
+    const stageGroup=graphControlGroup('Explanation stage');
+    for(const value of stageIdsFor(detailView.kind)){
+      stageGroup.controls.appendChild(graphButton(stageLabels[value],'v3Stage',value,
+        stageId===value,'Show '+stageLabels[value].toLowerCase()+' explanation stage'));
+    }
+    toolbar.appendChild(stageGroup.group);
+    // Counts let a reviewer see what a relationship filter will yield before
+    // spending a click on an empty canvas.
+    const relationCounts=new Map();
+    for(const edge of commands.edges){
+      const key=recoveryRelationPresentation(edge&&edge.relation).key;
+      relationCounts.set(key,(relationCounts.get(key)||0)+1);
+    }
+    const relationGroup=graphControlGroup('Relationship type');
+    for(const option of canvasCommands.relationshipOptions){
+      const count=option.key==='all'
+        ?commands.edges.length:(relationCounts.get(option.key)||0);
+      const button=graphButton(option.label,'v3Relation',option.key,
+        state.relationship===option.key,
+        'Show '+option.label.toLowerCase()+' relationships, '+fmt(count)
+          +' in this graph view');
+      addText(button,'span','v9-recovery-button-count',fmt(count));
+      relationGroup.controls.appendChild(button);
+    }
+    toolbar.appendChild(relationGroup.group);
+    const labelGroup=graphControlGroup('Node labels');
+    const density=recoveryElement(doc,'select','v9-recovery-select');
+    density.dataset.v3Change='density';density.setAttribute('aria-label','Node labels');
+    for(const pair of [['key','Key labels'],['all','All labels'],['none','No labels']]){
+      const option=recoveryElement(doc,'option','',pair[1]);
+      option.value=pair[0];density.appendChild(option);
+    }
+    density.value=state.labelDensity;labelGroup.controls.appendChild(density);
+    toolbar.appendChild(labelGroup.group);
+    const searchGroup=graphControlGroup('Find node');
+    const search=recoveryElement(doc,'input','v9-recovery-search');
+    search.type='search';search.value=state.query;search.placeholder='Person ID';
+    search.dataset.v3Input='search';
+    search.setAttribute('aria-label','Search node identifiers');
+    searchGroup.controls.appendChild(search);
+    toolbar.appendChild(searchGroup.group);
+    const navigationGroup=graphControlGroup('Graph navigation');
+    navigationGroup.controls.appendChild(graphButton('+','v3Zoom','in',null,'Zoom in'));
+    navigationGroup.controls.appendChild(graphButton('-','v3Zoom','out',null,'Zoom out'));
+    navigationGroup.controls.appendChild(graphButton('Reset view','v3Zoom','reset',null,'Reset graph view'));
+    toolbar.appendChild(navigationGroup.group);
+    panel.appendChild(toolbar);
+    addText(panel,'p','v9-recovery-canvas-note',stageDescription(stageId));
+    if(state.relationship!=='all'&&!canvasCommands.edges.length){
+      addText(panel,'div','v9-recovery-status',
+        'No '+recoveryVisibleText((canvasCommands.relationshipOptions.find(option=>
+          option.key===state.relationship)||{label:'selected'}).label).toLowerCase()
+          +' relationships are available in this graph view. Complete tables retain all relationships.');
     }
     const legend=recoveryElement(doc,'div','v9-recovery-legend');
     legend.setAttribute('role','list');
@@ -2768,22 +3192,37 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       const item=recoveryElement(doc,'div','v9-recovery-legend-item');
       item.setAttribute('role','listitem');
       item.setAttribute('aria-label',label+(description?': '+description:''));
+      if(description)item.setAttribute('title',label+' - '+description);
       const swatch=recoveryElement(doc,'span','v9-recovery-legend-swatch '+swatchClass);
       swatch.setAttribute('aria-hidden','true');
       item.appendChild(swatch);
-      addText(item,'span','',label+(description?' - '+description:''));
+      addText(item,'span','',label);
       legend.appendChild(item);
     }
-    legendItem('Context relations','is-context','muted');
-    legendItem('Explanation evidence','is-evidence','width and brightness follow unsigned explainer median');
     legendItem('Target','is-target','selected person');
     legendItem('Caught before snapshot','is-caught','label available before T');
-    legendItem('Weight range','is-weight','0.00 to 1.00');
+    const relationLegendClasses={COTRAVEL:'is-cotravel',RESIDENCE:'is-residence',
+      SHARED_PLATE:'is-shared-plate'};
+    for(const option of canvasCommands.relationshipOptions){
+      if(option.key==='all')continue;
+      const swatchClass=relationLegendClasses[option.key]||'is-other-relation';
+      legendItem(option.label,swatchClass,
+        recoveryRelationLegendDescription(option.key));
+    }
+    legendItem('Model evidence weight','is-evidence','gold underlay width and brightness follow unsigned GNNExplainer attribution');
+    legendItem('Attributed node','is-attributed-node','gold ring shows ranked model evidence');
     panel.appendChild(legend);
+    // The full encoding caveat stays on the page but out of the reading path
+    // between the controls and the graph itself.
+    const description=recoveryElement(doc,'p','v9-recovery-canvas-note is-fine-print',
+      control
+        ?'Gold underlay shows model evidence weight. Inner color and pattern show the observable relationship type. Community controls have no attribution mask.'
+        :'Gold underlay shows model evidence weight. Inner color and pattern show the observable relationship type. Model evidence weight is unsigned GNNExplainer salience, not a causal claim.');
+    description.id='v9-recovery-v3-canvas-description';
     if(commands.sampled){
       addText(panel,'div','v9-recovery-sampled',
-        'Sampled context: showing '+fmt(commands.nodes.length)+' of '
-          +fmt(commands.fullNodeCount)+' nodes and '+fmt(commands.edges.length)
+        'Sampled context: showing '+fmt(canvasCommands.nodes.length)+' of '
+          +fmt(commands.fullNodeCount)+' nodes and '+fmt(canvasCommands.edges.length)
           +' of '+fmt(commands.fullEdgeCount)
           +' relationships for canvas performance; complete tables remain available.');
     }
@@ -2797,14 +3236,17 @@ function mountRecoveryExplorerV3(root,artifact,tools){
             +(record.cohort==='baseline_only'
               ?'baseline control ':'Hybrid structural fallback ')
           :'Community graph for Hybrid case ')
-          +recoveryVisibleText(record.personId)+', '+stageLabels[stageId]
-          +' stage, '+(state.mode==='all'?'all relationships':'flow emphasis')
-          +', '+commands.nodes.length+' members and '+commands.edges.length
-          +' relationships.');
+          +recoveryVisibleText(record.personId)+', '
+          +(state.mode==='flow'?['Evidence','first'].join(' '):'Full community')+' view, '
+          +stageLabels[stageId]+' stage, '
+          +(canvasCommands.relationshipOptions.find(option=>option.key===canvasCommands.relationship)
+            ||{label:'All types'}).label+' relationships, '
+          +fmt(canvasCommands.nodes.length)+' members and '+fmt(canvasCommands.edges.length)
+          +' relationships. Model evidence weight is unsigned GNNExplainer salience, not a causal claim.');
       canvas.setAttribute('aria-describedby','v9-recovery-v3-canvas-description');
       canvas.textContent='Interactive community graph. Use the toolbar for keyboard controls.';
       wrap.appendChild(canvas);panel.appendChild(wrap);
-      pendingCanvas={canvas,commands};
+      pendingCanvas={canvas,commands:canvasCommands};
     }else{
       addText(panel,'div','v9-recovery-status',
         'Strict-bound unavailable: community graph is not drawn: '
@@ -2812,18 +3254,20 @@ function mountRecoveryExplorerV3(root,artifact,tools){
           +fmt(detailView.edgeCount)
           +' relationships exceed the interactive rendering bound. The complete data table below carries the same evidence.');
     }
-    renderGraphTable(panel,commands,record);
+    panel.appendChild(description);
     column.appendChild(panel);
+    return {commands,panel};
   }
   function renderSelectedEvidence(detail,record){
     if(state.error){
-      addText(detail,'div','v9-recovery-empty',recoveryServerHelp(state.error));
+      renderError(detail,state.error);
       return;
     }
     if(state.loading){
-      addText(detail,'div','v9-recovery-status','Loading selected evidence...');
+      renderLoading(detail);
       return;
     }
+    detail.setAttribute('aria-busy','false');
     if(record.detailKind===null){
       renderRecordStatus(detail,record);return;
     }
@@ -2850,70 +3294,79 @@ function mountRecoveryExplorerV3(root,artifact,tools){
     }else{
       addText(detail,'div','v9-recovery-status','Hybrid technical detail');
     }
-    if(!renderEvidenceBoundary(detail,detailView.evidenceBoundary)){
+    if(!validateRecoveryEvidenceBoundary(
+      {evidence_boundary:detailView.evidenceBoundary},record.scoring_day).available){
       renderRecordStatus(detail,record);return;
     }
-    const evidence=recoveryElement(doc,'div','v9-recovery-evidence-grid');
-    const left=recoveryElement(doc,'div');
-    const right=recoveryElement(doc,'div');
+    const graph=renderGraph(detail,detailView,record);
+    const commands=graph.commands;
+    if(!commands){renderRecordStatus(detail,record);return;}
+    graphContext={detailView,record,panel:graph.panel,tablesBody:null};
+    const explanationRow=recoveryElement(doc,'div','v9-recovery-explanation-row');
     if(detailView.kind==='gnn_explanation'){
-      renderFactors(left,detailView.explanation);
-      renderStabilityAndFaithfulness(left,detailView.explanation);
-      renderNarrative(left,detailView.explanation);
-      left.appendChild(renderHighestAttributionPanel(doc,detailView.explanation));
+      explanationRow.appendChild(renderHighestAttributionPanel(doc,detailView.explanation));
+      renderFactors(explanationRow,detailView.explanation);
+      renderNarrative(explanationRow,detailView.explanation);
     }else{
       const note=recoveryElement(doc,'section','v9-recovery-panel');
       addText(note,'h5','','Structural evidence only');
       addText(note,'p','',
-        'Community membership is observable context, not an attribution claim. Attribution, counterfactual factor, stability, and faithfulness panels are suppressed for a control.');
-      left.appendChild(note);
+        'Community membership is observable context, not an attribution claim.');
+      explanationRow.appendChild(note);
     }
-    renderGraph(right,detailView,record);
-    evidence.appendChild(left);evidence.appendChild(right);
-    detail.appendChild(evidence);
+    detail.appendChild(explanationRow);
+    const disclosures=recoveryElement(doc,'div','v9-recovery-disclosures');
+    if(detailView.kind==='gnn_explanation'){
+      renderDisclosure(disclosures,'stability',
+        'Restart stability and removal faithfulness',body=>
+          renderStabilityAndFaithfulness(body,detailView.explanation));
+    }
+    renderDisclosure(disclosures,'tables','Complete community data tables',body=>{
+      graphContext.tablesBody=body;
+      renderGraphTable(body,commands,record);
+    });
+    renderDisclosure(disclosures,'cohort','Recovery cohort context',body=>
+      renderCohortContext(body,record));
+    detail.appendChild(disclosures);
     renderRecordStatus(detail,record);
   }
   function render(){
-    canvasCleanup();canvasCleanup=function(){};pendingCanvas=null;
-    const fragment=doc.createDocumentFragment();renderHeader(fragment);
+    canvasCleanup();canvasCleanup=function(){};pendingCanvas=null;graphContext=null;
+    const fragment=doc.createDocumentFragment();
     if(!view.available){
+      const heading=recoveryElement(doc,'h3','v9-recovery-title',
+        'Published GNN explanations unavailable');
+      heading.id='v9-recovery-title';fragment.appendChild(heading);
       addText(fragment,'div','v9-recovery-empty',
-        'Case evidence unavailable. '+view.reason+'.');
+        'Case evidence unavailable. Published GNN explanations are unavailable. '
+          +view.reason+'.');
       root.replaceChildren(fragment);return;
     }
-    renderSummary(fragment);renderFilters(fragment);
-    const grid=recoveryElement(doc,'div','v9-recovery-v2-grid');
-    const list=recoveryElement(doc,'aside','v9-recovery-v2-list');
-    list.setAttribute('aria-label','Recovery cases');
     const rows=visibleRows();
-    if(!rows.length){
-      addText(list,'div','v9-recovery-empty','No cases match the current filter.');
-    }
-    for(const record of rows){
-      const button=recoveryElement(doc,'button','v9-recovery-case');
-      button.type='button';button.dataset.v3Case=record.caseId;
-      button.setAttribute('aria-current',String(record.caseId===state.caseId));
-      button.setAttribute('aria-label','Inspect recovery case '+record.personId);
-      addText(button,'strong','',record.personId);
-      addText(button,'div','v9-recovery-case-meta',
-        record.cohort+' · '+(record.detailStatus||'not_selected')
-          +' · B '+fmt(record.baseline_rank)
-          +' / H '+fmt(record.seed0_hybrid_rank));
-      list.appendChild(button);
-    }
-    grid.appendChild(list);
-    const detail=recoveryElement(doc,'div','v9-recovery-v2-detail');
     const record=currentRecord();
+    renderSelectedHeader(fragment,record,rows);
+    if(!rows.length){
+      const empty=recoveryElement(doc,'section','v9-recovery-empty-state');
+      addText(empty,'h4','',
+        'No published GNN explanations are available in this artifact.');
+      addText(empty,'p','',
+        'The recovery summary remains available, but no case has validated published explanation detail.');
+      const disclosures=recoveryElement(doc,'div','v9-recovery-disclosures');
+      renderDisclosure(disclosures,'cohort','Recovery cohort context',body=>
+        renderCohortContext(body,null));
+      empty.appendChild(disclosures);
+      fragment.appendChild(empty);
+      root.replaceChildren(fragment);return;
+    }
+    if(record)renderRanks(fragment,record);
+    const grid=recoveryElement(doc,'div','v9-recovery-v3-grid');
+    renderCaseNavigation(grid,rows);
+    const detail=recoveryElement(doc,'div','v9-recovery-v3-detail');
+    detail.setAttribute('aria-label','Selected GNN explanation');
     if(!record){
       addText(detail,'div','v9-recovery-empty',
-        'Select a case to inspect its published evidence.');
+        'Select a published GNN explanation to inspect its evidence.');
     }else{
-      const header=recoveryElement(doc,'header','v9-recovery-case-header');
-      addText(header,'h4','','Case '+record.personId);
-      addText(header,'p','','Event '+record.event_id+' / scoring day '
-        +record.scoring_day+' / selection: '+record.selectionReason+'.');
-      detail.appendChild(header);
-      renderRanks(detail,record);
       renderSelectedEvidence(detail,record);
     }
     grid.appendChild(detail);fragment.appendChild(grid);
@@ -2929,7 +3382,9 @@ function mountRecoveryExplorerV3(root,artifact,tools){
     state.caseData=null;state.community=null;state.nodeRows=null;
     state.edgeRows=null;state.overlayNodeRows=null;state.overlayEdgeRows=null;
     state.error=null;state.loading=false;
+    state.relationship='all';state.scale=1;state.offsetX=0;state.offsetY=0;
     state.selectedFactorId=null;state.nodeTablePage=0;state.edgeTablePage=0;
+    state.openDisclosures.clear();
     if(!record||record.detailKind===null){render();return;}
     const caseRef=view.detailIndex[state.caseId]||view.communityIndex[state.caseId];
     if(!caseRef){
@@ -2941,6 +3396,8 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       const payload=await recoveryFetchJson(
         recoverySidecarUrl(view,caseRef.path),caseRef.sha256);
       if(disposed||token!==requestToken)return;
+      // The published bundle manifest is schema 3.0, while case sidecar
+      // payloads retain the writer's schema 1.0 envelope.
       if(!recoveryIsRecord(payload)
           ||!['1.0','3.0'].includes(payload.schema_version)
           ||!recoveryIsRecord(payload.case)||payload.case.case_id!==state.caseId
@@ -3046,7 +3503,7 @@ function mountRecoveryExplorerV3(root,artifact,tools){
   function onV3Click(event){
     const target=event.target.closest&&event.target.closest(
       '[data-v3-filter],[data-v3-case],[data-v3-mode],[data-v3-stage],'
-        +'[data-v3-zoom],[data-v3-factor],[data-v3-page]');
+        +'[data-v3-relation],[data-v3-zoom],[data-v3-factor],[data-v3-page],[data-v3-retry]');
     if(!target||!root.contains(target))return;
     const data=target.dataset;
     if(data.v3Filter){
@@ -3056,25 +3513,39 @@ function mountRecoveryExplorerV3(root,artifact,tools){
         state.caseId=(rows[0]||{}).caseId||null;
         loadSelected();return;
       }
+      const anchorTop=measureAnchor(target);
       render();
-      restoreV3Focus('data-v3-filter','v3Filter',data.v3Filter);return;
+      restoreV3Focus('data-v3-filter','v3Filter',data.v3Filter);
+      restoreAnchor(root.querySelector('[data-v3-filter="'+data.v3Filter+'"]'),
+        anchorTop);
+      return;
     }
     if(data.v3Case){
       if(data.v3Case===state.caseId){render();return;}
       state.caseId=data.v3Case;loadSelected();return;
     }
+    if(data.v3Retry){loadSelected();return;}
     if(data.v3Mode){
-      state.mode=data.v3Mode;render();
-      restoreV3Focus('data-v3-mode','v3Mode',data.v3Mode);return;
+      state.mode=data.v3Mode;state.scale=1;state.offsetX=0;state.offsetY=0;
+      renderGraphOnly('data-v3-mode','v3Mode',data.v3Mode);return;
     }
     if(data.v3Stage){
-      state.stageId=data.v3Stage;render();
-      restoreV3Focus('data-v3-stage','v3Stage',data.v3Stage);return;
+      state.stageId=data.v3Stage;state.scale=1;state.offsetX=0;state.offsetY=0;
+      renderGraphOnly('data-v3-stage','v3Stage',data.v3Stage);return;
+    }
+    if(data.v3Relation){
+      state.relationship=data.v3Relation;
+      state.scale=1;state.offsetX=0;state.offsetY=0;
+      renderGraphOnly('data-v3-relation','v3Relation',data.v3Relation);return;
     }
     if(data.v3Factor){
       state.selectedFactorId=state.selectedFactorId===data.v3Factor
         ?null:data.v3Factor;
-      render();return;
+      const anchorTop=measureAnchor(target);
+      render();
+      restoreAnchor(root.querySelector('[data-v3-factor="'+data.v3Factor+'"]'),
+        anchorTop);
+      return;
     }
     if(data.v3Page){
       const direction=data.v3Page.endsWith('next')?1:-1;
@@ -3083,18 +3554,24 @@ function mountRecoveryExplorerV3(root,artifact,tools){
       }else{
         state.edgeTablePage=Math.max(0,state.edgeTablePage+direction);
       }
+      const anchorTop=measureAnchor(target);
       render();
-      restoreV3Focus('data-v3-page','v3Page',data.v3Page);return;
+      restoreV3Focus('data-v3-page','v3Page',data.v3Page);
+      restoreAnchor(root.querySelector('[data-v3-page="'+data.v3Page+'"]'),
+        anchorTop);
+      return;
     }
     if(data.v3Zoom==='in')state.scale=Math.min(6,state.scale*1.25);
     else if(data.v3Zoom==='out')state.scale=Math.max(.25,state.scale/1.25);
     else{state.scale=1;state.offsetX=0;state.offsetY=0;}
-    render();
-    restoreV3Focus('data-v3-zoom','v3Zoom',data.v3Zoom);
+    // Zoom and reset change nothing in the DOM, so repaint the live canvas.
+    if(!redrawCanvas())renderGraphOnly('data-v3-zoom','v3Zoom',data.v3Zoom);
   }
   function onV3Input(event){
     if(event.target.dataset.v3Input==='search'){
-      state.query=event.target.value;render();
+      state.query=event.target.value;
+      if(refreshCanvasCommands())return;
+      render();
       if(restoreV3Focus('data-v3-input','v3Input','search')){
         const control=root.querySelector('[data-v3-input="search"]');
         if(control&&typeof control.setSelectionRange==='function'){
@@ -3104,13 +3581,28 @@ function mountRecoveryExplorerV3(root,artifact,tools){
     }
   }
   function onV3Change(event){
-    if(event.target.dataset.v3Change==='density'){
-      state.labelDensity=event.target.value;render();
+    const control=event.target;const data=control.dataset;
+    if(data.v3Change==='case'){
+      state.caseId=control.value;loadSelected();return;
+    }
+    if(data.v3Change==='density'){
+      state.labelDensity=control.value;
+      if(redrawCanvas())return;
+      render();
       restoreV3Focus('data-v3-change','v3Change','density');
     }
   }
+  function onV3Toggle(event){
+    const details=event.target;
+    if(!details||!root.contains(details)||!details.dataset
+        ||!details.dataset.v3Disclosure)return;
+    const key=details.dataset.v3Disclosure;
+    if(details.open)state.openDisclosures.add(key);
+    else state.openDisclosures.delete(key);
+  }
   root.addEventListener('click',onV3Click);root.addEventListener('input',onV3Input);
   root.addEventListener('change',onV3Change);
+  root.addEventListener('toggle',onV3Toggle,true);
   root.classList.add('v9-recovery','v9-recovery-v3');render();
   if(state.caseId)loadSelected();
   return function(){disposed=true;requestToken++;canvasCleanup();
@@ -3119,7 +3611,8 @@ function mountRecoveryExplorerV3(root,artifact,tools){
     }
     root.removeEventListener('click',onV3Click);
     root.removeEventListener('input',onV3Input);
-    root.removeEventListener('change',onV3Change);};
+    root.removeEventListener('change',onV3Change);
+    root.removeEventListener('toggle',onV3Toggle,true);};
 }
 
 const recoveryMounts=new WeakMap();
@@ -3128,550 +3621,8 @@ function mountV9RecoveryExplainer(root,artifact,tools){
   if(!root||!root.ownerDocument||!root.classList) return;
   const prior=recoveryMounts.get(root);
   if(prior) prior();
-  if(recoveryIsRecord(artifact)&&artifact.schema_version==='3.0'){
-    root.classList.add('v9-recovery');
-    const cleanup=mountRecoveryExplorerV3(root,artifact,tools);
-    recoveryMounts.set(root,cleanup);
-    return;
-  }
-  if(recoveryIsRecord(artifact)&&artifact.schema_version==='2.0'){
-    root.classList.add('v9-recovery');
-    const cleanup=mountRecoveryExplorerV2(root,artifact,tools);
-    recoveryMounts.set(root,cleanup);
-    return;
-  }
-  const doc=root.ownerDocument;
-  const helpers=recoveryIsRecord(tools)?tools:{};
-  const fmt=typeof helpers.fmt==='function'?helpers.fmt:
-    value=>Number(value||0).toLocaleString();
-  const view=buildRecoveryEvidenceViewModel(artifact);
-  const state={
-    caseId:null,
-    sortBy:'hybrid_rank_uplift',
-    stableStatus:'all',
-    relationshipCategory:'all',
-    evidence:'all',
-    mode:'flow',
-    stageId:'first_hop',
-    selectedFactorId:null,
-    query:'',
-    scale:1,
-    offsetX:0,
-    offsetY:0,
-    labelDensity:'auto'
-  };
-  let canvasCleanup=function(){};
-  let pendingCanvas=null;
   root.classList.add('v9-recovery');
-
-  function addHeader(fragment){
-    const header=recoveryElement(doc,'header','v9-recovery-header');
-    const copy=recoveryElement(doc,'div');
-    copy.appendChild(recoveryElement(doc,'div','v9-recovery-eyebrow','Seed-0 evidence audit'));
-    const title=recoveryElement(doc,'h3','v9-recovery-title','Why Hybrid recovered more cases');
-    title.id='v9-recovery-title';
-    copy.appendChild(title);
-    copy.appendChild(recoveryElement(
-      doc,'p','v9-recovery-intro',
-      'Inspect measured rank changes, complete message communities, and validated narrative evidence for Hybrid-only recoveries.'
-    ));
-    header.appendChild(copy);
-    const scope=recoveryElement(doc,'div','v9-recovery-scope');
-    scope.textContent='Single-seed observability \u00b7 GraphSAGE seed 0';
-    scope.appendChild(recoveryElement(
-      doc,'small','',
-      'Main results remain three-seed'
-    ));
-    header.appendChild(scope);
-    fragment.appendChild(header);
-  }
-
-  function addSummary(fragment){
-    if(view.summary.unavailable){
-      fragment.appendChild(recoveryElement(
-        doc,'div','v9-recovery-status',
-        'Overlap unavailable; no values are inferred.'
-      ));
-    }else{
-      const labels=[
-        ['baseline_recovered','Baseline recovered'],
-        ['recovered_by_both','Recovered by both'],
-        ['hybrid_only_recovered','Hybrid-only recovered'],
-        ['baseline_only_recovered','Baseline-only recovered'],
-        ['hybrid_total','Hybrid total'],
-        ['net_gain','Net gain']
-      ];
-      const grid=recoveryElement(doc,'div','v9-recovery-summary');
-      grid.setAttribute('aria-label','Seed-0 recovery overlap summary');
-      for(const pair of labels){
-        const card=recoveryElement(doc,'article','v9-recovery-stat');
-        if(pair[0]==='baseline_only_recovered'&&!view.summary.containment){
-          card.classList.add('is-warning');
-        }
-        card.appendChild(recoveryElement(doc,'b','',fmt(view.summary.values[pair[0]])));
-        card.appendChild(recoveryElement(doc,'span','',pair[1]));
-        grid.appendChild(card);
-      }
-      fragment.appendChild(grid);
-      fragment.appendChild(recoveryElement(
-        doc,'div',view.summary.containment
-          ?'v9-recovery-containment':'v9-recovery-warning',
-        view.summary.containment
-          ?'Observed containment: every baseline recovery also appears in Hybrid for this seed-0 run.'
-          :view.summary.warning
-      ));
-    }
-    const coverage=view.coverage;
-    const validCoverage=recoveryIsRecord(coverage)
-      &&['hybrid_only_count','explanation_limit','attempted_count','explained_count','failed_count']
-        .every(key=>recoverySafeInteger(coverage[key],false));
-    const coverageRow=recoveryElement(doc,'div','v9-recovery-coverage');
-    coverageRow.appendChild(recoveryElement(
-      doc,'span','',validCoverage
-        ?fmt(coverage.explained_count)+' of '+fmt(coverage.hybrid_only_count)
-          +' Hybrid-only cases explained; '+fmt(coverage.attempted_count)
-          +' attempted under limit '+fmt(coverage.explanation_limit)+'.'
-        :'Coverage unavailable; artifact fields failed validation.'
-    ));
-    coverageRow.appendChild(recoveryElement(
-      doc,'span','',validCoverage
-        ?fmt(coverage.failed_count)+' explanation attempts failed validation.'
-        :'Failure count unavailable.'
-    ));
-    fragment.appendChild(coverageRow);
-  }
-
-  function renderCaseRail(workspace,filtered){
-    const rail=recoveryElement(doc,'aside','v9-recovery-rail');
-    rail.setAttribute('aria-label','Recovery case filters and cases');
-    const filters=recoveryElement(doc,'div','v9-recovery-filter-grid');
-    filters.appendChild(recoverySelect(doc,'Sort','sort',[
-      {value:'hybrid_rank_uplift',label:'Hybrid rank uplift'},
-      {value:'gnn_percentile_uplift',label:'GNN percentile uplift'}
-    ],state.sortBy));
-    filters.appendChild(recoverySelect(doc,'Stable factor','stable',[
-      {value:'all',label:'All statuses'},
-      {value:'stable',label:'Stable'},
-      {value:'unstable',label:'Unstable'},
-      {value:'not_explained',label:'Not explained'}
-    ],state.stableStatus));
-    const relations=Array.from(new Set(view.cases.flatMap(item=>
-      item.relationship_categories))).sort();
-    filters.appendChild(recoverySelect(doc,'Relationship','relation',[
-      {value:'all',label:'All relationships'},
-      ...relations.map(value=>({value,label:recoveryVisibleText(value)}))
-    ],state.relationshipCategory));
-    filters.appendChild(recoverySelect(doc,'Evidence','evidence',[
-      {value:'all',label:'All cases'},
-      {value:'explained',label:'Validated evidence only'}
-    ],state.evidence));
-    rail.appendChild(filters);
-    rail.appendChild(recoveryElement(
-      doc,'div','v9-recovery-case-count',
-      fmt(filtered.length)+' of '+fmt(view.cases.length)+' cases'
-    ));
-    const list=recoveryElement(doc,'div','v9-recovery-case-list');
-    for(const item of filtered){
-      const button=recoverySetData(
-        recoveryElement(doc,'button','v9-recovery-case'),'case',item.case_id
-      );
-      button.type='button';
-      button.setAttribute('aria-current',String(item.case_id===state.caseId));
-      button.setAttribute('aria-label','Inspect recovery case '+item.person_id);
-      const top=recoveryElement(doc,'div','v9-recovery-case-top');
-      top.appendChild(recoveryElement(doc,'span','',item.person_id));
-      top.appendChild(recoveryElement(
-        doc,'span','',recoverySigned(item.hybrid_rank_uplift)+' ranks'
-      ));
-      button.appendChild(top);
-      const ranks=recoveryElement(doc,'div','v9-recovery-case-ranks');
-      ranks.appendChild(recoveryElement(doc,'span','','B '+fmt(item.baseline_rank)));
-      ranks.appendChild(recoveryElement(doc,'span','','G '+fmt(item.seed0_gnn_rank)));
-      ranks.appendChild(recoveryElement(doc,'span','','H '+fmt(item.seed0_hybrid_rank)));
-      button.appendChild(ranks);
-      button.appendChild(recoveryElement(
-        doc,'div','v9-recovery-case-meta',
-        item.stable_factor_status+' / '+item.relationship_categories.join(' / ')
-      ));
-      if(view.explanations.has(item.case_id)){
-        button.appendChild(recoveryElement(
-          doc,'div','v9-recovery-case-evidence','✓ evidence'
-        ));
-      }
-      list.appendChild(button);
-    }
-    rail.appendChild(list);
-    workspace.appendChild(rail);
-  }
-
-  function renderNarrative(detail,explanation){
-    const panel=recoveryElement(doc,'section','v9-recovery-narrative');
-    panel.appendChild(recoveryElement(doc,'h5','','Grounded narrative'));
-    const narrative=validateRecoveryNarrative(explanation.llm_narrative);
-    if(!narrative.visible){
-      panel.appendChild(recoveryElement(
-        doc,'p','',
-        'Validated narrative unavailable. Measured factors remain authoritative.'
-      ));
-    }else{
-      panel.appendChild(recoveryElement(
-        doc,'p','',narrative.source==='llm'
-          ?'Validated local Gemma: '+narrative.model
-          :'Deterministic evidence summary. Local Gemma output was unavailable or rejected.'
-      ));
-      panel.appendChild(recoveryElement(doc,'p','',narrative.summary));
-      recoveryAppendSources(doc,panel,narrative.summarySourceRefs);
-      for(const claim of narrative.claims){
-        panel.appendChild(recoveryElement(doc,'p','',claim.text));
-        recoveryAppendSources(doc,panel,claim.source_refs);
-      }
-    }
-    detail.appendChild(panel);
-  }
-
-  function renderFactors(column,explanation){
-    const panel=recoveryElement(doc,'section','v9-recovery-panel');
-    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
-    head.appendChild(recoveryElement(doc,'h5','','Salient counterfactual factors'));
-    head.appendChild(recoveryElement(
-      doc,'p','',
-      'Signed effect is ablated rank minus original rank. Positive values mean removal worsened rank.'
-    ));
-    panel.appendChild(head);
-    const factors=Array.isArray(explanation.factors)
-      ?explanation.factors.filter(recoveryValidFactor).slice():[];
-    factors.sort((left,right)=>
-      Number(right.stability==='stable')-Number(left.stability==='stable')
-      ||Math.abs(right.counterfactual.ablated_hybrid_rank-right.counterfactual.original_hybrid_rank)
-        -Math.abs(left.counterfactual.ablated_hybrid_rank-left.counterfactual.original_hybrid_rank)
-      ||recoveryCompareId(left.factor_id,right.factor_id));
-    if(!factors.some(factor=>factor.stability==='stable')){
-      panel.appendChild(recoveryElement(
-        doc,'div','v9-recovery-status',
-        'No stable factor found; inspect measured effects below.'
-      ));
-    }
-    if(!factors.length){
-      panel.appendChild(recoveryElement(
-        doc,'div','v9-recovery-status',
-        'No measured factors are available for this explanation.'
-      ));
-    }else{
-      const list=recoveryElement(doc,'div','v9-recovery-factor-list');
-      for(const factor of factors){
-        const button=recoverySetData(
-          recoveryElement(doc,'button','v9-recovery-factor'),
-          'factor',factor.factor_id
-        );
-        button.type='button';
-        button.setAttribute('aria-pressed',String(
-          state.selectedFactorId===factor.factor_id
-        ));
-        button.setAttribute('aria-label','Show provenance for '+recoveryVisibleText(factor.label));
-        button.appendChild(recoveryElement(
-          doc,'strong','',factor.label+' / '+factor.stability
-        ));
-        const effect=factor.counterfactual.ablated_hybrid_rank
-          -factor.counterfactual.original_hybrid_rank;
-        button.appendChild(recoveryElement(
-          doc,'span','',
-          recoverySigned(effect)+' ranks / Ablated minus original'
-        ));
-        list.appendChild(button);
-      }
-      panel.appendChild(list);
-    }
-    column.appendChild(panel);
-  }
-
-  function graphButton(label,action,value,pressed,ariaLabel){
-    const button=recoverySetData(
-      recoveryElement(doc,'button','v9-recovery-button',label),action,value
-    );
-    button.type='button';
-    if(pressed!==null) button.setAttribute('aria-pressed',String(pressed));
-    button.setAttribute('aria-label',ariaLabel||label);
-    return button;
-  }
-
-  function renderGraph(column,explanation){
-    const panel=recoveryElement(doc,'section','v9-recovery-panel');
-    const head=recoveryElement(doc,'div','v9-recovery-panel-head');
-    head.appendChild(recoveryElement(doc,'h5','','Complete as-of message community'));
-    head.appendChild(recoveryElement(
-      doc,'p','',
-      'Base nodes and edges remain visible in every mode. Flow changes emphasis only.'
-    ));
-    panel.appendChild(head);
-    const toolbar=recoveryElement(doc,'div','v9-recovery-toolbar');
-    toolbar.setAttribute('role','toolbar');
-    toolbar.setAttribute('aria-label','Community graph controls');
-    const modes=recoveryElement(doc,'div','v9-recovery-toolgroup');
-    modes.appendChild(graphButton('All','mode','all',state.mode==='all','Show all relationships'));
-    modes.appendChild(graphButton('Flow','mode','flow',state.mode==='flow','Show influence flow emphasis'));
-    toolbar.appendChild(modes);
-    const stages=recoveryElement(doc,'div','v9-recovery-toolgroup');
-    const stageLabels={
-      first_hop:'First hop',
-      second_hop:'Second hop',
-      component_pool:'Component pool',
-      rank_fusion:'Rank fusion'
-    };
-    for(const stageId of Object.keys(stageLabels)){
-      stages.appendChild(graphButton(
-        stageLabels[stageId],'stage',stageId,state.stageId===stageId,
-        'Show '+stageLabels[stageId].toLowerCase()+' stage'
-      ));
-    }
-    toolbar.appendChild(stages);
-    const zoom=recoveryElement(doc,'div','v9-recovery-toolgroup');
-    zoom.appendChild(graphButton('+','zoom','in',null,'Zoom in'));
-    zoom.appendChild(graphButton('-','zoom','out',null,'Zoom out'));
-    zoom.appendChild(graphButton('Reset','zoom','reset',null,'Reset zoom'));
-    zoom.appendChild(graphButton('Fit','zoom','fit',null,'Fit to community'));
-    toolbar.appendChild(zoom);
-    const search=recoveryElement(doc,'input','v9-recovery-search');
-    search.type='search';
-    search.value=state.query;
-    search.placeholder='Find node';
-    search.dataset.recoveryInput='search';
-    search.setAttribute('aria-label','Search node identifiers');
-    toolbar.appendChild(search);
-    const density=recoveryElement(doc,'select','v9-recovery-select');
-    density.dataset.recoveryChange='density';
-    density.setAttribute('aria-label','Node label density');
-    for(const pair of [['auto','Labels: auto'],['all','Labels: all'],['none','Labels: none']]){
-      const option=recoveryElement(doc,'option','',pair[1]);
-      option.value=pair[0];
-      density.appendChild(option);
-    }
-    density.value=state.labelDensity;
-    toolbar.appendChild(density);
-    panel.appendChild(toolbar);
-    const description=recoveryElement(
-      doc,'p','v9-recovery-canvas-note',
-      'Relation colors show observable context, not relation-specific GraphSAGE parameters. Dashed amber links are selected factor provenance outside the message community.'
-    );
-    description.id='v9-recovery-canvas-description';
-    panel.appendChild(description);
-    const commands=buildCommunityDrawCommands(explanation,{
-      mode:state.mode,
-      stageId:state.stageId,
-      selectedFactorId:state.selectedFactorId,
-      query:state.query
-    });
-    if(!commands.available){
-      panel.appendChild(recoveryElement(
-        doc,'div','v9-recovery-empty',
-        'Complete community unavailable. '+commands.reason+'.'
-      ));
-    }else{
-      const wrap=recoveryElement(doc,'div','v9-recovery-canvas-wrap');
-      const canvas=recoveryElement(doc,'canvas','v9-recovery-canvas');
-      canvas.tabIndex=0;
-      canvas.setAttribute('role','img');
-      canvas.setAttribute('aria-label','Interactive complete community for the selected seed-0 recovery case');
-      canvas.setAttribute('aria-describedby','v9-recovery-canvas-description');
-      canvas.textContent='Interactive community graph. Use the toolbar for keyboard controls.';
-      wrap.appendChild(canvas);
-      panel.appendChild(wrap);
-      pendingCanvas={canvas,commands};
-    }
-    column.appendChild(panel);
-  }
-
-  function renderDetail(workspace,selected){
-    const detail=recoveryElement(doc,'div','v9-recovery-detail');
-    if(!selected){
-      detail.appendChild(recoveryElement(
-        doc,'div','v9-recovery-empty','No cases match the current filters.'
-      ));
-      workspace.appendChild(detail);
-      return;
-    }
-    const header=recoveryElement(doc,'header','v9-recovery-case-header');
-    const identity=recoveryElement(doc,'div');
-    identity.appendChild(recoveryElement(doc,'h4','','Case '+selected.person_id));
-    identity.appendChild(recoveryElement(
-      doc,'p','',
-      'Event '+selected.event_id+' / scoring day '+selected.scoring_day
-        +' / Selected at 25 inspections/day.'
-    ));
-    header.appendChild(identity);
-    const ranks=recoveryElement(doc,'div','v9-recovery-ranks');
-    for(const item of [
-      ['Baseline',selected.baseline_rank],
-      ['GraphSAGE seed 0',selected.seed0_gnn_rank],
-      ['Hybrid seed 0',selected.seed0_hybrid_rank]
-    ]){
-      const rank=recoveryElement(doc,'div','v9-recovery-rank');
-      rank.appendChild(recoveryElement(doc,'b','',fmt(item[1])));
-      rank.appendChild(recoveryElement(doc,'span','',item[0]+' rank'));
-      ranks.appendChild(rank);
-    }
-    header.appendChild(ranks);
-    detail.appendChild(header);
-    const explanation=view.explanations.get(selected.case_id);
-    if(!explanation){
-      detail.appendChild(recoveryElement(
-        doc,'div','v9-recovery-empty',
-        'No validated explanation is available for this case.'
-      ));
-      workspace.appendChild(detail);
-      return;
-    }
-    const boundaryView=validateRecoveryEvidenceBoundary(
-      explanation,selected.scoring_day
-    );
-    if(!boundaryView.available){
-      detail.appendChild(recoveryElement(
-        doc,'div','v9-recovery-empty',
-        'Strict as-of evidence boundary unavailable. Evidence details are not rendered.'
-      ));
-      workspace.appendChild(detail);
-      return;
-    }
-    detail.appendChild(recoveryElement(
-      doc,'div','v9-recovery-status',
-      'Strict as-of evidence boundary: snapshot '+boundaryView.snapshot
-        +'. Edges: '+boundaryView.edgeRule+'. Caught labels: '
-        +boundaryView.caughtRule+'.'
-    ));
-    const evidence=recoveryElement(doc,'div','v9-recovery-evidence-grid');
-    const left=recoveryElement(doc,'div');
-    const right=recoveryElement(doc,'div');
-    renderFactors(left,explanation);
-    renderNarrative(left,explanation);
-    left.appendChild(renderHighestAttributionPanel(doc,explanation));
-    renderGraph(right,explanation);
-    evidence.appendChild(left);
-    evidence.appendChild(right);
-    detail.appendChild(evidence);
-    workspace.appendChild(detail);
-  }
-
-  function render(){
-    canvasCleanup();
-    canvasCleanup=function(){};
-    pendingCanvas=null;
-    const fragment=doc.createDocumentFragment();
-    addHeader(fragment);
-    if(!view.available){
-      fragment.appendChild(recoveryElement(
-        doc,'div','v9-recovery-empty',
-        'Case evidence unavailable. '+view.reason+'.'
-      ));
-      root.replaceChildren(fragment);
-      return;
-    }
-    addSummary(fragment);
-    if(view.cases.length===0){
-      fragment.appendChild(recoveryElement(
-        doc,'div','v9-recovery-empty',
-        'No Hybrid-only recoveries in this seed-0 run.'
-      ));
-      root.replaceChildren(fragment);
-      return;
-    }
-    const filtered=filterAndSortRecoveryCases(view.cases,{
-      sortBy:state.sortBy,
-      stableStatus:state.stableStatus,
-      relationshipCategory:state.relationshipCategory,
-      explainedIds:Array.from(view.explanations.keys()),
-      evidence:state.evidence
-    });
-    if(!filtered.some(item=>item.case_id===state.caseId)){
-      state.caseId=filtered.length?filtered[0].case_id:null;
-      state.selectedFactorId=null;
-      state.scale=1;
-      state.offsetX=0;
-      state.offsetY=0;
-    }
-    const selected=filtered.find(item=>item.case_id===state.caseId)||null;
-    const workspace=recoveryElement(doc,'div','v9-recovery-workspace');
-    renderCaseRail(workspace,filtered);
-    renderDetail(workspace,selected);
-    fragment.appendChild(workspace);
-    root.replaceChildren(fragment);
-    if(pendingCanvas){
-      canvasCleanup=bindRecoveryCanvas(
-        pendingCanvas.canvas,pendingCanvas.commands,state
-      );
-    }
-  }
-
-  function onClick(event){
-    const target=event.target;
-    if(!target||typeof target.closest!=='function') return;
-    const control=target.closest('[data-recovery-action]');
-    if(!control||!root.contains(control)) return;
-    const action=control.dataset.recoveryAction;
-    const value=control.dataset.recoveryValue;
-    if(action==='case'){
-      state.caseId=value;
-      state.selectedFactorId=null;
-      state.scale=1;
-      state.offsetX=0;
-      state.offsetY=0;
-    }else if(action==='factor'){
-      state.selectedFactorId=state.selectedFactorId===value?null:value;
-    }else if(action==='mode'){
-      state.mode=value;
-    }else if(action==='stage'){
-      state.stageId=value;
-    }else if(action==='zoom'){
-      if(value==='in') state.scale=Math.min(4,state.scale*1.2);
-      if(value==='out') state.scale=Math.max(.5,state.scale/1.2);
-      if(value==='reset'){
-        state.scale=1;
-        state.offsetX=0;
-        state.offsetY=0;
-      }
-      if(value==='fit'){
-        state.scale=1;
-        state.offsetX=0;
-        state.offsetY=0;
-      }
-    }
-    render();
-    recoveryRestoreFocus(root,'recoveryAction',action,value);
-  }
-  function onChange(event){
-    const control=event.target;
-    if(!control||!control.dataset) return;
-    const action=control.dataset.recoveryChange;
-    if(action==='sort') state.sortBy=control.value;
-    if(action==='stable') state.stableStatus=control.value;
-    if(action==='relation') state.relationshipCategory=control.value;
-    if(action==='evidence') state.evidence=control.value;
-    if(action==='density') state.labelDensity=control.value;
-    if(action){
-      render();
-      recoveryRestoreFocus(root,'recoveryChange',action);
-    }
-  }
-  function onInput(event){
-    const control=event.target;
-    if(!control||!control.dataset||control.dataset.recoveryInput!=='search') return;
-    state.query=control.value;
-    render();
-    const replacement=root.querySelector('[data-recovery-input="search"]');
-    if(replacement){
-      replacement.focus();
-      replacement.setSelectionRange(state.query.length,state.query.length);
-    }
-  }
-  root.addEventListener('click',onClick);
-  root.addEventListener('change',onChange);
-  root.addEventListener('input',onInput);
-  const cleanup=function(){
-    canvasCleanup();
-    root.removeEventListener('click',onClick);
-    root.removeEventListener('change',onChange);
-    root.removeEventListener('input',onInput);
-    recoveryMounts.delete(root);
-  };
+  const cleanup=mountRecoveryExplorerV3(root,artifact,tools);
   recoveryMounts.set(root,cleanup);
-  render();
 }
 """
