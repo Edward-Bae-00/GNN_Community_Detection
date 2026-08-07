@@ -33,16 +33,39 @@ def test_validate_corpus_import_is_silent_and_argument_free():
     assert result.stderr == ""
 
 
-def test_validate_corpus_repeated_invalid_calls_do_not_leak_state(capsys):
+def test_validate_corpus_main_resets_state_between_successful_calls(monkeypatch, tmp_path):
     from scripts.data import validate_corpus
 
-    assert validate_corpus.main([]) == 2
-    first = capsys.readouterr()
-    assert "usage:" in first.err
+    calls = []
 
-    assert validate_corpus.main([]) == 2
-    second = capsys.readouterr()
-    assert "usage:" in second.err
+    def fake_run_validation():
+        calls.append(
+            (
+                validate_corpus.DIR,
+                id(validate_corpus.FAIL),
+                id(validate_corpus.WARN),
+                id(validate_corpus.INFO),
+                list(validate_corpus.FAIL),
+                list(validate_corpus.WARN),
+                list(validate_corpus.INFO),
+            )
+        )
+        validate_corpus.FAIL.append("sentinel")
+        validate_corpus.WARN.append("sentinel")
+        validate_corpus.INFO.append("sentinel")
+        return 0
+
+    monkeypatch.setattr(validate_corpus, "_run_validation", fake_run_validation)
+    first = tmp_path / "first-corpus"
+    second = tmp_path / "second-corpus"
+
+    assert validate_corpus.main([str(first)]) == 0
+    assert validate_corpus.main([str(second)]) == 0
+
+    assert [call[0] for call in calls] == [first, second]
+    assert calls[0][1:4] != calls[1][1:4]
+    assert calls[0][4:] == ([], [], [])
+    assert calls[1][4:] == ([], [], [])
 
 
 def test_direct_build_dashboard_script_reaches_usage_handling():

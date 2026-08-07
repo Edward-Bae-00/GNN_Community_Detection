@@ -72,14 +72,14 @@ existing `.venv` for this checkout.
 ├── scripts/
 │   ├── data/validate_corpus.py
 │   └── dashboard/             # Generic and V9 dashboard utilities
-├── tests/fixtures/v9dev/      # Tracked small V9 fixture
+├── tests/
+│   ├── fixtures/v9dev/        # Tracked small V9 fixture
+│   ├── test_demo_baseline.py
+│   ├── test_df_detector.py
+│   ├── test_df_graphmodel_rgcn.py
+│   ├── test_run_demo_smoke.py
+│   └── test_v9_corpus_snapshot.py
 └── artifacts/v9/dashboard/    # Generated dashboard output
-└── tests/
-    ├── test_demo_baseline.py
-    ├── test_df_detector.py
-    ├── test_df_graphmodel_rgcn.py
-    ├── test_run_demo_smoke.py
-    └── test_v9_corpus_snapshot.py
 ```
 
 ## Running The Demo
