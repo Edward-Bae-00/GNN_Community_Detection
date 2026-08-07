@@ -14,6 +14,8 @@ byte-identical) and splicing in the embedded DATA plus the new Community Explore
 """
 import csv, json, os, sys, re, math, random, collections, datetime
 
+from gnn.paths import REPO_ROOT
+
 csv.field_size_limit(10 ** 8)
 random.seed(13)
 
@@ -1283,10 +1285,8 @@ def main(corpus_dir):
 
     # Embed the combined-detector flagged export for V8 (single copy path via
     # dashboard_data.json; the unified builder only copies that file per corpus).
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__)))))
     if name.endswith("_v8"):
-        flagged_path = os.path.join(repo_root, "gnn", "diagnostics",
+        flagged_path = os.path.join(REPO_ROOT, "gnn", "diagnostics",
                                     "model_flagged_v8.json")
         if os.path.exists(flagged_path):
             with open(flagged_path) as ff:
@@ -1296,7 +1296,7 @@ def main(corpus_dir):
             p(f"[build] note: {flagged_path} absent — Flagged tab will stay hidden")
 
         # Detection Arms tab: five arms with uncertainty + seed spread + ceiling.
-        arms_path = os.path.join(repo_root, "gnn", "diagnostics",
+        arms_path = os.path.join(REPO_ROOT, "gnn", "diagnostics",
                                  "detection_arms_v8.json")
         if os.path.exists(arms_path):
             with open(arms_path) as af:
@@ -1307,7 +1307,7 @@ def main(corpus_dir):
 
     # V9 positive-control result blob for the V9-specific dashboard.
     if name.endswith("_v9"):
-        demo_path = os.path.join(repo_root, "gnn", "diagnostics",
+        demo_path = os.path.join(REPO_ROOT, "gnn", "diagnostics",
                                  "demo_comparison_v9.json")
         if os.path.exists(demo_path):
             with open(demo_path) as df:

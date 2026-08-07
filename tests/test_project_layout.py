@@ -93,3 +93,9 @@ def test_dashboard_and_data_utilities_are_importable_packages():
 
     sidecars = importlib.import_module("scripts.dashboard.v9_recovery_sidecars")
     assert callable(sidecars.publish_prepackaged_schema3_zip)
+
+
+def test_generic_dashboard_uses_canonical_repository_root():
+    build_dashboard = importlib.import_module("scripts.dashboard.build_dashboard")
+
+    assert build_dashboard.REPO_ROOT == ROOT
