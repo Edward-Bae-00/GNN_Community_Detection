@@ -39,4 +39,11 @@ Documents/GNN/
 # Generated dashboards and diagnostics
 Documents/Data/v9_dashboard/
 gnn/diagnostics/
+
+# Reorganized generated outputs
+/artifacts/v9/dashboard/
+/artifacts/v9/explanations/extracted/
+/reproducibility/v9_observability_colab_schema3/**/__pycache__/
+/reproducibility/v9_observability_colab_schema3/**/.pytest_cache/
+/reproducibility/v9_observability_colab_schema3/gnn/diagnostics/
 detection_fusion/diagnostics/

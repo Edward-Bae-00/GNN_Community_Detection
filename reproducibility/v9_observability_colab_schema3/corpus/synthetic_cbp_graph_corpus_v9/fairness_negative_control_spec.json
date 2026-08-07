@@ -1,0 +1,28 @@
+{
+  "demographic_features_allowed": [
+    "synthetic_audit_group",
+    "synthetic_age_bucket",
+    "sex_marker"
+  ],
+  "expected_pr_auc_baseline_by_target": {
+    "arrest": 0.023695,
+    "search": 0.051545,
+    "secondary": 0.057645,
+    "seizure": 0.040065
+  },
+  "expected_roc_auc_range": [
+    0.45,
+    0.55
+  ],
+  "falsification_rule": "Flag the dataset if demographics-only ROC-AUC exceeds 0.55.",
+  "forbidden_features": [
+    "port_code",
+    "prior crossings",
+    "risk score",
+    "document exception",
+    "search/seizure/arrest labels",
+    "community_id",
+    "latent_contraband_propensity"
+  ],
+  "task": "Train using only synthetic_audit_group, synthetic_age_bucket, sex_marker. Performance should be at chance."
+}

@@ -1,0 +1,4265 @@
+"""Exact seed-0 GraphSAGE day snapshots and complete message communities."""
+from __future__ import annotations
+
+import copy
+import hashlib
+import heapq
+import json
+import re
+from bisect import bisect_left
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
+
+import networkx as nx
+import numpy as np
+import pandas as pd
+import torch
+from scipy.stats import rankdata
+from torch_geometric.explain import Explainer, GNNExplainer, ModelConfig
+from torch_geometric.utils import k_hop_subgraph
+
+from gnn import learned_cell
+from gnn.graphmodel_rgcn import caught_feature_names
+from gnn.recovery_observability import (
+    FrozenRankReference,
+    HybridOnlyCase,
+    _selection_tiebreak,
+    build_decision_trace,
+)
+
+
+# Explainer eligibility ceiling.  GNNExplainer runs on the target's exact
+# unpruned two-hop pre-pool input, so this bounds the real computation graph
+# rather than a projection of it; a candidate above the ceiling is downgraded to
+# community-only evidence instead of being explained over a truncated graph.
+# Set from the measured ceiling_grid reported by preflight_complete on the
+# 2026-08-04 run, not from the display side.  That grid shows eligibility is
+# bound entirely by the edge ceiling over this corpus: 1024 edges admits 19
+# candidates at *every* node ceiling from 128 to 512, so the earlier 128->512
+# node raise bought nothing and left the run one candidate short of the
+# exact-20 budget.  1536 edges is the smallest measured step that clears 20
+# (25 eligible, at both 192 and 384 nodes), so the node bound is set to the
+# smallest value that reaches that count.
+MAX_EXPLAINER_INPUT_NODES = 192
+MAX_EXPLAINER_INPUT_EDGES = 1536
+# Display projection bound, deliberately tied to the ceiling above rather than
+# set independently.  ``CommunityScope.materialize_local`` picks the displayed
+# nodes by target/pooled/caught/salience priority *before* any attribution
+# exists, and ``compose_case_explanation`` then discards mask records for
+# anything the projection dropped.  A display bound below the explainer ceiling
+# therefore makes "top_local_nodes"/"top_edges" -- and the narrative claims
+# built from them -- top only among displayed records, not top in the
+# explanation.  Keeping them equal keeps the published attribution complete;
+# ``attribution_completeness`` in each payload proves it held for that case.
+MAX_LOCAL_EXPLANATION_NODES = MAX_EXPLAINER_INPUT_NODES
+MAX_LOCAL_EXPLANATION_EDGES = MAX_EXPLAINER_INPUT_EDGES
+MAX_LOCAL_SOURCE_ROWS_PER_EDGE = 16
+# Transient key carrying complete per-edge source-row membership from the
+# display projection to mask aggregation.  It never reaches a published
+# payload: compose_case_explanation removes it before the community is used.
+COMPLETE_SOURCE_ROW_INDEX = "_complete_source_row_index"
+MAX_NODE_ATTRIBUTION_SOURCE_ROWS = 16
+MAX_NODE_FEATURE_MASK_STATS = 512
+MAX_STRUCTURAL_PROVENANCE_ROWS = 256
+EXPLAINER_RESTART_SEEDS = (0, 1, 2)
+EXPLAINER_EPOCHS = 150
+
+EXPLAINER_ELIGIBLE_STATUS = "eligible"
+EXPLAINER_COMMUNITY_ONLY_STATUS = "community_only"
+EXPLAINER_REASON_ELIGIBLE = "eligible"
+EXPLAINER_REASON_NODE_LIMIT = "node_limit_exceeded"
+EXPLAINER_REASON_EDGE_LIMIT = "edge_limit_exceeded"
+EXPLAINER_REASON_BOTH_LIMITS = "node_and_edge_limits_exceeded"
+
+
+class ExplainerEligibilityError(ValueError):
+    """Stable fail-closed signal for a case outside the explainer policy."""
+
+    def __init__(self, eligibility):
+        if not isinstance(eligibility, Mapping):
+            raise ValueError("eligibility must be a mapping")
+        if eligibility.get("eligible") is not False:
+            raise ValueError("eligibility error requires an ineligible result")
+        self.eligibility = dict(eligibility)
+        self.status = str(eligibility["status"])
+        self.reason_code = str(eligibility["reason_code"])
+        super().__init__(
+            f"{self.status} explanation is ineligible: {self.reason_code}"
+        )
+
+
+_ABLATION_KINDS = frozenset(
+    {
+        "pair_relation",
+        "caught_flag",
+        "relation_star",
+        "structural_provenance",
+        "cotravel_pool",
+    }
+)
+
+FORBIDDEN_EXPLANATION_FIELDS = frozenset(
+    {
+        "hidden",
+        "false_negative_flag",
+        "organization_id",
+        "org_id",
+        "ground_truth_community",
+        "community_propensity",
+        "lifetime_seizures",
+        "lifetime_arrests",
+        "future_caught",
+        "future_edges",
+    }
+)
+
+
+def _canonical_string_ids(values, *, field_name):
+    if isinstance(values, (str, bytes)):
+        raise ValueError(f"{field_name} must contain strings")
+    try:
+        normalized = tuple(values)
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must contain strings") from exc
+    if any(not isinstance(value, str) for value in normalized):
+        raise ValueError(f"{field_name} must contain strings")
+    if any(not value.strip() for value in normalized):
+        raise ValueError(f"{field_name} must contain non-blank strings")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{field_name} must not contain duplicate IDs")
+    return tuple(sorted(normalized))
+
+
+@dataclass(frozen=True)
+class AblationSpec:
+    factor_id: str
+    kind: str
+    edge_source_row_ids: tuple[str, ...] = ()
+    caught_person_ids: tuple[str, ...] = ()
+    provenance_node_ids: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if not isinstance(self.factor_id, str) or not self.factor_id.strip():
+            raise ValueError("factor_id must be a non-blank string")
+        object.__setattr__(self, "factor_id", self.factor_id.strip())
+        if self.kind not in _ABLATION_KINDS:
+            raise ValueError(f"unsupported ablation kind: {self.kind}")
+        for field_name in (
+            "edge_source_row_ids",
+            "caught_person_ids",
+            "provenance_node_ids",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _canonical_string_ids(
+                    getattr(self, field_name), field_name=field_name
+                ),
+            )
+
+        if self.kind in {
+            "pair_relation",
+            "relation_star",
+            "cotravel_pool",
+            "structural_provenance",
+        } and not self.edge_source_row_ids:
+            raise ValueError(
+                f"{self.kind} requires nonempty edge_source_row_ids"
+            )
+        if self.kind == "caught_flag" and not self.caught_person_ids:
+            raise ValueError("caught_flag requires nonempty caught_person_ids")
+        if self.kind == "structural_provenance" and not self.provenance_node_ids:
+            raise ValueError(
+                "structural_provenance requires nonempty provenance_node_ids"
+            )
+
+        edge_only_kinds = {
+            "pair_relation",
+            "relation_star",
+            "cotravel_pool",
+        }
+        if self.kind in edge_only_kinds and (
+            self.caught_person_ids or self.provenance_node_ids
+        ):
+            raise ValueError(
+                f"{self.kind} requires exclusive evidence in edge_source_row_ids"
+            )
+        if self.kind == "caught_flag" and (
+            len(self.caught_person_ids) != 1
+            or self.edge_source_row_ids
+            or self.provenance_node_ids
+        ):
+            raise ValueError(
+                "caught_flag requires exclusive evidence for exactly one caught person"
+            )
+        if self.kind == "structural_provenance" and self.caught_person_ids:
+            raise ValueError(
+                "structural_provenance requires exclusive edge and provenance evidence"
+            )
+
+        factor_id_patterns = {
+            "pair_relation": r"pair:.+:rel:[0-9]+",
+            "relation_star": r"relation-star:.+:rel:[0-9]+",
+            "caught_flag": r"caught:.+",
+            "structural_provenance": r"structural:.+",
+            "cotravel_pool": r"cotravel-pool:.+:rel:[0-9]+",
+        }
+        if re.fullmatch(factor_id_patterns[self.kind], self.factor_id) is None:
+            raise ValueError(
+                f"factor_id does not match {self.kind} generated ID syntax"
+            )
+        if self.kind == "caught_flag" and self.factor_id != (
+            f"caught:{self.caught_person_ids[0]}"
+        ):
+            raise ValueError(
+                "caught_flag factor_id must match its caught person evidence"
+            )
+
+
+def _nonnegative_unique_indices(values, *, field_name):
+    if isinstance(values, (str, bytes)):
+        raise ValueError(f"{field_name} must contain row indices")
+    try:
+        indices = tuple(values)
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must contain row indices") from exc
+    if not indices:
+        raise ValueError(f"{field_name} must not be empty")
+    if any(
+        not isinstance(index, (int, np.integer))
+        or isinstance(index, (bool, np.bool_))
+        or index < 0
+        for index in indices
+    ):
+        raise ValueError(f"{field_name} must contain nonnegative row indices")
+    normalized = tuple(int(index) for index in indices)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{field_name} must not contain duplicate row indices")
+    return normalized
+
+
+@dataclass(frozen=True)
+class CounterfactualContext:
+    person_id: str
+    row_index: int
+    scoring_day: pd.Timestamp
+    same_day_person_row_indices: tuple[int, ...]
+    candidate_row_indices: tuple[int, ...]
+    original_hybrid_rank: int
+
+    def __post_init__(self):
+        if not isinstance(self.person_id, str) or not self.person_id.strip():
+            raise ValueError("person_id must be a non-blank string")
+        object.__setattr__(self, "person_id", self.person_id.strip())
+        if (
+            not isinstance(self.row_index, (int, np.integer))
+            or isinstance(self.row_index, (bool, np.bool_))
+            or self.row_index < 0
+        ):
+            raise ValueError("row_index must be a nonnegative integer")
+        object.__setattr__(self, "row_index", int(self.row_index))
+        object.__setattr__(self, "scoring_day", _scoring_day(self.scoring_day))
+        same_day = _nonnegative_unique_indices(
+            self.same_day_person_row_indices,
+            field_name="same_day_person_row_indices",
+        )
+        candidates = _nonnegative_unique_indices(
+            self.candidate_row_indices,
+            field_name="candidate_row_indices",
+        )
+        if self.row_index not in same_day:
+            raise ValueError("anchor row_index must be a same-day person row")
+        if not set(same_day).issubset(candidates):
+            raise ValueError(
+                "every same-day person row must belong to candidate_row_indices"
+            )
+        object.__setattr__(self, "same_day_person_row_indices", same_day)
+        object.__setattr__(self, "candidate_row_indices", candidates)
+        if (
+            not isinstance(self.original_hybrid_rank, (int, np.integer))
+            or isinstance(self.original_hybrid_rank, (bool, np.bool_))
+            or self.original_hybrid_rank <= 0
+        ):
+            raise ValueError("original_hybrid_rank must be a positive integer")
+        original_rank = int(self.original_hybrid_rank)
+        if original_rank > len(candidates):
+            raise ValueError(
+                "original_hybrid_rank exceeds the candidate reference"
+            )
+        object.__setattr__(self, "original_hybrid_rank", original_rank)
+
+
+@dataclass(frozen=True)
+class DaySnapshot:
+    scoring_day: pd.Timestamp
+    active_edges: pd.DataFrame
+    x: torch.Tensor
+    edge_index: torch.Tensor
+    edge_type: torch.Tensor
+    tensor_edge_source_row_ids: np.ndarray
+    component_roots: np.ndarray
+    prepool_embeddings: torch.Tensor
+    prepool_logits: torch.Tensor
+    pooled_logits: torch.Tensor
+    probabilities: np.ndarray
+    caught_before_snapshot: frozenset[str]
+
+
+DISPLAY_LAYOUT_RADIUS = 0.46
+# A ring wider than this many nodes is split across concentric sub-rings.
+DISPLAY_RING_BAND_CAPACITY = 120
+MAX_DISPLAY_RING_BANDS = 4
+
+
+def display_hop_ring_layout(nodes, edges, target_person_id):
+    """Place displayed nodes on hop rings around the target, O(N log N + E).
+
+    The published ``x``/``y`` are the only positions a renderer gets, so they
+    have to carry structure.  The previous layout indexed nodes into a
+    ``sqrt(N)`` grid in sorted ``node_id`` order, which meant position encoded
+    alphabetical rank and every edge became a line between two unrelated cells.
+    It was also sized from the *whole* community while only the bounded display
+    projection is drawn, so the drawn nodes landed in scattered cells of an
+    oversized grid.
+
+    This instead puts the target at the centre, each ``message_distance`` on its
+    own ring, and orders a ring so that a node sits in the arc belonging to its
+    nearest-hop neighbour.  Reading outward from the centre therefore follows
+    the message path that produced the score.  Ordering is fully determined by
+    ``message_distance`` and sorted ``node_id``, so the same community always
+    lays out identically.
+    """
+    if not nodes:
+        return {}
+    positions = {}
+    target = str(target_person_id) if target_person_id is not None else None
+    ring_of = {}
+    for node in nodes:
+        node_id = node["node_id"]
+        if node_id == target:
+            ring_of[node_id] = 0
+            continue
+        # A non-target node at distance 0 would collide with the centre; the
+        # smallest ring that is not the centre is 1.
+        ring_of[node_id] = max(1, int(node["message_distance"]))
+    neighbours = defaultdict(set)
+    for edge in edges:
+        u = edge["u"]
+        v = edge["v"]
+        if u in ring_of and v in ring_of and u != v:
+            neighbours[u].add(v)
+            neighbours[v].add(u)
+
+    by_ring = defaultdict(list)
+    for node_id, ring in ring_of.items():
+        by_ring[ring].append(node_id)
+    max_ring = max(by_ring)
+    angles = {}
+    for node_id in by_ring.get(0, ()):
+        positions[node_id] = (0.5, 0.5)
+        angles[node_id] = 0.0
+
+    for ring in range(1, max_ring + 1):
+        ring_nodes = sorted(by_ring[ring])
+        if not ring_nodes:
+            continue
+        # Group each node under its lowest-id neighbour one ring in, so a hop-2
+        # cluster is drawn in the arc beneath the hop-1 node that connects it.
+        groups = defaultdict(list)
+        orphans = []
+        for node_id in ring_nodes:
+            parents = sorted(
+                neighbour
+                for neighbour in neighbours[node_id]
+                if ring_of.get(neighbour) == ring - 1
+            )
+            if parents:
+                groups[parents[0]].append(node_id)
+            else:
+                orphans.append(node_id)
+        ordered = []
+        for parent in sorted(groups, key=lambda pid: (angles.get(pid, 0.0), pid)):
+            ordered.extend(sorted(groups[parent]))
+        ordered.extend(orphans)
+        # A ring with hundreds of members collapses into a solid band of dots at
+        # a single radius, which is what the 512-node projection produces at hop
+        # 2.  Spread a crowded ring over a few concentric sub-rings instead, and
+        # keep consecutive (same-parent) nodes on one angular slot so a parent's
+        # children read as a short radial spoke rather than an arc of noise.
+        bands = min(
+            MAX_DISPLAY_RING_BANDS,
+            max(
+                1,
+                (len(ordered) + DISPLAY_RING_BAND_CAPACITY - 1)
+                // DISPLAY_RING_BAND_CAPACITY,
+            ),
+        )
+        slots = (len(ordered) + bands - 1) // bands
+        # Even spacing over the whole ring keeps groups from overlapping while
+        # the parent-angle sweep keeps them near their connector.
+        step = 2 * np.pi / slots
+        # The half-ring of headroom is what the outermost band expands into, so
+        # every band still lands inside DISPLAY_LAYOUT_RADIUS.
+        base_radius = DISPLAY_LAYOUT_RADIUS * ring / (max_ring + 0.5)
+        band_step = DISPLAY_LAYOUT_RADIUS * 0.5 / (max_ring + 0.5) / bands
+        for index, node_id in enumerate(ordered):
+            angle = step * (index // bands + 0.5)
+            radius = base_radius + index % bands * band_step
+            angles[node_id] = angle
+            positions[node_id] = (
+                float(0.5 + radius * np.cos(angle)),
+                float(0.5 + radius * np.sin(angle)),
+            )
+    return positions
+
+
+class CaseExplanation(dict):
+    """JSON-compatible explanation with a producer-only streaming scope."""
+
+    __slots__ = ("community_scope",)
+
+    def __init__(self, payload, community_scope):
+        super().__init__(payload)
+        self.community_scope = community_scope
+
+
+@dataclass(frozen=True, eq=False)
+class CommunityScope:
+    """Replayable compact view of a complete day/component display community."""
+
+    engine: object
+    scoring_day: pd.Timestamp
+    component_id: str
+    community_key: str
+    node_ids: tuple[str, ...]
+    node_indices: np.ndarray
+    message_distances: np.ndarray
+    pooled_members: np.ndarray
+    edge_row_indices: np.ndarray
+    edge_group_starts: np.ndarray
+    complete: bool = True
+    target_person_id: str | None = None
+
+    def __post_init__(self):
+        day = _scoring_day(self.scoring_day)
+        object.__setattr__(self, "scoring_day", day)
+        if tuple(sorted(self.node_ids)) != self.node_ids:
+            raise ValueError("community node_ids must be sorted")
+        if self.target_person_id is not None:
+            if (
+                not isinstance(self.target_person_id, str)
+                or not self.target_person_id.strip()
+            ):
+                raise ValueError(
+                    "community target_person_id must be a nonblank string"
+                )
+            if self.target_person_id not in self.node_ids:
+                raise ValueError(
+                    "community target_person_id must belong to node_ids"
+                )
+        arrays = {
+            "node_indices": (self.node_indices, np.int64),
+            "message_distances": (self.message_distances, np.int8),
+            "pooled_members": (self.pooled_members, np.bool_),
+            "edge_row_indices": (self.edge_row_indices, np.int64),
+            "edge_group_starts": (self.edge_group_starts, np.int64),
+        }
+        for name, (value, dtype) in arrays.items():
+            detached = np.asarray(value, dtype=dtype).reshape(-1).copy()
+            detached.setflags(write=False)
+            object.__setattr__(self, name, detached)
+        node_count = len(self.node_ids)
+        if not (
+            len(self.node_indices)
+            == len(self.message_distances)
+            == len(self.pooled_members)
+            == node_count
+        ):
+            raise ValueError("community node metadata is misaligned")
+        starts = self.edge_group_starts
+        if len(starts) and (
+            starts[0] != 0
+            or np.any(starts[1:] <= starts[:-1])
+            or starts[-1] >= len(self.edge_row_indices)
+        ):
+            raise ValueError("community edge group offsets are invalid")
+        if len(self.edge_row_indices) and not len(starts):
+            raise ValueError("community edge groups are required")
+
+    def _snapshot(self):
+        return self.engine.community_snapshot(self.scoring_day)
+
+    def _group_bounds(self):
+        ends = np.append(self.edge_group_starts[1:], len(self.edge_row_indices))
+        return zip(self.edge_group_starts, ends)
+
+    def _node_position(self, node_id):
+        position = bisect_left(self.node_ids, node_id)
+        if position == len(self.node_ids) or self.node_ids[position] != node_id:
+            raise ValueError(f"community edge endpoint {node_id!r} is absent")
+        return position
+
+    def iter_nodes(self):
+        snapshot = self._snapshot()
+        count = len(self.node_ids)
+        columns = max(1, int(np.ceil(np.sqrt(count))))
+        rows = max(1, int(np.ceil(count / columns)))
+        caught = snapshot.caught_before_snapshot
+        for position, person_id in enumerate(self.node_ids):
+            caught_before = person_id in caught
+            caught_time = self.engine.caught_available_time(person_id)
+            yield {
+                "node_id": person_id,
+                "target": (
+                    self.target_person_id is not None
+                    and person_id == self.target_person_id
+                ),
+                "x": float(((position % columns) + 0.5) / columns),
+                "y": float(((position // columns) + 0.5) / rows),
+                "message_distance": int(self.message_distances[position]),
+                "pooled_member": bool(self.pooled_members[position]),
+                "caught_before_snapshot": caught_before,
+                "caught_label_available_time": (
+                    caught_time.isoformat() if caught_before else None
+                ),
+            }
+
+    @staticmethod
+    def _edge_columns(frame):
+        return {
+            name: frame[name].to_numpy(copy=False)
+            for name in (
+                "canonical_pair_group_id",
+                "rel",
+                "u",
+                "v",
+                "edge_type",
+                "source_row_id",
+                "avail_time",
+            )
+        }
+
+    def _edge_record(self, columns, start, end, *, source_limit=None):
+        positions = self.edge_row_indices[int(start) : int(end)]
+        first_position = int(positions[0])
+        group_id = columns["canonical_pair_group_id"][first_position]
+        relation = int(columns["rel"][first_position])
+        endpoint_pairs = {
+            tuple(
+                sorted(
+                    (
+                        str(columns["u"][int(index)]),
+                        str(columns["v"][int(index)]),
+                    )
+                )
+            )
+            for index in positions
+        }
+        edge_types = {
+            str(columns["edge_type"][int(index)]) for index in positions
+        }
+        if len(endpoint_pairs) != 1 or len(edge_types) != 1:
+            raise ValueError("canonical display edge contains inconsistent rows")
+        u, v = next(iter(endpoint_pairs))
+        selected_positions = (
+            positions
+            if source_limit is None
+            else positions[: int(source_limit)]
+        )
+        source_row_ids = [
+            str(columns["source_row_id"][int(index)])
+            for index in selected_positions
+        ]
+        if source_limit is None and len(set(source_row_ids)) != len(source_row_ids):
+            raise ValueError("canonical display edge contains duplicate source rows")
+        record = {
+            "edge_id": f"{group_id}:rel:{relation}",
+            "u": u,
+            "v": v,
+            "rel": relation,
+            "edge_type": next(iter(edge_types)),
+            "source_row_ids": source_row_ids,
+            "source_row_count": len(positions),
+            "message_hop": max(
+                int(self.message_distances[self._node_position(u)]),
+                int(self.message_distances[self._node_position(v)]),
+            ),
+        }
+        if source_limit is not None:
+            record["source_rows_truncated"] = len(positions) > len(source_row_ids)
+        return record
+
+    def iter_edges(self):
+        frame = self._snapshot().active_edges
+        columns = self._edge_columns(frame)
+        for start, end in self._group_bounds():
+            yield self._edge_record(columns, start, end)
+
+    def iter_provenance(self):
+        frame = self._snapshot().active_edges
+        columns = self._edge_columns(frame)
+        for start, end in self._group_bounds():
+            edge = self._edge_record(columns, start, end)
+            for index in self.edge_row_indices[int(start) : int(end)]:
+                row_index = int(index)
+                yield {
+                    "edge_id": edge["edge_id"],
+                    "source_row_id": str(columns["source_row_id"][row_index]),
+                    "available_time": pd.Timestamp(
+                        columns["avail_time"][row_index]
+                    ).isoformat(),
+                }
+
+    def materialize_local(
+        self,
+        node_ids,
+        source_row_ids=(),
+        *,
+        target_person_id=None,
+    ):
+        """Materialize only the target-local subgraph needed by explanations."""
+        del source_row_ids
+        target = str(target_person_id) if target_person_id is not None else None
+        snapshot = self._snapshot()
+        caught = snapshot.caught_before_snapshot
+
+        def node_priority(person_id):
+            position = self._node_position(person_id)
+            pooled = bool(self.pooled_members[position])
+            is_caught = person_id in caught
+            if person_id == target:
+                category = 0
+            elif pooled and is_caught:
+                category = 1
+            elif pooled:
+                category = 2
+            elif is_caught:
+                category = 3
+            else:
+                category = 4
+            salience = 0.0
+            logits = getattr(snapshot, "prepool_logits", None)
+            if logits is not None and person_id in self.engine.person_index:
+                salience = abs(
+                    float(logits[self.engine.person_index[person_id]])
+                )
+            return (
+                category,
+                -salience,
+                int(self.message_distances[position]),
+                person_id,
+            )
+
+        def candidates():
+            for value in node_ids:
+                person_id = str(value)
+                position = bisect_left(self.node_ids, person_id)
+                if (
+                    person_id in self.engine.person_index
+                    and position < len(self.node_ids)
+                    and self.node_ids[position] == person_id
+                ):
+                    yield person_id
+
+        selected_node_ids = heapq.nsmallest(
+            MAX_LOCAL_EXPLANATION_NODES,
+            candidates(),
+            key=node_priority,
+        )
+        if target is not None and target in self.node_ids and target not in selected_node_ids:
+            selected_node_ids[-1:] = [target]
+            selected_node_ids.sort(key=node_priority)
+        selected_nodes = frozenset(selected_node_ids)
+        nodes_by_id = {
+            node["node_id"]: node
+            for node in self.iter_nodes()
+            if node["node_id"] in selected_nodes
+        }
+        nodes = [nodes_by_id[node_id] for node_id in selected_node_ids]
+
+        columns = self._edge_columns(snapshot.active_edges)
+
+        # Complete source-row membership per canonical edge, kept apart from the
+        # truncated list that gets displayed.  Explainer mask records are keyed
+        # by source row, so aggregating them against the display list would drop
+        # the mask weight of every row past the display limit -- silently, and
+        # on a shape this corpus produces often (co-travel and shared-residence
+        # pairs routinely exceed it).  Attribution is aggregated from this index
+        # instead; only the published provenance stays bounded.
+        complete_source_rows = {}
+
+        def candidate_edges():
+            for start, end in self._group_bounds():
+                edge = self._edge_record(columns, start, end)
+                if edge["u"] in selected_nodes and edge["v"] in selected_nodes:
+                    every_source_row_id = edge["source_row_ids"]
+                    complete_source_rows[edge["edge_id"]] = tuple(
+                        every_source_row_id
+                    )
+                    edge["source_row_ids"] = every_source_row_id[
+                        :MAX_LOCAL_SOURCE_ROWS_PER_EDGE
+                    ]
+                    edge["source_rows_truncated"] = len(
+                        every_source_row_id
+                    ) > len(edge["source_row_ids"])
+                    yield edge
+
+        edges = heapq.nsmallest(
+            MAX_LOCAL_EXPLANATION_EDGES,
+            candidate_edges(),
+            key=lambda edge: (
+                0 if target in (edge["u"], edge["v"]) else 1,
+                int(edge["message_hop"]),
+                edge["edge_id"],
+            ),
+        )
+        # Lay the projection out over exactly the nodes and edges that get
+        # drawn.  iter_nodes has to stay a whole-community stream for the
+        # chunked sidecars, so its grid is sized from the full member list; the
+        # display projection is a bounded subset of that and needs its own
+        # positions.  These dicts are shared with nodes_by_id, so updating them
+        # here updates both views.
+        layout = display_hop_ring_layout(nodes, edges, target)
+        for node in nodes:
+            point = layout.get(node["node_id"])
+            if point is not None:
+                node["x"], node["y"] = point
+
+        edge_sources = {
+            edge["edge_id"]: frozenset(edge["source_row_ids"])
+            for edge in edges
+        }
+        observations_by_edge = defaultdict(list)
+        for observation in self.iter_provenance():
+            selected_sources = edge_sources.get(observation["edge_id"])
+            if (
+                selected_sources is not None
+                and observation["source_row_id"] in selected_sources
+            ):
+                observations_by_edge[observation["edge_id"]].append(observation)
+        for edge in edges:
+            edge["observations"] = [
+                {
+                    "source_row_id": row["source_row_id"],
+                    "available_time": row["available_time"],
+                }
+                for row in observations_by_edge[edge["edge_id"]]
+            ]
+        return {
+            "complete": True,
+            "display_scope": "target_local",
+            "scoring_day": self.scoring_day.isoformat(),
+            "component_id": self.component_id,
+            "community_key": self.community_key,
+            "nodes": nodes,
+            "nodes_by_id": nodes_by_id,
+            "edges": edges,
+            "base_source_row_ids": sorted(
+                source_id
+                for edge in edges
+                if edge.get("source_rows_truncated") is not True
+                for source_id in edge["source_row_ids"]
+            ),
+            "provenance_expansions": [],
+            "projection_policy": {
+                "max_nodes": MAX_LOCAL_EXPLANATION_NODES,
+                "max_edges": MAX_LOCAL_EXPLANATION_EDGES,
+                "max_source_rows_per_edge": MAX_LOCAL_SOURCE_ROWS_PER_EDGE,
+                "node_order": (
+                    "target_then_pooled_caught_salience_then_hop_then_id"
+                ),
+                "edge_order": "target_incident_then_hop_then_id",
+                "node_layout": "hop_rings_around_target",
+                "attribution_source_rows": "complete_per_displayed_edge",
+            },
+            # Consumed by compose_case_explanation to aggregate masks over every
+            # source row, then removed before the community is published.
+            COMPLETE_SOURCE_ROW_INDEX: {
+                edge["edge_id"]: complete_source_rows[edge["edge_id"]]
+                for edge in edges
+            },
+        }
+
+
+class PrePoolSAGELogitWrapper(torch.nn.Module):
+    """Expose the homogeneous GraphSAGE member logits before component pooling."""
+
+    def __init__(self, model: torch.nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x, edge_index):
+        embeddings = self.model.enc(x, edge_index)
+        return self.model.head(embeddings).squeeze(-1)
+
+
+@dataclass(frozen=True, init=False)
+class MemberSubgraph:
+    """Immutable two-hop inputs with detached tensor-edge provenance."""
+
+    _x: torch.Tensor
+    _edge_index: torch.Tensor
+    target_index: int
+    _original_node_indices: np.ndarray
+    _tensor_edge_source_row_ids: np.ndarray
+
+    def __init__(
+        self,
+        *,
+        x,
+        edge_index,
+        target_index,
+        original_node_indices,
+        tensor_edge_source_row_ids,
+    ):
+        if not torch.is_tensor(x) or x.ndim != 2:
+            raise ValueError("member subgraph x must be a two-dimensional tensor")
+        if (
+            not torch.is_tensor(edge_index)
+            or edge_index.ndim != 2
+            or edge_index.shape[0] != 2
+        ):
+            raise ValueError("member subgraph edge_index must have shape [2, E]")
+        nodes = np.array(original_node_indices, dtype=np.int64, copy=True)
+        provenance = np.array(
+            tensor_edge_source_row_ids, dtype=object, copy=True
+        )
+        if nodes.ndim != 1 or nodes.shape[0] != x.shape[0]:
+            raise ValueError(
+                "member subgraph nodes must align with node features"
+            )
+        if provenance.ndim != 1 or provenance.shape[0] != edge_index.shape[1]:
+            raise ValueError(
+                "member subgraph tensor edges and provenance must align"
+            )
+        if any(
+            not isinstance(source_row_id, str) or not source_row_id
+            for source_row_id in provenance
+        ):
+            raise ValueError(
+                "member subgraph provenance must contain nonempty strings"
+            )
+        if (
+            not isinstance(target_index, (int, np.integer))
+            or isinstance(target_index, (bool, np.bool_))
+            or not 0 <= int(target_index) < x.shape[0]
+        ):
+            raise ValueError("member subgraph target_index is out of range")
+        if edge_index.numel() and (
+            int(edge_index.min()) < 0 or int(edge_index.max()) >= x.shape[0]
+        ):
+            raise ValueError("member subgraph edge_index is out of range")
+        object.__setattr__(self, "_x", x.detach().clone())
+        object.__setattr__(
+            self, "_edge_index", edge_index.detach().clone()
+        )
+        object.__setattr__(self, "target_index", int(target_index))
+        nodes.setflags(write=False)
+        provenance.setflags(write=False)
+        object.__setattr__(self, "_original_node_indices", nodes)
+        object.__setattr__(self, "_tensor_edge_source_row_ids", provenance)
+
+    @property
+    def x(self):
+        return self._x.detach().clone()
+
+    @property
+    def edge_index(self):
+        return self._edge_index.detach().clone()
+
+    @property
+    def original_node_indices(self):
+        result = np.array(self._original_node_indices, copy=True)
+        result.setflags(write=False)
+        return result
+
+    @property
+    def tensor_edge_source_row_ids(self):
+        result = np.array(
+            self._tensor_edge_source_row_ids, dtype=object, copy=True
+        )
+        result.setflags(write=False)
+        return result
+
+
+@dataclass(frozen=True)
+class _BoundRankReference:
+    reference: FrozenRankReference
+    row_bindings: tuple[tuple[str, pd.Timestamp], ...]
+    fingerprint: str
+
+
+def _detached_rank_reference(reference):
+    if not isinstance(reference, FrozenRankReference):
+        raise ValueError("reference must be a FrozenRankReference")
+    return FrozenRankReference(
+        percentile_reference_id=reference.percentile_reference_id,
+        event_ids=reference.event_ids,
+        baseline_raw=reference.baseline_raw,
+        seed0_gnn_raw=reference.seed0_gnn_raw,
+        baseline_percentile=reference.baseline_percentile,
+        seed0_gnn_percentile=reference.seed0_gnn_percentile,
+        seed0_hybrid_score=reference.seed0_hybrid_score,
+        baseline_selection_score=reference.baseline_selection_score,
+        seed0_gnn_selection_score=reference.seed0_gnn_selection_score,
+        seed0_hybrid_selection_score=reference.seed0_hybrid_selection_score,
+        blend_weight=reference.blend_weight,
+    )
+
+
+def _canonical_rank_row_bindings(row_bindings, *, n_rows):
+    if isinstance(row_bindings, Mapping):
+        items = tuple(row_bindings.items())
+    else:
+        if isinstance(row_bindings, (str, bytes)):
+            raise ValueError("row_bindings must map row indices to metadata")
+        try:
+            records = tuple(row_bindings)
+        except TypeError as exc:
+            raise ValueError(
+                "row_bindings must map row indices to metadata"
+            ) from exc
+        items = []
+        for record in records:
+            if isinstance(record, (str, bytes)):
+                raise ValueError(
+                    "row_bindings records must contain row_index, person_id, and scoring_day"
+                )
+            try:
+                row_index, person_id, scoring_day = tuple(record)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "row_bindings records must contain row_index, person_id, and scoring_day"
+                ) from exc
+            items.append((row_index, (person_id, scoring_day)))
+        items = tuple(items)
+
+    normalized = {}
+    for row_index, metadata in items:
+        if (
+            not isinstance(row_index, (int, np.integer))
+            or isinstance(row_index, (bool, np.bool_))
+            or not 0 <= row_index < n_rows
+        ):
+            raise ValueError(
+                "row_bindings must cover exactly row indices 0..n-1"
+            )
+        row_index = int(row_index)
+        if row_index in normalized:
+            raise ValueError("row_bindings must not contain duplicate rows")
+        if isinstance(metadata, (str, bytes)):
+            raise ValueError(
+                "row binding metadata must contain person_id and scoring_day"
+            )
+        try:
+            person_id, scoring_day = tuple(metadata)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "row binding metadata must contain person_id and scoring_day"
+            ) from exc
+        if not isinstance(person_id, str) or not person_id.strip():
+            raise ValueError(
+                "row binding person_id must be a non-blank string"
+            )
+        normalized[row_index] = (
+            person_id.strip(),
+            _scoring_day(scoring_day),
+        )
+
+    expected_rows = set(range(n_rows))
+    if set(normalized) != expected_rows:
+        raise ValueError("row_bindings must cover exactly row indices 0..n-1")
+    return tuple(normalized[index] for index in range(n_rows))
+
+
+def _rank_reference_fingerprint(reference, row_bindings):
+    metadata = {
+        "percentile_reference_id": reference.percentile_reference_id,
+        "event_ids": reference.event_ids,
+        "blend_weight": reference.blend_weight,
+        "row_bindings": tuple(
+            (person_id, scoring_day.isoformat())
+            for person_id, scoring_day in row_bindings
+        ),
+    }
+    digest = hashlib.sha256(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    for field_name in (
+        "baseline_raw",
+        "seed0_gnn_raw",
+        "baseline_percentile",
+        "seed0_gnn_percentile",
+        "seed0_hybrid_score",
+        "baseline_selection_score",
+        "seed0_gnn_selection_score",
+        "seed0_hybrid_selection_score",
+    ):
+        values = np.asarray(getattr(reference, field_name), dtype=np.float64)
+        digest.update(field_name.encode("utf-8"))
+        digest.update(values.tobytes(order="C"))
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _probability_parity_matches(observed, frozen):
+    """Apply the shared tolerance policy for snapshot probability parity."""
+    return bool(np.allclose(observed, frozen, rtol=1e-6, atol=1e-7))
+
+
+def _counterfactual_probability_mismatch_diagnostic(
+    context, reference, rank_reference_fingerprint, original_probability,
+    frozen_probabilities,
+):
+    """Build bounded context for a strict as-of probability mismatch."""
+    def _clip(value, limit=96):
+        text = str(value)
+        return text if len(text) <= limit else text[: limit - 3] + "..."
+
+    frozen = np.asarray(frozen_probabilities, dtype=float).reshape(-1)
+    finite = frozen[np.isfinite(frozen)]
+    frozen_range = (
+        f"[{float(finite.min()):.9g}, {float(finite.max()):.9g}]"
+        if finite.size else "[empty]"
+    )
+    values = ", ".join(f"{float(value):.9g}" for value in frozen[:8])
+    if frozen.size > 8:
+        values += ", ..."
+    indices = ", ".join(str(int(index)) for index in context.same_day_person_row_indices[:8])
+    if len(context.same_day_person_row_indices) > 8:
+        indices += ", ..."
+    try:
+        anchor_event = str(reference.event_ids[context.row_index])
+    except (IndexError, KeyError, TypeError):
+        anchor_event = "<unavailable>"
+    max_abs_delta = (
+        float(np.max(np.abs(frozen - float(original_probability))))
+        if frozen.size else float("nan")
+    )
+    return (
+        "affected frozen seed0 probabilities do not match the strict "
+        "as-of snapshot probability; "
+        f"original_recomputed_probability={float(original_probability):.9g}; "
+        f"frozen_probability_range={frozen_range}; "
+        f"frozen_probability_values=[{values}]; "
+        f"max_abs_delta={max_abs_delta:.9g}; "
+        f"person_id={_clip(context.person_id)}; scoring_day={_clip(context.scoring_day.isoformat())}; "
+        f"anchor_row={context.row_index}; anchor_event={_clip(anchor_event)}; "
+        f"same_day_rows(count={len(context.same_day_person_row_indices)}, indices=[{indices}]); "
+        f"rank_reference_fingerprint={_clip(rank_reference_fingerprint)}"
+    )[:1200]
+
+
+class Seed0ExplanationEngine:
+    def __init__(
+        self,
+        *,
+        model,
+        edges_typed,
+        node_ids,
+        node_feat,
+        caught_time,
+        num_rel,
+        rank_reference=None,
+        rank_row_bindings=None,
+    ):
+        self.__model = copy.deepcopy(model).eval()
+        self.__model.requires_grad_(False)
+        prepared_node_ids = tuple(node_ids)
+        self.__prepared_source = learned_cell.prepare_snapshot_source(
+            edges_typed,
+            prepared_node_ids,
+            node_feat,
+            caught_time,
+            {
+                person_id: index
+                for index, person_id in enumerate(prepared_node_ids)
+            },
+            num_rel=num_rel,
+        )
+        self.node_ids = self.__prepared_source.node_ids
+        self.num_rel = self.__prepared_source.num_rel
+        self.person_index = self.__prepared_source.index
+        self.__rank_state = None
+        self.__snapshot_cache: dict[pd.Timestamp, DaySnapshot] = {}
+        self.__community_cache: dict[
+            tuple[pd.Timestamp, object, str], CommunityScope
+        ] = {}
+        self.__counterfactual_cache: dict[str, dict[str, object]] = {}
+        self.__faithfulness_cache: dict[str, float] = {}
+        self.__factor_specs_cache: dict[
+            tuple[str, pd.Timestamp, str], tuple[AblationSpec, ...]
+        ] = {}
+        if (rank_reference is None) != (rank_row_bindings is None):
+            raise ValueError(
+                "rank_reference and rank_row_bindings must be provided together"
+            )
+        if rank_reference is not None:
+            self.bind_rank_reference(rank_reference, rank_row_bindings)
+
+    @property
+    def rank_reference(self):
+        if self.__rank_state is None:
+            return None
+        return self.__rank_state.reference
+
+    def bind_rank_reference(self, reference, row_bindings):
+        detached_reference = _detached_rank_reference(reference)
+        detached_bindings = _canonical_rank_row_bindings(
+            row_bindings,
+            n_rows=len(detached_reference.event_ids),
+        )
+        new_state = _BoundRankReference(
+            reference=detached_reference,
+            row_bindings=detached_bindings,
+            fingerprint=_rank_reference_fingerprint(
+                detached_reference, detached_bindings
+            ),
+        )
+        self.__rank_state = new_state
+        self.__counterfactual_cache.clear()
+        self.__faithfulness_cache.clear()
+        self.__factor_specs_cache.clear()
+
+    def snapshot(self, scoring_day) -> DaySnapshot:
+        day = _scoring_day(scoring_day)
+        cached = self.__snapshot_cache.get(day)
+        if cached is not None:
+            return _materialize_snapshot(cached)
+
+        inputs = learned_cell.build_day_snapshot_inputs(
+            day,
+            prepared_source=self.__prepared_source,
+        )
+        self.__model.eval()
+        with torch.no_grad():
+            embeddings = self.__model.enc(
+                inputs.x, inputs.edge_index, edge_type=inputs.edge_type
+            )
+            prepool_logits = self.__model.head(embeddings).squeeze(-1)
+            pooled_embeddings = learned_cell._pool_by_roots_torch(
+                embeddings, inputs.component_roots
+            )
+            pooled_logits = self.__model.head(pooled_embeddings).squeeze(-1)
+            probabilities = (
+                torch.sigmoid(pooled_logits).detach().cpu().numpy().copy()
+            )
+
+        component_roots = np.array(inputs.component_roots, copy=True)
+        component_roots.setflags(write=False)
+        tensor_provenance = np.array(
+            inputs.tensor_edge_source_row_ids, dtype=object, copy=True
+        )
+        tensor_provenance.setflags(write=False)
+        probabilities.setflags(write=False)
+        result = DaySnapshot(
+            scoring_day=inputs.scoring_day,
+            active_edges=inputs.active_edges,
+            x=inputs.x,
+            edge_index=inputs.edge_index,
+            edge_type=inputs.edge_type,
+            tensor_edge_source_row_ids=tensor_provenance,
+            component_roots=component_roots,
+            prepool_embeddings=embeddings.detach(),
+            prepool_logits=prepool_logits.detach(),
+            pooled_logits=pooled_logits.detach(),
+            probabilities=probabilities,
+            caught_before_snapshot=inputs.caught_before_snapshot,
+        )
+        self.__snapshot_cache[day] = result
+        return _materialize_snapshot(result)
+
+    @property
+    def cached_snapshot_days(self):
+        return tuple(sorted(self.__snapshot_cache))
+
+    def community_snapshot(self, scoring_day):
+        """Return the pristine cached snapshot for replayable producer streams."""
+        day = _scoring_day(scoring_day)
+        if day not in self.__snapshot_cache:
+            self.snapshot(day)
+        return self.__snapshot_cache[day]
+
+    def release_snapshot(self, scoring_day):
+        """Release day-bound tensors and derived diagnostic caches."""
+        day = _scoring_day(scoring_day)
+        removed = self.__snapshot_cache.pop(day, None) is not None
+        community_keys = [
+            key for key in self.__community_cache if key[0] == day
+        ]
+        for key in community_keys:
+            self.__community_cache.pop(key, None)
+        removed = removed or bool(community_keys)
+        if removed:
+            self.__counterfactual_cache.clear()
+            self.__faithfulness_cache.clear()
+            self.__factor_specs_cache = {
+                key: value
+                for key, value in self.__factor_specs_cache.items()
+                if key[1] != day
+            }
+        return removed
+
+    def observability_fingerprint_material(self):
+        """Return compact content fingerprints for resumable diagnostics."""
+        if self.__rank_state is None:
+            raise ValueError("observability fingerprint requires a rank reference")
+
+        graph_digest = hashlib.sha256()
+        for person_id in self.node_ids:
+            payload = person_id.encode("utf-8")
+            graph_digest.update(len(payload).to_bytes(8, "big"))
+            graph_digest.update(payload)
+            feature = np.asarray(
+                self.__prepared_source.node_feat[person_id], dtype=np.float64
+            )
+            graph_digest.update(feature.shape.__repr__().encode("ascii"))
+            graph_digest.update(feature.tobytes(order="C"))
+            caught = self.__prepared_source.caught_time.get(person_id)
+            graph_digest.update(
+                ("" if caught is None else pd.Timestamp(caught).isoformat()).encode(
+                    "utf-8"
+                )
+            )
+        edges = self.__prepared_source._edges_typed
+        graph_digest.update(
+            json.dumps(list(edges.columns), separators=(",", ":")).encode("utf-8")
+        )
+        graph_digest.update(
+            pd.util.hash_pandas_object(edges, index=False).to_numpy().tobytes()
+        )
+        graph_digest.update(str(self.num_rel).encode("ascii"))
+
+        model_digest = hashlib.sha256()
+        for name, tensor in sorted(self.__model.state_dict().items()):
+            encoded_name = name.encode("utf-8")
+            model_digest.update(len(encoded_name).to_bytes(8, "big"))
+            model_digest.update(encoded_name)
+            values = tensor.detach().cpu().contiguous().numpy()
+            model_digest.update(str(values.dtype).encode("ascii"))
+            model_digest.update(repr(values.shape).encode("ascii"))
+            model_digest.update(values.tobytes(order="C"))
+        return {
+            "graph_sha256": graph_digest.hexdigest(),
+            "model_state_sha256": model_digest.hexdigest(),
+            "rank_reference_fingerprint": self.__rank_state.fingerprint,
+        }
+
+    def relationship_categories(self, person_id, scoring_day):
+        if person_id not in self.person_index:
+            raise KeyError(f"unknown person_id: {person_id}")
+        day = _scoring_day(scoring_day)
+        edges = self.__prepared_source._edges_typed
+        incident = edges.loc[
+            (
+                (edges["u"] == person_id)
+                | (edges["v"] == person_id)
+            )
+            & (edges["avail_time"] < day)
+        ]
+        return tuple(sorted(set(incident["edge_type"].astype(str))))
+
+    def community(self, person_id, scoring_day):
+        if person_id not in self.person_index:
+            raise KeyError(f"unknown person_id: {person_id}")
+        day = _scoring_day(scoring_day)
+        snapshot = self.snapshot(day)
+        component_root = snapshot.component_roots[self.person_index[person_id]]
+        normalized_root = (
+            component_root.item()
+            if isinstance(component_root, np.generic)
+            else component_root
+        )
+        cache_key = (day, normalized_root, person_id)
+        cached = self.__community_cache.get(cache_key)
+        if cached is None:
+            cached = build_complete_community(self, person_id, day)
+            self.__community_cache[cache_key] = cached
+        return cached
+
+    def score_counterfactual(self, context, factor):
+        return score_grouped_counterfactual(self, context, factor)
+
+    def explanation_model_copy(self):
+        """Return an isolated eval-mode model for post-hoc explanation only."""
+        return copy.deepcopy(self.__model).eval()
+
+    def caught_available_time(self, person_id):
+        """Return one immutable observed-catch availability scalar, if known."""
+        if person_id not in self.person_index:
+            raise KeyError(f"unknown person_id: {person_id}")
+        value = self.__prepared_source.caught_time.get(person_id)
+        return None if value is None else pd.Timestamp(value)
+
+    def __validate_candidate_rows_for_day(
+        self, scoring_day, row_indices, *, field_name
+    ):
+        rank_state = self.__rank_state
+        if rank_state is None:
+            raise ValueError(
+                "candidate validation requires a frozen rank reference"
+            )
+        day = _scoring_day(scoring_day)
+        indices = _reference_indices(
+            row_indices,
+            field_name=field_name,
+            n_rows=len(rank_state.reference.event_ids),
+        )
+        for row_index in indices:
+            _, bound_day = rank_state.row_bindings[row_index]
+            if bound_day != day:
+                raise ValueError(
+                    f"{field_name} row binding does not match scoring_day"
+                )
+
+    def __caught_available_time(self, person_id):
+        return self.__prepared_source.caught_time[person_id]
+
+    def __diagnostic_edge_source_set_probability(
+        self, context, edge_source_row_ids
+    ):
+        if not isinstance(context, CounterfactualContext):
+            raise ValueError("context must be a CounterfactualContext")
+        rank_state = self.__rank_state
+        if rank_state is None:
+            raise ValueError(
+                "diagnostic edge scoring requires a frozen rank reference"
+            )
+        if context.person_id not in self.person_index:
+            raise KeyError(f"unknown person_id: {context.person_id}")
+        _validate_bound_counterfactual_context(rank_state, context)
+        source_ids = _canonical_string_ids(
+            edge_source_row_ids, field_name="edge_source_row_ids"
+        )
+        original = self.snapshot(context.scoring_day)
+        active_source_ids = set(
+            original.active_edges["source_row_id"].astype(str)
+        )
+        inactive = sorted(set(source_ids).difference(active_source_ids))
+        if inactive:
+            raise ValueError(
+                "every diagnostic edge source_row_id must be active at the "
+                f"scoring snapshot: {inactive}"
+            )
+
+        cache_key = _length_framed_hash(
+            (
+                "faithfulness-edge-source-set",
+                rank_state.fingerprint,
+                context.person_id,
+                context.scoring_day.isoformat(),
+                str(context.row_index),
+                *(str(index) for index in context.same_day_person_row_indices),
+                "candidate-boundary",
+                *(str(index) for index in context.candidate_row_indices),
+                "source-boundary",
+                *source_ids,
+            )
+        )
+        cached = self.__faithfulness_cache.get(cache_key)
+        if cached is not None:
+            return float(cached)
+
+        target_index = self.person_index[context.person_id]
+        if not source_ids:
+            probability = float(original.probabilities[target_index])
+        else:
+            source = self.__prepared_source
+            modified_edges = source._edges_typed.loc[
+                ~source._edges_typed["source_row_id"]
+                .astype(str)
+                .isin(source_ids)
+            ].copy(deep=True)
+            modified_source = learned_cell.prepare_snapshot_source(
+                modified_edges,
+                source.node_ids,
+                source.node_feat,
+                source.caught_time,
+                source.index,
+                num_rel=source.num_rel,
+            )
+            inputs = learned_cell.build_day_snapshot_inputs(
+                context.scoring_day, prepared_source=modified_source
+            )
+            self.__model.eval()
+            with torch.no_grad():
+                embeddings = self.__model.enc(
+                    inputs.x,
+                    inputs.edge_index,
+                    edge_type=inputs.edge_type,
+                )
+                pooled_embeddings = learned_cell._pool_by_roots_torch(
+                    embeddings, inputs.component_roots
+                )
+                probabilities = (
+                    torch.sigmoid(
+                        self.__model.head(pooled_embeddings).squeeze(-1)
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+            probability = float(probabilities[target_index])
+        if not np.isfinite(probability) or not 0.0 <= probability <= 1.0:
+            raise ValueError(
+                "diagnostic edge-set probability must be finite in [0, 1]"
+            )
+        self.__faithfulness_cache[cache_key] = probability
+        return float(probability)
+
+    def __score_grouped_counterfactual(self, context, factor):
+        if not isinstance(context, CounterfactualContext):
+            raise ValueError("context must be a CounterfactualContext")
+        if not isinstance(factor, AblationSpec):
+            raise ValueError("factor must be an AblationSpec")
+        rank_state = self.__rank_state
+        if rank_state is None:
+            raise ValueError(
+                "counterfactual scoring requires a frozen rank reference"
+            )
+        reference = rank_state.reference
+        if context.person_id not in self.person_index:
+            raise KeyError(f"unknown person_id: {context.person_id}")
+        _validate_bound_counterfactual_context(rank_state, context)
+        cache_key = _counterfactual_fingerprint(
+            context, factor, rank_state.fingerprint
+        )
+        cached = self.__counterfactual_cache.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+
+        original = self.snapshot(context.scoring_day)
+        target_index = self.person_index[context.person_id]
+        original_probability = float(original.probabilities[target_index])
+        frozen_probabilities = reference.seed0_gnn_raw[
+            list(context.same_day_person_row_indices)
+        ]
+        if not _probability_parity_matches(
+            frozen_probabilities, original_probability
+        ):
+            raise ValueError(
+                _counterfactual_probability_mismatch_diagnostic(
+                    context,
+                    reference,
+                    rank_state.fingerprint,
+                    original_probability,
+                    frozen_probabilities,
+                )
+            )
+        no_op_rank = frozen_peer_rank(
+            reference,
+            anchor_row_index=context.row_index,
+            affected_row_indices=context.same_day_person_row_indices,
+            ablated_seed0_probability=original_probability,
+            candidate_row_indices=context.candidate_row_indices,
+            original_hybrid_rank=context.original_hybrid_rank,
+        )
+        if no_op_rank["hybrid_rank_delta"] != 0:
+            raise ValueError(
+                "original probability no-op must preserve the frozen hybrid rank"
+            )
+        specs_cache_key = (
+            rank_state.fingerprint,
+            context.scoring_day,
+            context.person_id,
+        )
+        generated_specs = self.__factor_specs_cache.get(specs_cache_key)
+        if generated_specs is None:
+            community = build_complete_community(
+                self, context.person_id, context.scoring_day
+            )
+            generated_specs = tuple(
+                build_ablation_specs(
+                    original, context.person_id, community
+                )
+            )
+            self.__factor_specs_cache[specs_cache_key] = generated_specs
+        allowed_specs = {
+            spec.factor_id: spec
+            for spec in generated_specs
+        }
+        expected_factor = allowed_specs.get(factor.factor_id)
+        if expected_factor is None or factor != expected_factor:
+            raise ValueError(
+                "incomplete or invalid factor for the strict as-of snapshot: "
+                f"{factor.factor_id}"
+            )
+
+        source = self.__prepared_source
+        known_edge_source_ids = (
+            set(source._edges_typed["source_row_id"].astype(str))
+            if "source_row_id" in source._edges_typed.columns
+            else set()
+        )
+        unknown_edge_source_ids = sorted(
+            set(factor.edge_source_row_ids).difference(known_edge_source_ids)
+        )
+        if unknown_edge_source_ids:
+            raise ValueError(
+                "unknown edge source_row_id requested for ablation: "
+                f"{unknown_edge_source_ids}"
+            )
+        known_caught_people = set(source.caught_time).intersection(source.index)
+        unknown_caught_people = sorted(
+            set(factor.caught_person_ids).difference(known_caught_people)
+        )
+        if unknown_caught_people:
+            raise ValueError(
+                "unknown caught person_id requested for ablation: "
+                f"{unknown_caught_people}"
+            )
+        unknown_provenance_nodes = sorted(
+            set(factor.provenance_node_ids).difference(source.index)
+        )
+        if unknown_provenance_nodes:
+            raise ValueError(
+                "unknown provenance node_id requested for ablation: "
+                f"{unknown_provenance_nodes}"
+            )
+
+        modified_edges = source._edges_typed.copy(deep=True)
+        if factor.edge_source_row_ids:
+            modified_edges = modified_edges.loc[
+                ~modified_edges["source_row_id"]
+                .astype(str)
+                .isin(factor.edge_source_row_ids)
+            ].copy(deep=True)
+        modified_caught = {
+            person_id: available_time
+            for person_id, available_time in source.caught_time.items()
+            if person_id not in factor.caught_person_ids
+        }
+        modified_source = learned_cell.prepare_snapshot_source(
+            modified_edges,
+            source.node_ids,
+            source.node_feat,
+            modified_caught,
+            source.index,
+            num_rel=source.num_rel,
+        )
+        inputs = learned_cell.build_day_snapshot_inputs(
+            context.scoring_day,
+            prepared_source=modified_source,
+        )
+        self.__model.eval()
+        with torch.no_grad():
+            embeddings = self.__model.enc(
+                inputs.x, inputs.edge_index, edge_type=inputs.edge_type
+            )
+            pooled_embeddings = learned_cell._pool_by_roots_torch(
+                embeddings, inputs.component_roots
+            )
+            probabilities = (
+                torch.sigmoid(
+                    self.__model.head(pooled_embeddings).squeeze(-1)
+                )
+                .detach()
+                .cpu()
+                .numpy()
+                .copy()
+            )
+
+        ablated_probability = float(probabilities[target_index])
+        if not (
+            np.isfinite(original_probability)
+            and np.isfinite(ablated_probability)
+            and 0.0 <= original_probability <= 1.0
+            and 0.0 <= ablated_probability <= 1.0
+        ):
+            raise ValueError("counterfactual probabilities must be finite in [0, 1]")
+        rank_effect = frozen_peer_rank(
+            reference,
+            anchor_row_index=context.row_index,
+            affected_row_indices=context.same_day_person_row_indices,
+            ablated_seed0_probability=ablated_probability,
+            candidate_row_indices=context.candidate_row_indices,
+            original_hybrid_rank=context.original_hybrid_rank,
+        )
+        original_root = original.component_roots[target_index]
+        ablated_root = inputs.component_roots[target_index]
+        caught_feature_changes = [
+            {
+                "person_id": person_id,
+                "original_caught_before_snapshot": (
+                    person_id in original.caught_before_snapshot
+                ),
+                "ablated_caught_before_snapshot": (
+                    person_id in inputs.caught_before_snapshot
+                ),
+            }
+            for person_id in factor.caught_person_ids
+        ]
+        result = {
+            **rank_effect,
+            "factor_id": factor.factor_id,
+            "kind": factor.kind,
+            "original_seed0_probability": original_probability,
+            "ablated_seed0_probability": ablated_probability,
+            "seed0_probability_delta": (
+                ablated_probability - original_probability
+            ),
+            "original_component_size": int(
+                np.count_nonzero(
+                    original.component_roots == original_root
+                )
+            ),
+            "ablated_component_size": int(
+                np.count_nonzero(inputs.component_roots == ablated_root)
+            ),
+            "caught_feature_changes": caught_feature_changes,
+            "features_rebuilt": True,
+            "pooling_rebuilt": True,
+        }
+        validate_explanation_payload(result)
+        pristine = copy.deepcopy(result)
+        self.__counterfactual_cache[cache_key] = pristine
+        return copy.deepcopy(pristine)
+
+
+def score_grouped_counterfactual(engine, context, factor):
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    return engine._Seed0ExplanationEngine__score_grouped_counterfactual(
+        context, factor
+    )
+
+
+def diagnostic_edge_source_set_probability(
+    engine, context, edge_source_row_ids
+):
+    """Rescore an exact active source-row set without relaxing Task 6 factors."""
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    return engine._Seed0ExplanationEngine__diagnostic_edge_source_set_probability(
+        context, edge_source_row_ids
+    )
+
+
+def _length_framed_hash(parts):
+    """Hash ordered strings without separator or concatenation collisions."""
+    if isinstance(parts, (str, bytes)):
+        raise ValueError("hash parts must be a sequence of strings")
+    digest = hashlib.sha256()
+    for part in parts:
+        if not isinstance(part, str):
+            raise ValueError("hash parts must be strings")
+        payload = part.encode("utf-8")
+        digest.update(len(payload).to_bytes(8, byteorder="big", signed=False))
+        digest.update(payload)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def member_subgraph(engine, person_id, scoring_day):
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    if person_id not in engine.person_index:
+        raise KeyError(f"unknown person_id: {person_id}")
+    snapshot = engine.snapshot(scoring_day)
+    target_index = engine.person_index[person_id]
+    subset, edge_index, mapping, edge_mask = k_hop_subgraph(
+        target_index,
+        2,
+        snapshot.edge_index,
+        relabel_nodes=True,
+        num_nodes=len(engine.node_ids),
+    )
+    provenance = snapshot.tensor_edge_source_row_ids[
+        edge_mask.detach().cpu().numpy()
+    ]
+    return MemberSubgraph(
+        x=snapshot.x[subset],
+        edge_index=edge_index,
+        target_index=int(mapping.item()),
+        original_node_indices=subset.detach().cpu().numpy(),
+        tensor_edge_source_row_ids=provenance,
+    )
+
+
+def _positive_explainer_limit(value, *, field_name):
+    if (
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value <= 0
+    ):
+        raise ValueError(f"{field_name} must be a positive integer")
+    return int(value)
+
+
+def _fixed_explainer_limit(value, *, field_name, expected):
+    value = _positive_explainer_limit(value, field_name=field_name)
+    if value != expected:
+        raise ValueError(f"{field_name} must be exactly {expected}")
+    return expected
+
+
+def _validated_explainer_epochs(value):
+    if (
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value != EXPLAINER_EPOCHS
+    ):
+        raise ValueError(
+            f"epochs must be exactly {EXPLAINER_EPOCHS}"
+        )
+    return EXPLAINER_EPOCHS
+
+
+def explainability_eligibility(
+    engine,
+    person_id,
+    scoring_day,
+    *,
+    max_nodes=MAX_EXPLAINER_INPUT_NODES,
+    max_edges=MAX_EXPLAINER_INPUT_EDGES,
+):
+    """Measure the exact two-hop pre-pool explainer input without pruning."""
+    max_nodes = _fixed_explainer_limit(
+        max_nodes,
+        field_name="max_nodes",
+        expected=MAX_EXPLAINER_INPUT_NODES,
+    )
+    max_edges = _fixed_explainer_limit(
+        max_edges,
+        field_name="max_edges",
+        expected=MAX_EXPLAINER_INPUT_EDGES,
+    )
+    local = member_subgraph(engine, person_id, scoring_day)
+    node_count = int(local.x.shape[0])
+    edge_count = int(local.edge_index.shape[1])
+    nodes_over = node_count > max_nodes
+    edges_over = edge_count > max_edges
+    if nodes_over and edges_over:
+        reason_code = EXPLAINER_REASON_BOTH_LIMITS
+    elif nodes_over:
+        reason_code = EXPLAINER_REASON_NODE_LIMIT
+    elif edges_over:
+        reason_code = EXPLAINER_REASON_EDGE_LIMIT
+    else:
+        reason_code = EXPLAINER_REASON_ELIGIBLE
+    eligible = not (nodes_over or edges_over)
+    return {
+        "eligible": eligible,
+        "status": (
+            EXPLAINER_ELIGIBLE_STATUS
+            if eligible
+            else EXPLAINER_COMMUNITY_ONLY_STATUS
+        ),
+        "node_count": node_count,
+        "edge_count": edge_count,
+        "max_nodes": max_nodes,
+        "max_edges": max_edges,
+        "reason_code": reason_code,
+    }
+
+
+def make_gnn_explainer(wrapper, epochs=EXPLAINER_EPOCHS):
+    if not isinstance(wrapper, PrePoolSAGELogitWrapper):
+        raise ValueError("wrapper must be a PrePoolSAGELogitWrapper")
+    epochs = _validated_explainer_epochs(epochs)
+    return Explainer(
+        model=wrapper,
+        algorithm=GNNExplainer(epochs=int(epochs)),
+        explanation_type="model",
+        node_mask_type="attributes",
+        edge_mask_type="object",
+        model_config=ModelConfig(
+            mode="binary_classification",
+            task_level="node",
+            return_type="raw",
+        ),
+    )
+
+
+def _validated_restart_seeds(restart_seeds):
+    if isinstance(restart_seeds, (str, bytes)):
+        raise ValueError("restart_seeds must contain nonnegative integers")
+    try:
+        values = tuple(restart_seeds)
+    except TypeError as exc:
+        raise ValueError(
+            "restart_seeds must contain nonnegative integers"
+        ) from exc
+    if not values:
+        raise ValueError("restart_seeds must not be empty")
+    if any(
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value < 0
+        for value in values
+    ):
+        raise ValueError("restart_seeds must contain nonnegative integers")
+    normalized = tuple(int(value) for value in values)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("restart_seeds must not contain duplicates")
+    if normalized != EXPLAINER_RESTART_SEEDS:
+        raise ValueError(
+            "restart_seeds must be exactly "
+            f"{EXPLAINER_RESTART_SEEDS}"
+        )
+    return normalized
+
+
+def _readonly_float_mask(value, *, expected_length, field_name):
+    mask = np.asarray(value, dtype=float)
+    if mask.ndim != 1 or mask.shape[0] != expected_length:
+        raise ValueError(f"{field_name} is not aligned with explanation inputs")
+    if not np.isfinite(mask).all() or (mask < 0.0).any():
+        raise ValueError(f"{field_name} must be finite and nonnegative")
+    result = np.array(mask, dtype=float, copy=True)
+    result.setflags(write=False)
+    return result
+
+
+def _readonly_node_feature_mask(
+    value, *, expected_shape, field_name="node_feature_mask"
+):
+    mask = np.asarray(value, dtype=float)
+    if mask.ndim != 2 or tuple(mask.shape) != tuple(expected_shape):
+        raise ValueError(f"{field_name} is not aligned with explanation inputs")
+    if not np.isfinite(mask).all() or (mask < 0.0).any():
+        raise ValueError(f"{field_name} must be finite and nonnegative")
+    result = np.array(mask, dtype=float, copy=True)
+    result.setflags(write=False)
+    return result
+
+
+def run_member_explanation(
+    engine,
+    person_id,
+    scoring_day,
+    *,
+    restart_seeds=EXPLAINER_RESTART_SEEDS,
+    epochs=EXPLAINER_EPOCHS,
+    explainer_factory=make_gnn_explainer,
+):
+    """Explain one pooled member's exact two-hop pre-pool GraphSAGE logit."""
+    seeds = _validated_restart_seeds(restart_seeds)
+    epochs = _validated_explainer_epochs(epochs)
+    eligibility = explainability_eligibility(
+        engine, person_id, scoring_day
+    )
+    if not eligibility["eligible"]:
+        raise ExplainerEligibilityError(eligibility)
+    local = member_subgraph(engine, person_id, scoring_day)
+    wrapper = PrePoolSAGELogitWrapper(engine.explanation_model_copy())
+    local_x = local.x
+    local_edge_index = local.edge_index
+    snapshot = engine.snapshot(scoring_day)
+    with torch.no_grad():
+        local_logit = wrapper(local_x, local_edge_index)[local.target_index]
+        full_logit = snapshot.prepool_logits[engine.person_index[person_id]]
+    torch.testing.assert_close(
+        local_logit, full_logit, rtol=1e-6, atol=1e-6
+    )
+
+    edge_count = local_edge_index.shape[1]
+    edge_masks = []
+    node_feature_masks = []
+    for restart_seed in seeds:
+        with torch.random.fork_rng():
+            torch.manual_seed(restart_seed)
+            explanation = explainer_factory(wrapper, epochs=epochs)(
+                x=local_x,
+                edge_index=local_edge_index,
+                index=local.target_index,
+            )
+        if explanation.edge_mask is None:
+            if edge_count:
+                raise ValueError("edge_mask is required when message edges exist")
+            edge_mask = np.zeros(0, dtype=float)
+        else:
+            edge_mask = explanation.edge_mask.detach().cpu().numpy()
+        edge_masks.append(
+            _readonly_float_mask(
+                edge_mask,
+                expected_length=edge_count,
+                field_name="edge_mask",
+            )
+        )
+        if explanation.node_mask is None:
+            raise ValueError("node_mask is required for member explanations")
+        node_feature_masks.append(
+            _readonly_node_feature_mask(
+                explanation.node_mask.detach().cpu().numpy(),
+                expected_shape=tuple(local_x.shape),
+            )
+        )
+    return {
+        "edge_masks": tuple(edge_masks),
+        "node_feature_masks": tuple(node_feature_masks),
+        "restart_seeds": seeds,
+        "local_prepool_logit": float(local_logit),
+        "full_prepool_logit": float(full_logit),
+        "status": "no-message-edges" if edge_count == 0 else "ok",
+    }
+
+
+def _structural_stage_rules():
+    """Return the structural stage rules the renderer evaluates per edge.
+
+    These are rules, not per-case claims: the renderer resolves them against
+    each edge's own message hop and pooled membership. They carry no scoring
+    or attribution vocabulary, so a community-only control can use them.
+    """
+    return [
+        {"stage_id": "first_hop", "edge_rule": {"max_message_hop": 1}},
+        {"stage_id": "second_hop", "edge_rule": {"max_message_hop": 2}},
+        {
+            "stage_id": "component_pool",
+            "edge_rule": {
+                "edge_type": "COTRAVEL",
+                "both_pooled_members": True,
+            },
+        },
+    ]
+
+
+def _flow_stage_rules():
+    """Return the full Hybrid stage rules, including the fusion stage."""
+    return _structural_stage_rules() + [
+        {"stage_id": "rank_fusion", "edge_rule": {"match_none": True}},
+    ]
+
+
+def build_flow_stages(community):
+    if isinstance(community, CommunityScope):
+        return _flow_stage_rules()
+    if not isinstance(community, Mapping):
+        raise ValueError("community must be a mapping")
+    nodes_by_id = community.get("nodes_by_id")
+    edges = community.get("edges")
+    if not isinstance(nodes_by_id, Mapping) or not isinstance(edges, Sequence):
+        raise ValueError("community must contain nodes_by_id and edges")
+    return _flow_stage_rules()
+
+
+def aggregate_restart_masks(masks, top_fraction=0.1):
+    try:
+        fraction = float(top_fraction)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("top_fraction must be finite and in (0, 1]") from exc
+    if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        raise ValueError("top_fraction must be finite and in (0, 1]")
+    if isinstance(masks, (str, bytes)):
+        raise ValueError("at least one aligned explainer mask is required")
+    try:
+        rows = tuple(np.asarray(mask, dtype=float) for mask in masks)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("explainer masks must be numeric") from exc
+    if not rows:
+        raise ValueError("at least one aligned explainer mask is required")
+    if any(row.ndim != 1 for row in rows):
+        raise ValueError("each explainer mask must be one-dimensional")
+    if len({row.shape for row in rows}) != 1:
+        raise ValueError("explainer masks must be aligned")
+    matrix = np.vstack(rows)
+    if not np.isfinite(matrix).all():
+        raise ValueError("explainer masks must be finite")
+    if (matrix < 0.0).any():
+        raise ValueError("explainer masks must be nonnegative")
+    if matrix.shape[1] == 0:
+        empty = np.zeros(0, dtype=float)
+        return {
+            "median": empty,
+            "q1": empty,
+            "q3": empty,
+            "selection_frequency": empty,
+            "restart_count": matrix.shape[0],
+            "top_factor_agreement": 0.0,
+            "status": "no-message-edges",
+        }
+
+    normalized = matrix / np.maximum(
+        matrix.max(axis=1, keepdims=True), 1e-12
+    )
+    top_count = max(1, int(np.ceil(normalized.shape[1] * fraction)))
+    selected = np.zeros_like(normalized, dtype=bool)
+    for row_index, row in enumerate(normalized):
+        top = np.argsort(-row, kind="stable")[:top_count]
+        positive_top = top[row[top] > 0.0]
+        selected[row_index, positive_top] = True
+    selection_frequency = selected.mean(axis=0)
+    return {
+        "median": np.median(normalized, axis=0),
+        "q1": np.quantile(normalized, 0.25, axis=0),
+        "q3": np.quantile(normalized, 0.75, axis=0),
+        "selection_frequency": selection_frequency,
+        "restart_count": normalized.shape[0],
+        "top_factor_agreement": float(selection_frequency.max()),
+        "status": "ok" if selected.any() else "no-positive-influence",
+    }
+
+
+def matched_random_controls(
+    edge_records, *, selected_edge_ids, seed
+):
+    pairs, _ = _matched_control_details(
+        edge_records, selected_edge_ids=selected_edge_ids, seed=seed
+    )
+    return tuple(pair["control_edge_id"] for pair in pairs)
+
+
+def _matched_control_details(
+    edge_records, *, selected_edge_ids, seed
+):
+    records = tuple(edge_records)
+    edge_ids = tuple(record["edge_id"] for record in records)
+    if len(set(edge_ids)) != len(edge_ids):
+        raise ValueError("control edge_id values must be unique")
+    by_id = {record["edge_id"]: record for record in records}
+    selected_ids = tuple(selected_edge_ids)
+    if len(set(selected_ids)) != len(selected_ids):
+        raise ValueError("selected_edge_ids must not contain duplicates")
+    unknown = sorted(set(selected_ids).difference(by_id))
+    if unknown:
+        raise ValueError(f"unknown selected edge IDs: {unknown}")
+    selected = set(selected_ids)
+    rng = np.random.default_rng(seed)
+    pairs = []
+    unmatched = []
+    used_controls = set()
+    for edge_id in selected_ids:
+        source = by_id[edge_id]
+        candidates = sorted(
+            record["edge_id"]
+            for record in records
+            if record["edge_id"] not in selected
+            and record["edge_id"] not in used_controls
+            and record["relation"] == source["relation"]
+            and record["degree_bin"] == source["degree_bin"]
+        )
+        if candidates:
+            control_edge_id = candidates[
+                int(rng.integers(0, len(candidates)))
+            ]
+            used_controls.add(control_edge_id)
+            pairs.append(
+                {
+                    "selected_edge_id": edge_id,
+                    "control_edge_id": control_edge_id,
+                }
+            )
+        else:
+            unmatched.append(edge_id)
+    return pairs, unmatched
+
+
+def _validated_probability(value, *, field_name):
+    try:
+        probability = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be finite in [0, 1]") from exc
+    if not np.isfinite(probability) or not 0.0 <= probability <= 1.0:
+        raise ValueError(f"{field_name} must be finite in [0, 1]")
+    return probability
+
+
+def edge_removal_faithfulness(
+    edge_records, importance_by_id, *, rescore, seed=0
+):
+    records = tuple(edge_records)
+    edge_ids = tuple(record["edge_id"] for record in records)
+    if len(set(edge_ids)) != len(edge_ids):
+        raise ValueError("faithfulness edge_id values must be unique")
+    if not isinstance(importance_by_id, Mapping):
+        raise ValueError("importance_by_id must be a mapping")
+    importance = {}
+    for edge_id in edge_ids:
+        try:
+            value = float(importance_by_id.get(edge_id, 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "faithfulness importance values must be finite and nonnegative"
+            ) from exc
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError(
+                "faithfulness importance values must be finite and nonnegative"
+            )
+        importance[edge_id] = value
+    ordered = sorted(
+        records,
+        key=lambda record: (
+            -importance[record["edge_id"]],
+            record["edge_id"],
+        ),
+    )
+    original = _validated_probability(
+        rescore(()), field_name="original_probability"
+    )
+    points = []
+    for fraction in (0.10, 0.25, 0.50):
+        count = (
+            max(1, int(np.ceil(len(ordered) * fraction)))
+            if ordered
+            else 0
+        )
+        selected = tuple(
+            record["edge_id"] for record in ordered[:count]
+        )
+        control_pairs, unmatched = _matched_control_details(
+            records,
+            selected_edge_ids=selected,
+            seed=int(seed) + count,
+        )
+        controls = tuple(
+            pair["control_edge_id"] for pair in control_pairs
+        )
+        top_probability = _validated_probability(
+            rescore(selected), field_name="top_edge_probability"
+        )
+        matched_drop = None
+        if len(controls) == len(selected):
+            matched_probability = _validated_probability(
+                rescore(controls), field_name="matched_random_probability"
+            )
+            matched_drop = original - matched_probability
+        points.append(
+            {
+                "fraction": fraction,
+                "selected_edge_ids": list(selected),
+                "matched_control_edge_ids": list(controls),
+                "matched_control_pairs": control_pairs,
+                "unmatched_selected_edge_ids": unmatched,
+                "top_edge_probability_drop": original - top_probability,
+                "matched_random_probability_drop": matched_drop,
+                "unmatched_control_count": len(unmatched),
+            }
+        )
+    return {"original_probability": original, "points": points}
+
+
+def _counterfactual_fingerprint(context, factor, rank_reference_fingerprint):
+    payload = {
+        "context": asdict(context),
+        "factor": asdict(factor),
+        "rank_reference_fingerprint": rank_reference_fingerprint,
+    }
+    payload["context"]["scoring_day"] = context.scoring_day.isoformat()
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _materialize_snapshot(snapshot):
+    """Return a detached public snapshot without exposing pristine cache state."""
+    return DaySnapshot(
+        scoring_day=snapshot.scoring_day,
+        active_edges=snapshot.active_edges.copy(deep=True),
+        x=snapshot.x.detach().clone(),
+        edge_index=snapshot.edge_index.detach().clone(),
+        edge_type=snapshot.edge_type.detach().clone(),
+        tensor_edge_source_row_ids=np.array(
+            snapshot.tensor_edge_source_row_ids, dtype=object, copy=True
+        ),
+        component_roots=np.array(snapshot.component_roots, copy=True),
+        prepool_embeddings=snapshot.prepool_embeddings.detach().clone(),
+        prepool_logits=snapshot.prepool_logits.detach().clone(),
+        pooled_logits=snapshot.pooled_logits.detach().clone(),
+        probabilities=np.array(snapshot.probabilities, copy=True),
+        caught_before_snapshot=snapshot.caught_before_snapshot,
+    )
+
+
+def _scoring_day(value):
+    try:
+        timestamp = pd.to_datetime(value, utc=True, errors="raise")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("scoring_day must be a non-null scalar timestamp") from exc
+    if not isinstance(timestamp, pd.Timestamp):
+        raise ValueError("scoring_day must be a non-null scalar timestamp")
+    if pd.isna(timestamp):
+        raise ValueError("scoring_day must be a non-null scalar timestamp")
+    return timestamp.floor("D")
+
+
+def _reference_indices(values, *, field_name, n_rows):
+    indices = _nonnegative_unique_indices(values, field_name=field_name)
+    if any(index >= n_rows for index in indices):
+        raise ValueError(f"{field_name} contains a row index out of range")
+    return indices
+
+
+def _validate_bound_counterfactual_context(rank_state, context):
+    reference = rank_state.reference
+    n_rows = len(reference.event_ids)
+    same_day_rows = _reference_indices(
+        context.same_day_person_row_indices,
+        field_name="same_day_person_row_indices",
+        n_rows=n_rows,
+    )
+    candidates = _reference_indices(
+        context.candidate_row_indices,
+        field_name="candidate_row_indices",
+        n_rows=n_rows,
+    )
+    expected_binding = (context.person_id, context.scoring_day)
+    for row_index in same_day_rows:
+        person_id, scoring_day = rank_state.row_bindings[row_index]
+        if person_id != context.person_id:
+            raise ValueError(
+                "same-day person row binding does not match context person_id"
+            )
+        if scoring_day != context.scoring_day:
+            raise ValueError(
+                "same-day person row binding does not match context scoring_day"
+            )
+    for row_index in candidates:
+        _, scoring_day = rank_state.row_bindings[row_index]
+        if scoring_day != context.scoring_day:
+            raise ValueError(
+                "candidate row binding does not match context scoring_day"
+            )
+    complete_same_day_rows = tuple(
+        row_index
+        for row_index, binding in enumerate(rank_state.row_bindings)
+        if binding == expected_binding
+    )
+    if set(same_day_rows) != set(complete_same_day_rows):
+        raise ValueError(
+            "same_day_person_row_indices must contain the complete bound identity-day group"
+        )
+
+    ordered_candidates = sorted(
+        candidates,
+        key=lambda index: (
+            -float(reference.seed0_hybrid_selection_score[index]),
+            index,
+        ),
+    )
+    exact_rank = ordered_candidates.index(context.row_index) + 1
+    if exact_rank != context.original_hybrid_rank:
+        raise ValueError(
+            "original_hybrid_rank does not match the frozen hybrid selection score"
+        )
+
+
+def frozen_peer_rank(
+    reference: FrozenRankReference,
+    *,
+    anchor_row_index: int,
+    affected_row_indices: tuple[int, ...],
+    ablated_seed0_probability: float,
+    candidate_row_indices: tuple[int, ...],
+    original_hybrid_rank: int,
+) -> dict[str, object]:
+    """Re-rank one identity while every candidate peer score stays frozen."""
+    if not isinstance(reference, FrozenRankReference):
+        raise ValueError("reference must be a FrozenRankReference")
+    n_rows = len(reference.event_ids)
+    if (
+        not isinstance(anchor_row_index, (int, np.integer))
+        or isinstance(anchor_row_index, (bool, np.bool_))
+        or not 0 <= anchor_row_index < n_rows
+    ):
+        raise ValueError("anchor_row_index is out of range")
+    anchor_row_index = int(anchor_row_index)
+    affected = _reference_indices(
+        affected_row_indices,
+        field_name="affected_row_indices",
+        n_rows=n_rows,
+    )
+    candidates = _reference_indices(
+        candidate_row_indices,
+        field_name="candidate_row_indices",
+        n_rows=n_rows,
+    )
+    if anchor_row_index not in affected:
+        raise ValueError("anchor row must be included in affected_row_indices")
+    if anchor_row_index not in candidates:
+        raise ValueError("anchor row must be included in candidate_row_indices")
+    if not set(affected).issubset(candidates):
+        raise ValueError("every affected row must be included in candidate rows")
+    if (
+        not isinstance(original_hybrid_rank, (int, np.integer))
+        or isinstance(original_hybrid_rank, (bool, np.bool_))
+        or original_hybrid_rank <= 0
+        or original_hybrid_rank > len(candidates)
+    ):
+        raise ValueError(
+            "original_hybrid_rank must be positive and within the candidate reference"
+        )
+    original_ordered_candidates = sorted(
+        candidates,
+        key=lambda index: (
+            -float(reference.seed0_hybrid_selection_score[index]),
+            index,
+        ),
+    )
+    exact_original_rank = (
+        original_ordered_candidates.index(anchor_row_index) + 1
+    )
+    if int(original_hybrid_rank) != exact_original_rank:
+        raise ValueError(
+            "original_hybrid_rank does not match the frozen hybrid selection score"
+        )
+    try:
+        probability = float(ablated_seed0_probability)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ablated_seed0_probability must be finite") from exc
+    if not np.isfinite(probability):
+        raise ValueError("ablated_seed0_probability must be finite")
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError("ablated_seed0_probability must be in [0, 1]")
+
+    array_fields = (
+        reference.seed0_gnn_raw,
+        reference.baseline_percentile,
+    )
+    if any(array.ndim != 1 or len(array) != n_rows for array in array_fields):
+        raise ValueError("rank reference arrays are not aligned")
+    if any(not np.isfinite(array).all() for array in array_fields):
+        raise ValueError("rank reference arrays must be finite")
+
+    gnn_raw = np.array(reference.seed0_gnn_raw, dtype=float, copy=True)
+    gnn_raw[list(affected)] = probability
+    gnn_percentile = rankdata(gnn_raw, method="average") / n_rows
+    hybrid_score = (
+        reference.blend_weight * gnn_percentile
+        + (1.0 - reference.blend_weight) * reference.baseline_percentile
+    )
+    if not np.isfinite(gnn_percentile).all() or not np.isfinite(
+        hybrid_score
+    ).all():
+        raise ValueError("ablated rank scores must be finite")
+    hybrid_selection = _selection_tiebreak(hybrid_score)
+    ordered_candidates = sorted(
+        candidates,
+        key=lambda index: (-float(hybrid_selection[index]), index),
+    )
+    ablated_rank = ordered_candidates.index(anchor_row_index) + 1
+    original_rank = int(original_hybrid_rank)
+    updated = sorted(affected)
+    unchanged = sorted(set(candidates).difference(affected))
+    return {
+        "percentile_reference_id": reference.percentile_reference_id,
+        "ablated_gnn_percentile": float(gnn_percentile[anchor_row_index]),
+        "original_hybrid_rank": original_rank,
+        "ablated_hybrid_rank": ablated_rank,
+        "hybrid_rank_delta": ablated_rank - original_rank,
+        "updated_row_indices": updated,
+        "unchanged_peer_row_indices": unchanged,
+    }
+
+
+def classify_factor_stability(
+    counterfactual, restart_selection_frequency, restart_iqr
+):
+    try:
+        frequency = float(restart_selection_frequency)
+        iqr = float(restart_iqr)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("restart metrics must be finite") from exc
+    if not np.isfinite(frequency) or not np.isfinite(iqr):
+        raise ValueError("restart metrics must be finite")
+    if not 0.0 <= frequency <= 1.0:
+        raise ValueError("restart_selection_frequency must be in [0, 1]")
+    if iqr < 0.0:
+        raise ValueError("restart_iqr must be nonnegative")
+    if not isinstance(counterfactual, Mapping) or "hybrid_rank_delta" not in counterfactual:
+        raise ValueError("counterfactual must contain hybrid_rank_delta")
+    try:
+        effect = float(counterfactual["hybrid_rank_delta"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("hybrid_rank_delta must be finite") from exc
+    if not np.isfinite(effect):
+        raise ValueError("hybrid_rank_delta must be finite")
+    if effect < 0:
+        return "countervailing"
+    if effect > 0 and frequency >= (2 / 3) and iqr <= 0.25:
+        return "stable"
+    return "unstable"
+
+
+def validate_explanation_payload(value, path="root"):
+    """Reject leak-prone artifact keys recursively, preserving the input."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key).casefold() in FORBIDDEN_EXPLANATION_FIELDS:
+                raise ValueError(f"forbidden explanation field at {path}.{key}")
+            validate_explanation_payload(item, f"{path}.{key}")
+    elif isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        for index, item in enumerate(value):
+            validate_explanation_payload(item, f"{path}[{index}]")
+    elif isinstance(value, np.ndarray):
+        for index, item in enumerate(value.tolist()):
+            validate_explanation_payload(item, f"{path}[{index}]")
+    return value
+
+
+def structural_provenance_rows(active_edges, visible_people):
+    """Return complete structural feature provenance for visible people."""
+    required_columns = {"source_row_id", "u", "v", "edge_type"}
+    missing = sorted(required_columns.difference(active_edges.columns))
+    if missing:
+        raise ValueError(
+            "active_edges missing structural provenance columns: "
+            + ", ".join(missing)
+        )
+    visible = _canonical_string_ids(
+        tuple(visible_people), field_name="visible_people"
+    )
+    people = set(visible)
+    selected_positions = []
+    selected_position_set = set()
+    relation_values = active_edges["edge_type"].astype(str).str.upper().to_numpy()
+    source_values = active_edges["source_row_id"].astype(str).to_numpy()
+    u_values = active_edges["u"].astype(str).to_numpy()
+    v_values = active_edges["v"].astype(str).to_numpy()
+    while len(selected_positions) < MAX_STRUCTURAL_PROVENANCE_ROWS:
+        cycle_start = len(selected_positions)
+        for relation_name in ("COTRAVEL", "RESIDENCE"):
+            while len(selected_positions) < MAX_STRUCTURAL_PROVENANCE_ROWS:
+                remaining = MAX_STRUCTURAL_PROVENANCE_ROWS - len(selected_positions)
+                candidates = (
+                    (source_values[position], position)
+                    for position in range(len(active_edges))
+                    if position not in selected_position_set
+                    and relation_values[position] == relation_name
+                    and (
+                        u_values[position] in people
+                        or v_values[position] in people
+                    )
+                )
+                selected = heapq.nsmallest(remaining, candidates)
+                if not selected:
+                    break
+                prior_people_count = len(people)
+                for _, position in selected:
+                    selected_positions.append(position)
+                    selected_position_set.add(position)
+                    people.add(u_values[position])
+                    people.add(v_values[position])
+                if len(people) == prior_people_count:
+                    break
+        if len(selected_positions) == cycle_start:
+            break
+    rows = active_edges.iloc[selected_positions].copy(deep=True)
+    if rows.empty:
+        return rows.reset_index(drop=True)
+    rows["__source_order"] = np.arange(len(rows))
+    rows = rows.sort_values(
+        ["source_row_id", "__source_order"], kind="stable"
+    ).drop(columns="__source_order")
+    return rows.reset_index(drop=True)
+
+
+def _cotravel_groups_changing_pooling(active_edges, groups):
+    relation = active_edges["edge_type"].astype(str).str.upper()
+    cotravel = active_edges.loc[relation == "COTRAVEL"]
+    graph = nx.Graph()
+    graph.add_edges_from(
+        cotravel[["u", "v"]].itertuples(index=False, name=None)
+    )
+    bridge_pairs = {
+        tuple(sorted((str(u), str(v)))) for u, v in nx.bridges(graph)
+    }
+    pair_source_ids = {}
+    for source_row_id, u, v in cotravel[
+        ["source_row_id", "u", "v"]
+    ].itertuples(index=False, name=None):
+        endpoint_pair = tuple(sorted((str(u), str(v))))
+        pair_source_ids.setdefault(endpoint_pair, set()).add(
+            str(source_row_id)
+        )
+
+    changing = set()
+    for group_key, source_row_ids, endpoint_pair in groups:
+        if (
+            endpoint_pair in bridge_pairs
+            and pair_source_ids.get(endpoint_pair, set()).issubset(
+                source_row_ids
+            )
+        ):
+            changing.add(group_key)
+    return frozenset(changing)
+
+
+def build_ablation_specs(
+    snapshot,
+    person_id,
+    community,
+    *,
+    ranked_edge_source_row_ids=(),
+    pooled_logit_contributions=None,
+):
+    if not isinstance(person_id, str) or not person_id.strip():
+        raise ValueError("person_id must be a non-blank string")
+    required = {
+        "source_row_id",
+        "canonical_pair_group_id",
+        "u",
+        "v",
+        "rel",
+        "edge_type",
+    }
+    missing = sorted(required.difference(snapshot.active_edges.columns))
+    if missing:
+        raise ValueError(
+            "snapshot active_edges missing ablation columns: "
+            + ", ".join(missing)
+        )
+    if isinstance(community, CommunityScope):
+        local = member_subgraph(
+            community.engine, person_id, community.scoring_day
+        )
+        community = community.materialize_local(
+            (
+                community.engine.node_ids[int(index)]
+                for index in local.original_node_indices
+            ),
+            target_person_id=person_id,
+        )
+    if not isinstance(community, Mapping):
+        raise ValueError("community must be a mapping")
+    base_source_ids = _canonical_string_ids(
+        community.get("base_source_row_ids", ()),
+        field_name="base_source_row_ids",
+    )
+    nodes_by_id = community.get("nodes_by_id")
+    if not isinstance(nodes_by_id, Mapping):
+        raise ValueError("community nodes_by_id must be a mapping")
+    visible_people = _canonical_string_ids(
+        tuple(nodes_by_id), field_name="visible_people"
+    )
+    if person_id not in visible_people:
+        raise ValueError("person_id must belong to the visible community")
+
+    active = snapshot.active_edges.copy(deep=False)
+    internal = active.loc[
+        active["source_row_id"].astype(str).isin(base_source_ids)
+    ]
+    ranked_source_ids = _canonical_string_ids(
+        tuple(ranked_edge_source_row_ids),
+        field_name="ranked_edge_source_row_ids",
+    )
+    source_rank = {
+        source_row_id: rank
+        for rank, source_row_id in enumerate(ranked_source_ids)
+    }
+    specs = []
+    group_columns = ["canonical_pair_group_id", "rel"]
+    grouped = internal.groupby(group_columns, sort=True, dropna=False)
+    if ranked_source_ids:
+        attributed = internal.loc[
+            internal["source_row_id"].astype(str).isin(ranked_source_ids)
+        ]
+        group_ranks = {}
+        for group_id, relation_id, source_row_id in attributed[
+            [*group_columns, "source_row_id"]
+        ].itertuples(index=False, name=None):
+            key = (group_id, int(relation_id))
+            group_ranks[key] = min(
+                group_ranks.get(key, len(source_rank)),
+                source_rank[str(source_row_id)],
+            )
+        ranked_groups = sorted(
+            group_ranks,
+            key=lambda key: (group_ranks[key], str(key[0]), key[1]),
+        )[:10]
+    else:
+        ranked_groups = [
+            (group_id, int(relation_id))
+            for group_id, relation_id in list(grouped.groups)[:10]
+        ]
+    for group_id, relation_id in ranked_groups:
+        frame = grouped.get_group((group_id, relation_id))
+        source_ids = tuple(sorted(frame["source_row_id"].astype(str)))
+        specs.append(
+            AblationSpec(
+                factor_id=f"pair:{group_id}:rel:{int(relation_id)}",
+                kind="pair_relation",
+                edge_source_row_ids=source_ids,
+            )
+        )
+
+    incident = internal.loc[
+        (internal["u"] == person_id) | (internal["v"] == person_id)
+    ]
+    for relation_id, frame in incident.groupby("rel", sort=True):
+        specs.append(
+            AblationSpec(
+                factor_id=f"relation-star:{person_id}:rel:{int(relation_id)}",
+                kind="relation_star",
+                edge_source_row_ids=tuple(
+                    sorted(frame["source_row_id"].astype(str))
+                ),
+            )
+        )
+
+    caught_before = frozenset(snapshot.caught_before_snapshot)
+    caught_visible = caught_before.intersection(visible_people)
+    if pooled_logit_contributions is None:
+        contributions = {}
+    elif not isinstance(pooled_logit_contributions, Mapping):
+        raise ValueError("pooled_logit_contributions must be a mapping")
+    else:
+        contributions = {
+            str(key): float(value)
+            for key, value in pooled_logit_contributions.items()
+        }
+        if any(not np.isfinite(value) for value in contributions.values()):
+            raise ValueError("pooled_logit_contributions must be finite")
+    for caught_person_id in sorted(
+        caught_visible,
+        key=lambda value: (-abs(contributions.get(value, 0.0)), value),
+    )[:5]:
+        specs.append(
+            AblationSpec(
+                factor_id=f"caught:{caught_person_id}",
+                kind="caught_flag",
+                caught_person_ids=(caught_person_id,),
+            )
+        )
+
+    structural_rows = structural_provenance_rows(active, visible_people)
+    if len(structural_rows):
+        structural_people = set(structural_rows["u"].astype(str)).union(
+            structural_rows["v"].astype(str)
+        )
+        provenance_people = tuple(
+            sorted(structural_people.difference(visible_people))
+        )
+        if provenance_people:
+            specs.append(
+                AblationSpec(
+                    factor_id=f"structural:{person_id}",
+                    kind="structural_provenance",
+                    edge_source_row_ids=tuple(
+                        sorted(structural_rows["source_row_id"].astype(str))
+                    ),
+                    provenance_node_ids=provenance_people,
+                )
+            )
+
+    cotravel = internal.loc[
+        internal["edge_type"].astype(str).str.upper() == "COTRAVEL"
+    ]
+    cotravel_groups = []
+    for (group_id, relation_id), frame in cotravel.groupby(
+        group_columns, sort=True, dropna=False
+    ):
+        endpoint_pairs = {
+            tuple(sorted((str(u), str(v))))
+            for u, v in frame[["u", "v"]].itertuples(
+                index=False, name=None
+            )
+        }
+        if len(endpoint_pairs) != 1:
+            raise ValueError(
+                "canonical COTRAVEL pair group has inconsistent endpoints"
+            )
+        source_ids = tuple(sorted(frame["source_row_id"].astype(str)))
+        endpoint_pair = next(iter(endpoint_pairs))
+        if ranked_source_ids and not set(source_ids).intersection(source_rank):
+            continue
+        cotravel_groups.append(
+            (
+                (group_id, int(relation_id)),
+                frozenset(source_ids),
+                endpoint_pair,
+            )
+        )
+    pooling_changes = _cotravel_groups_changing_pooling(
+        internal, cotravel_groups
+    )
+    selected_pooling = 0
+    for (group_id, relation_id), source_ids, _ in cotravel_groups:
+        if (group_id, relation_id) in pooling_changes:
+            specs.append(
+                AblationSpec(
+                    factor_id=(
+                        f"cotravel-pool:{group_id}:rel:{int(relation_id)}"
+                    ),
+                    kind="cotravel_pool",
+                    edge_source_row_ids=tuple(source_ids),
+                )
+            )
+            selected_pooling += 1
+            if selected_pooling == 5:
+                break
+
+    by_factor_id = {}
+    for spec in specs:
+        existing = by_factor_id.get(spec.factor_id)
+        if existing is not None and existing != spec:
+            raise ValueError(f"conflicting ablation factor_id: {spec.factor_id}")
+        by_factor_id[spec.factor_id] = spec
+    return [by_factor_id[factor_id] for factor_id in sorted(by_factor_id)]
+
+
+def build_complete_community(engine, target_person_id, scoring_day):
+    if target_person_id not in engine.person_index:
+        raise KeyError(f"unknown person_id: {target_person_id}")
+    snapshot = engine.snapshot(scoring_day)
+    target_index = engine.person_index[target_person_id]
+    target_root = snapshot.component_roots[target_index]
+    pooled_indices = np.flatnonzero(snapshot.component_roots == target_root)
+    pooled_member_ids = tuple(
+        sorted(engine.node_ids[int(index)] for index in pooled_indices)
+    )
+    scoring_day_iso = snapshot.scoring_day.isoformat()
+    component_id = f"component:{_length_framed_hash(pooled_member_ids)}"
+    community_key = f"community:{_length_framed_hash((scoring_day_iso, component_id))}"
+
+    distances = np.full(len(engine.node_ids), -1, dtype=np.int8)
+    distances[pooled_indices] = 0
+    frontier = np.zeros(len(engine.node_ids), dtype=bool)
+    frontier[pooled_indices] = True
+    tensor_edges = snapshot.edge_index.detach().cpu().numpy()
+    for hop in (1, 2):
+        touches = frontier[tensor_edges[0]] | frontier[tensor_edges[1]]
+        adjacent = np.unique(tensor_edges[:, touches])
+        adjacent = adjacent[distances[adjacent] < 0]
+        distances[adjacent] = hop
+        frontier.fill(False)
+        frontier[adjacent] = True
+
+    included_indices = np.flatnonzero(distances >= 0)
+    ordered_indices = np.array(
+        sorted(included_indices, key=lambda index: engine.node_ids[int(index)]),
+        dtype=np.int64,
+    )
+    node_ids = tuple(engine.node_ids[int(index)] for index in ordered_indices)
+    included_people = frozenset(node_ids)
+    active = snapshot.active_edges
+    internal_mask = active["u"].isin(included_people) & active["v"].isin(
+        included_people
+    )
+    positions = np.flatnonzero(internal_mask.to_numpy())
+    if len(positions):
+        ordering = active.iloc[positions][
+            ["canonical_pair_group_id", "rel", "avail_time", "source_row_id"]
+        ].copy(deep=False)
+        ordering["__row_position"] = positions
+        positions = ordering.sort_values(
+            ["canonical_pair_group_id", "rel", "avail_time", "source_row_id"],
+            kind="stable",
+        )["__row_position"].to_numpy(dtype=np.int64, copy=True)
+        group_values = active.iloc[positions][
+            ["canonical_pair_group_id", "rel"]
+        ].to_numpy()
+        starts = np.concatenate(
+            (
+                np.array([0], dtype=np.int64),
+                np.flatnonzero(
+                    np.any(group_values[1:] != group_values[:-1], axis=1)
+                ).astype(np.int64)
+                + 1,
+            )
+        )
+    else:
+        positions = np.zeros(0, dtype=np.int64)
+        starts = np.zeros(0, dtype=np.int64)
+    pooled_lookup = np.zeros(len(engine.node_ids), dtype=bool)
+    pooled_lookup[pooled_indices] = True
+    return CommunityScope(
+        engine=engine,
+        scoring_day=snapshot.scoring_day,
+        component_id=component_id,
+        community_key=community_key,
+        node_ids=node_ids,
+        node_indices=ordered_indices,
+        message_distances=distances[ordered_indices],
+        pooled_members=pooled_lookup[ordered_indices],
+        edge_row_indices=positions,
+        edge_group_starts=starts,
+        target_person_id=target_person_id,
+    )
+
+
+_STRUCTURAL_FORBIDDEN_TOKENS = frozenset(
+    {
+        "hidden",
+        "future",
+        "caught",
+        "label",
+        "narrative",
+        "mask",
+        "rank",
+        "probability",
+        "score",
+        "organization",
+        "org",
+        "false",
+        "negative",
+        "outcome",
+        "lifetime",
+        "arrest",
+        "seizure",
+    }
+)
+_STRUCTURAL_OBSERVED_NODE_FIELDS = frozenset(
+    {
+        "caught_before_snapshot",
+        "caught_label_available_time",
+    }
+)
+
+
+def _structural_safe_text(value, *, field_name):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a nonblank string")
+    normalized = re.sub(r"[^a-z0-9]+", "", value.casefold())
+    forbidden = sorted(
+        token
+        for token in _STRUCTURAL_FORBIDDEN_TOKENS
+        if token in normalized
+    )
+    if forbidden:
+        raise ValueError(
+            f"forbidden structural token in {field_name}: {forbidden}"
+        )
+    return value
+
+
+def _structural_mapping_keys(value, *, allowed, field_name):
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a mapping")
+    for key in value:
+        if not isinstance(key, str):
+            raise ValueError(f"{field_name} keys must be strings")
+        if key not in _STRUCTURAL_OBSERVED_NODE_FIELDS:
+            _structural_safe_text(key, field_name=f"{field_name} key")
+        if key not in allowed:
+            raise ValueError(f"unsupported structural field: {field_name}.{key}")
+
+
+def _structural_nonnegative_int(value, *, field_name):
+    if (
+        not isinstance(value, (int, np.integer))
+        or isinstance(value, (bool, np.bool_))
+        or value < 0
+    ):
+        raise ValueError(f"{field_name} must be a nonnegative integer")
+    return int(value)
+
+
+def _structural_as_of_timestamp(value, *, scoring_day, field_name):
+    if isinstance(value, str):
+        _structural_safe_text(value, field_name=field_name)
+    timestamp = pd.to_datetime(value, utc=True, errors="raise")
+    if not isinstance(timestamp, pd.Timestamp) or pd.isna(timestamp):
+        raise ValueError(f"{field_name} must be a scalar timestamp")
+    if not timestamp < scoring_day:
+        raise ValueError(f"{field_name} must be strictly before the snapshot")
+    return timestamp
+
+
+def _structural_node_record(node, *, scoring_day, field_name):
+    _structural_mapping_keys(
+        node,
+        allowed={
+            "node_id",
+            "target",
+            "message_distance",
+            "pooled_member",
+            "caught_before_snapshot",
+            "caught_label_available_time",
+        },
+        field_name=field_name,
+    )
+    node_id = _structural_safe_text(node.get("node_id"), field_name=f"{field_name}.node_id")
+    if "message_distance" not in node:
+        raise ValueError(f"{field_name}.message_distance is required")
+    if "pooled_member" not in node or not isinstance(node["pooled_member"], bool):
+        raise ValueError(f"{field_name}.pooled_member must be a boolean")
+    if "target" not in node or not isinstance(node["target"], bool):
+        raise ValueError(f"{field_name}.target must be a boolean")
+    if "caught_before_snapshot" not in node or not isinstance(
+        node["caught_before_snapshot"], bool
+    ):
+        raise ValueError(
+            f"{field_name}.caught_before_snapshot must be a boolean"
+        )
+    if "caught_label_available_time" not in node:
+        raise ValueError(
+            f"{field_name}.caught_label_available_time is required"
+        )
+    caught_before = node["caught_before_snapshot"]
+    label_available_time = node["caught_label_available_time"]
+    if label_available_time is None:
+        if caught_before:
+            raise ValueError(
+                f"{field_name}.caught label availability is required when "
+                "caught_before_snapshot is true"
+            )
+        normalized_label_available_time = None
+    else:
+        if not caught_before:
+            raise ValueError(
+                f"{field_name}.caught label availability requires "
+                "caught_before_snapshot"
+            )
+        normalized_label_available_time = _structural_as_of_timestamp(
+            label_available_time,
+            scoring_day=scoring_day,
+            field_name=f"{field_name}.caught_label_available_time",
+        ).isoformat()
+    return {
+        "node_id": node_id,
+        "target": node["target"],
+        "message_distance": _structural_nonnegative_int(
+            node["message_distance"],
+            field_name=f"{field_name}.message_distance",
+        ),
+        "pooled_member": node["pooled_member"],
+        "caught_before_snapshot": caught_before,
+        "caught_label_available_time": normalized_label_available_time,
+    }
+
+
+def _structural_edge_record(edge, *, field_name):
+    _structural_mapping_keys(
+        edge,
+        allowed={
+            "edge_id",
+            "u",
+            "v",
+            "rel",
+            "edge_type",
+            "message_hop",
+            "source_row_ids",
+            "source_row_count",
+            "observations",
+        },
+        field_name=field_name,
+    )
+    record = {
+        "edge_id": _structural_safe_text(
+            edge.get("edge_id"), field_name=f"{field_name}.edge_id"
+        ),
+        "u": _structural_safe_text(edge.get("u"), field_name=f"{field_name}.u"),
+        "v": _structural_safe_text(edge.get("v"), field_name=f"{field_name}.v"),
+        "edge_type": _structural_safe_text(
+            edge.get("edge_type"), field_name=f"{field_name}.edge_type"
+        ),
+    }
+    source_row_ids = edge.get("source_row_ids")
+    if not isinstance(source_row_ids, list) or not source_row_ids:
+        raise ValueError(f"{field_name}.source_row_ids must be a nonempty list")
+    record["source_row_ids"] = [
+        _structural_safe_text(
+            source_row_id,
+            field_name=f"{field_name}.source_row_ids[{index}]",
+        )
+        for index, source_row_id in enumerate(source_row_ids)
+    ]
+    if len(set(record["source_row_ids"])) != len(record["source_row_ids"]):
+        raise ValueError(f"{field_name}.source_row_ids must be unique")
+    if "source_row_count" not in edge:
+        raise ValueError(f"{field_name}.source_row_count is required")
+    record["source_row_count"] = _structural_nonnegative_int(
+        edge["source_row_count"], field_name=f"{field_name}.source_row_count"
+    )
+    if record["source_row_count"] != len(record["source_row_ids"]):
+        raise ValueError(f"{field_name} has incomplete or truncated source rows")
+    for field in ("rel", "message_hop"):
+        if field in edge:
+            record[field] = _structural_nonnegative_int(
+                edge[field], field_name=f"{field_name}.{field}"
+            )
+    observations = edge.get("observations", [])
+    if not isinstance(observations, list):
+        raise ValueError(f"{field_name}.observations must be a list")
+    return record, observations
+
+
+def build_structural_community_control(community):
+    """Return complete, JSON-safe, strictly as-of structural community data."""
+    if isinstance(community, CommunityScope):
+        scoring_day = community.scoring_day
+        component_id = _structural_safe_text(
+            community.component_id, field_name="component_id"
+        )
+        community_key = _structural_safe_text(
+            community.community_key, field_name="community_key"
+        )
+        if community.complete is not True:
+            raise ValueError("structural community control requires complete evidence")
+        raw_nodes = list(community.iter_nodes())
+        raw_edges = list(community.iter_edges())
+        raw_provenance = list(community.iter_provenance())
+        structural_nodes = [
+            _structural_node_record(
+                {
+                    "node_id": node["node_id"],
+                    "target": node["target"],
+                    "message_distance": node["message_distance"],
+                    "pooled_member": node["pooled_member"],
+                    "caught_before_snapshot": node["caught_before_snapshot"],
+                    "caught_label_available_time": node[
+                        "caught_label_available_time"
+                    ],
+                },
+                scoring_day=scoring_day,
+                field_name=f"nodes[{index}]",
+            )
+            for index, node in enumerate(raw_nodes)
+        ]
+        structural_edges = []
+        edge_observations = []
+        for index, edge in enumerate(raw_edges):
+            record, observations = _structural_edge_record(
+                edge, field_name=f"edges[{index}]"
+            )
+            structural_edges.append(record)
+            if observations:
+                edge_observations.extend(
+                    (record["edge_id"], observation)
+                    for observation in observations
+                )
+    elif isinstance(community, Mapping):
+        _structural_mapping_keys(
+            community,
+            allowed={
+                "complete",
+                "scoring_day",
+                "component_id",
+                "community_key",
+                "nodes",
+                "edges",
+                "provenance_observations",
+            },
+            field_name="community",
+        )
+        if community.get("complete") is not True:
+            raise ValueError("structural community control requires complete evidence")
+        raw_scoring_day = community.get("scoring_day")
+        if isinstance(raw_scoring_day, str):
+            _structural_safe_text(raw_scoring_day, field_name="scoring_day")
+        scoring_day = _scoring_day(raw_scoring_day)
+        component_id = _structural_safe_text(
+            community.get("component_id"), field_name="component_id"
+        )
+        community_key = _structural_safe_text(
+            community.get("community_key"), field_name="community_key"
+        )
+        raw_nodes = community.get("nodes")
+        raw_edges = community.get("edges")
+        raw_provenance = community.get("provenance_observations")
+        if not isinstance(raw_nodes, list) or not isinstance(raw_edges, list):
+            raise ValueError("community nodes and edges must be lists")
+        if not isinstance(raw_provenance, list):
+            raise ValueError("community provenance_observations must be a list")
+        structural_nodes = [
+            _structural_node_record(
+                node,
+                scoring_day=scoring_day,
+                field_name=f"nodes[{index}]",
+            )
+            for index, node in enumerate(raw_nodes)
+        ]
+        structural_edges = []
+        edge_observations = []
+        for index, edge in enumerate(raw_edges):
+            record, observations = _structural_edge_record(
+                edge, field_name=f"edges[{index}]"
+            )
+            structural_edges.append(record)
+            if observations:
+                edge_observations.extend(
+                    (record["edge_id"], observation)
+                    for observation in observations
+                )
+    else:
+        raise ValueError("community must be a CommunityScope or mapping")
+
+    node_ids = [node["node_id"] for node in structural_nodes]
+    if len(set(node_ids)) != len(node_ids):
+        raise ValueError("structural community node IDs must be unique")
+    target_nodes = [node for node in structural_nodes if node["target"]]
+    if len(target_nodes) != 1:
+        raise ValueError(
+            "structural community requires exactly one target node"
+        )
+    edge_ids = [edge["edge_id"] for edge in structural_edges]
+    if len(set(edge_ids)) != len(edge_ids):
+        raise ValueError("structural community edge IDs must be unique")
+    node_id_set = set(node_ids)
+    if any(
+        edge["u"] not in node_id_set or edge["v"] not in node_id_set
+        for edge in structural_edges
+    ):
+        raise ValueError("structural edge endpoint is absent from community nodes")
+    source_row_edge_ids = {}
+    for edge in structural_edges:
+        for source_row_id in edge["source_row_ids"]:
+            previous_edge_id = source_row_edge_ids.get(source_row_id)
+            if previous_edge_id is not None and previous_edge_id != edge["edge_id"]:
+                raise ValueError(
+                    "source_row_id maps to multiple edges: "
+                    f"{source_row_id} ({previous_edge_id}, {edge['edge_id']})"
+                )
+            source_row_edge_ids[source_row_id] = edge["edge_id"]
+
+    provenance_by_key = {}
+
+    def add_provenance(edge_id, observation, *, field_name):
+        if not isinstance(observation, Mapping):
+            raise ValueError(f"{field_name} must be a mapping")
+        allowed = {"edge_id", "source_row_id", "available_time"}
+        if field_name.startswith("edge_observations"):
+            allowed = {"source_row_id", "available_time"}
+        _structural_mapping_keys(observation, allowed=allowed, field_name=field_name)
+        observed_edge_id = edge_id
+        if "edge_id" in observation:
+            observed_edge_id = _structural_safe_text(
+                observation["edge_id"], field_name=f"{field_name}.edge_id"
+            )
+            if observed_edge_id != edge_id:
+                raise ValueError(f"{field_name}.edge_id does not match its edge")
+        observed_edge_id = _structural_safe_text(
+            observed_edge_id, field_name=f"{field_name}.edge_id"
+        )
+        source_row_id = _structural_safe_text(
+            observation.get("source_row_id"),
+            field_name=f"{field_name}.source_row_id",
+        )
+        timestamp = _structural_as_of_timestamp(
+            observation.get("available_time"),
+            scoring_day=scoring_day,
+            field_name=f"{field_name}.available_time",
+        )
+        key = (observed_edge_id, source_row_id)
+        if key in provenance_by_key:
+            raise ValueError(f"duplicate structural provenance: {key}")
+        provenance_by_key[key] = timestamp.isoformat()
+
+    for index, observation in enumerate(raw_provenance):
+        add_provenance(
+            observation.get("edge_id") if isinstance(observation, Mapping) else None,
+            observation,
+            field_name=f"provenance_observations[{index}]",
+        )
+    for index, (edge_id, observation) in enumerate(edge_observations):
+        add_provenance(
+            edge_id,
+            observation,
+            field_name=f"edge_observations[{index}]",
+        )
+
+    expected_keys = {
+        (edge["edge_id"], source_row_id)
+        for edge in structural_edges
+        for source_row_id in edge["source_row_ids"]
+    }
+    if expected_keys:
+        if not provenance_by_key:
+            raise ValueError(
+                "complete structural community requires provenance evidence"
+            )
+        if set(provenance_by_key) != expected_keys:
+            missing = sorted(expected_keys.difference(provenance_by_key))
+            extra = sorted(set(provenance_by_key).difference(expected_keys))
+            raise ValueError(
+                "structural provenance source rows do not match edges; "
+                f"missing={missing}, extra={extra}"
+            )
+        for edge in structural_edges:
+            edge["available_times"] = [
+                provenance_by_key[(edge["edge_id"], source_row_id)]
+                for source_row_id in edge["source_row_ids"]
+            ]
+    elif provenance_by_key:
+        raise ValueError(
+            "structural provenance source rows do not match edges; "
+            f"missing=[], extra={sorted(provenance_by_key)}"
+        )
+
+    payload = {
+        "detail_kind": "community_only",
+        "kind": "community_only",
+        "evidence_kind": "structural_provenance",
+        "complete": True,
+        "scoring_day": scoring_day.isoformat(),
+        "component_id": component_id,
+        "community_key": community_key,
+        "communities": [community_key],
+        "node_count": len(structural_nodes),
+        "edge_count": len(structural_edges),
+        "nodes": structural_nodes,
+        "edges": structural_edges,
+        # Structural stage rules let a Baseline control reuse the graph-stage
+        # controls. They are evaluated per edge by the renderer, so they add
+        # no attribution claim. The Hybrid-only rank-fusion stage is
+        # deliberately absent: a community-only control carries no ranking
+        # evidence at all.
+        "structural_stages": _structural_stage_rules(),
+        "evidence_boundary": {
+            "snapshot": scoring_day.isoformat(),
+            "edge_rule": "available_time < snapshot",
+            "caught_rule": "label_available_time_utc < snapshot",
+        },
+    }
+    safe_payload = json_safe(payload)
+    json.dumps(
+        safe_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return safe_payload
+
+
+def _normalized_layout(graph):
+    """Place deterministic connected clusters in bounded grid cells, O(N+E)."""
+    if not graph:
+        return {}
+    components = sorted(
+        (tuple(sorted(component)) for component in nx.connected_components(graph)),
+        key=lambda component: component[0],
+    )
+    cluster_columns = max(1, int(np.ceil(np.sqrt(len(components)))))
+    cluster_rows = int(np.ceil(len(components) / cluster_columns))
+    positions = {}
+    for cluster_index, component in enumerate(components):
+        cluster_column = cluster_index % cluster_columns
+        cluster_row = cluster_index // cluster_columns
+        local_columns = max(1, int(np.ceil(np.sqrt(len(component)))))
+        local_rows = int(np.ceil(len(component) / local_columns))
+        for local_index, person_id in enumerate(component):
+            local_column = local_index % local_columns
+            local_row = local_index // local_columns
+            local_x = (local_column + 0.5) / local_columns
+            local_y = (local_row + 0.5) / local_rows
+            positions[person_id] = np.array(
+                [
+                    (cluster_column + 0.1 + 0.8 * local_x) / cluster_columns,
+                    (cluster_row + 0.1 + 0.8 * local_y) / cluster_rows,
+                ],
+                dtype=float,
+            )
+    return positions
+
+
+def json_safe(value):
+    """Detach supported scientific values into deterministic JSON primitives."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): json_safe(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
+        return value.isoformat()
+    if isinstance(value, np.ndarray):
+        return json_safe(value.tolist())
+    if isinstance(value, np.generic):
+        return json_safe(value.item())
+    if torch.is_tensor(value):
+        return json_safe(value.detach().cpu().numpy())
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return [json_safe(item) for item in sorted(value, key=str)]
+    if isinstance(value, float) and not np.isfinite(value):
+        raise ValueError("JSON payload floats must be finite")
+    return value
+
+
+def _outside_ring_position(node_id):
+    """Deterministic ring coordinate for an outside-community person.
+
+    The coordinate must depend only on ``node_id`` so that a person appearing in
+    more than one provenance expansion always lands on the same point. Both the
+    recovery bundle's overlay ``add_node`` guard and the dashboard reconcile
+    outside nodes by ``node_id`` and reject the same id recurring with different
+    ``x``/``y``; deriving the angle from a hash of the id (rather than the node's
+    index within one expansion's outside set) keeps those coordinates stable
+    across expansions while staying inside the unit square.
+    """
+    digest = hashlib.sha256(str(node_id).encode("utf-8")).digest()
+    angle = 2 * np.pi * (int.from_bytes(digest[:8], "big") / 2 ** 64)
+    return (
+        float(0.5 + 0.46 * np.cos(angle)),
+        float(0.5 + 0.46 * np.sin(angle)),
+    )
+
+
+def build_provenance_expansion(engine, snapshot, spec, community):
+    """Expand strict-as-of factor provenance outside the message community."""
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    if not isinstance(snapshot, DaySnapshot):
+        raise ValueError("snapshot must be a DaySnapshot")
+    if not isinstance(spec, AblationSpec):
+        raise ValueError("spec must be an AblationSpec")
+    if isinstance(community, CommunityScope):
+        target_person_id = spec.factor_id.split(":", 1)[-1]
+        if target_person_id not in engine.person_index:
+            raise ValueError("provenance expansion target is absent from the graph")
+        local = member_subgraph(engine, target_person_id, snapshot.scoring_day)
+        community = community.materialize_local(
+            (
+                engine.node_ids[int(index)]
+                for index in local.original_node_indices
+            ),
+            target_person_id=target_person_id,
+        )
+    if not isinstance(community, Mapping):
+        raise ValueError("community must be a mapping")
+    base_ids = set(
+        _canonical_string_ids(
+            community.get("base_source_row_ids", ()),
+            field_name="base_source_row_ids",
+        )
+    )
+    active_ids = set(snapshot.active_edges["source_row_id"].astype(str))
+    inactive_ids = sorted(
+        set(spec.edge_source_row_ids).difference(active_ids)
+    )
+    if inactive_ids:
+        raise ValueError(
+            "provenance expansion source IDs must be active strictly before "
+            f"the scoring snapshot: {inactive_ids}"
+        )
+    outside_ids = set(spec.edge_source_row_ids).difference(base_ids)
+    if not outside_ids:
+        return None
+    frame = snapshot.active_edges.loc[
+        snapshot.active_edges["source_row_id"].astype(str).isin(outside_ids)
+    ].copy(deep=True)
+    if frame.empty:
+        return None
+    if not (
+        pd.to_datetime(frame["avail_time"], utc=True, errors="raise")
+        < snapshot.scoring_day
+    ).all():
+        raise ValueError(
+            "provenance expansion contains evidence at or after the snapshot"
+        )
+    nodes_by_id = community.get("nodes_by_id")
+    if not isinstance(nodes_by_id, Mapping):
+        raise ValueError("community nodes_by_id must be a mapping")
+    people = sorted(
+        set(frame["u"].astype(str)).union(frame["v"].astype(str))
+    )
+    nodes = []
+    for person_id in people:
+        if person_id in nodes_by_id:
+            nodes.append(copy.deepcopy(dict(nodes_by_id[person_id])))
+            continue
+        caught_before = person_id in snapshot.caught_before_snapshot
+        available_time = engine.caught_available_time(person_id)
+        ring_x, ring_y = _outside_ring_position(person_id)
+        nodes.append(
+            {
+                "node_id": person_id,
+                "x": ring_x,
+                "y": ring_y,
+                "target": False,
+                "pooled_member": False,
+                "caught_before_snapshot": caught_before,
+                "caught_label_available_time": (
+                    available_time.isoformat()
+                    if caught_before and available_time is not None
+                    else None
+                ),
+            }
+        )
+
+    edges = []
+    for (group_id, relation), group in frame.groupby(
+        ["canonical_pair_group_id", "rel"], sort=True
+    ):
+        endpoint_pairs = {
+            tuple(sorted((str(row.u), str(row.v))))
+            for row in group.itertuples(index=False)
+        }
+        if len(endpoint_pairs) != 1:
+            raise ValueError(
+                "provenance pair group has inconsistent endpoints"
+            )
+        edge_types = set(group["edge_type"].astype(str))
+        if len(edge_types) != 1:
+            raise ValueError(
+                "provenance pair group has inconsistent edge types"
+            )
+        u, v = next(iter(endpoint_pairs))
+        observations = sorted(
+            (
+                {
+                    "source_row_id": str(row.source_row_id),
+                    "available_time": pd.Timestamp(row.avail_time).isoformat(),
+                }
+                for row in group.itertuples(index=False)
+            ),
+            key=lambda item: (
+                item["available_time"],
+                item["source_row_id"],
+            ),
+        )
+        edges.append(
+            {
+                "edge_id": f"provenance:{group_id}:rel:{int(relation)}",
+                "u": u,
+                "v": v,
+                "rel": int(relation),
+                "edge_type": next(iter(edge_types)),
+                "source_row_ids": sorted(
+                    observation["source_row_id"]
+                    for observation in observations
+                ),
+                "observations": observations,
+            }
+        )
+    edges.sort(key=lambda edge: edge["edge_id"])
+    return {
+        "expansion_id": f"provenance:{spec.factor_id}",
+        "label": "outside message community",
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+def _normalize_member_mask(mask, *, expected_length, field_name):
+    values = _readonly_float_mask(
+        mask, expected_length=expected_length, field_name=field_name
+    )
+    if values.size == 0:
+        return np.zeros(0, dtype=float)
+    maximum = float(values.max())
+    return (
+        np.asarray(values, dtype=float) / maximum
+        if maximum > 0.0
+        else np.zeros(values.shape, dtype=float)
+    )
+
+
+def _empty_feature_aggregate(feature_count):
+    empty = np.zeros(feature_count, dtype=float)
+    return {
+        "median": empty.copy(),
+        "q1": empty.copy(),
+        "q3": empty.copy(),
+        "selection_frequency": empty.copy(),
+        "restart_count": 0,
+        "top_factor_agreement": 0.0,
+        "status": "no-features",
+    }
+
+
+def _factor_restart_metrics(
+    spec,
+    community_edges,
+    feature_names,
+    feature_aggregate,
+):
+    feature_indices = []
+    if spec.kind == "caught_flag" and "caught_before_snapshot" in feature_names:
+        feature_indices = [feature_names.index("caught_before_snapshot")]
+    elif spec.kind == "structural_provenance":
+        feature_indices = [
+            feature_names.index(name)
+            for name in (
+                "log1p_cotravel_component_size",
+                "log1p_households_spanned",
+            )
+            if name in feature_names
+        ]
+    if feature_indices and feature_aggregate["restart_count"]:
+        frequency = max(
+            feature_aggregate["selection_frequency"][index]
+            for index in feature_indices
+        )
+        iqr = max(
+            feature_aggregate["q3"][index]
+            - feature_aggregate["q1"][index]
+            for index in feature_indices
+        )
+        return float(frequency), float(iqr), "feature_mask"
+
+    matching = [
+        edge
+        for edge in community_edges
+        if set(edge["source_row_ids"]).intersection(
+            spec.edge_source_row_ids
+        )
+    ]
+    if matching:
+        frequency = max(edge["selection_frequency"] for edge in matching)
+        iqr = max(
+            edge["explainer_q3"] - edge["explainer_q1"]
+            for edge in matching
+        )
+        return float(frequency), float(iqr), "edge_mask"
+    return 0.0, 1.0, "not_applicable"
+
+
+def compose_case_explanation(
+    engine,
+    case,
+    *,
+    member_explainer=None,
+    restart_seeds=EXPLAINER_RESTART_SEEDS,
+    explainer_epochs=EXPLAINER_EPOCHS,
+    max_explainable_component_size=None,
+):
+    """Compose one deterministic, leak-safe seed-0 explanation payload.
+
+    GNNExplainer runs only for the target person's exact two-hop pre-pool
+    computation. Component pooling remains an exact deterministic ledger.
+    """
+    if not isinstance(engine, Seed0ExplanationEngine):
+        raise ValueError("engine must be a Seed0ExplanationEngine")
+    if not isinstance(case, HybridOnlyCase):
+        raise ValueError("case must be a HybridOnlyCase")
+    explainer_epochs = _validated_explainer_epochs(explainer_epochs)
+    if max_explainable_component_size is not None:
+        if (
+            not isinstance(max_explainable_component_size, (int, np.integer))
+            or isinstance(max_explainable_component_size, (bool, np.bool_))
+            or max_explainable_component_size <= 0
+        ):
+            raise ValueError(
+                "max_explainable_component_size must be a positive integer"
+            )
+        max_explainable_component_size = int(max_explainable_component_size)
+    seeds = _validated_restart_seeds(restart_seeds)
+    reference = engine.rank_reference
+    if reference is None:
+        raise ValueError("case explanation requires a frozen rank reference")
+    if not 0 <= case.anchor.row_index < len(reference.event_ids):
+        raise ValueError("case anchor row is outside the rank reference")
+
+    snapshot = engine.snapshot(case.anchor.scoring_day)
+    target_index = engine.person_index[case.person_id]
+    decision_trace = case.decision_trace_jsonable()
+    snapshot_probability_parity = _probability_parity_matches(
+        snapshot.probabilities[target_index],
+        reference.seed0_gnn_raw[case.anchor.row_index],
+    )
+    anchor_event_parity = bool(
+        reference.event_ids[case.anchor.row_index] == case.anchor.event_id
+    )
+    if not snapshot_probability_parity or not anchor_event_parity:
+        raise ValueError("case explanation failed production parity")
+    daily_budget = decision_trace.get("daily_budget")
+    if (
+        not isinstance(daily_budget, (int, np.integer))
+        or isinstance(daily_budget, (bool, np.bool_))
+        or daily_budget <= 0
+    ):
+        raise ValueError("case decision trace daily_budget must be positive")
+    daily_budget = int(daily_budget)
+    engine._Seed0ExplanationEngine__validate_candidate_rows_for_day(
+        case.anchor.scoring_day,
+        case.baseline_candidate_row_indices,
+        field_name="baseline_candidate_row_indices",
+    )
+    engine._Seed0ExplanationEngine__validate_candidate_rows_for_day(
+        case.anchor.scoring_day,
+        case.hybrid_candidate_row_indices,
+        field_name="hybrid_candidate_row_indices",
+    )
+    try:
+        expected_trace = build_decision_trace(
+            reference,
+            row_index=case.anchor.row_index,
+            baseline_candidate_row_indices=(
+                case.baseline_candidate_row_indices
+            ),
+            hybrid_candidate_row_indices=case.hybrid_candidate_row_indices,
+            daily_budget=daily_budget,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "case decision trace does not match the frozen references"
+        ) from exc
+    if decision_trace != expected_trace:
+        raise ValueError(
+            "case decision trace does not match the frozen references"
+        )
+    outer_case_parity = bool(
+        case.baseline_rank == expected_trace["baseline_rank"]
+        and case.gnn_rank == expected_trace["seed0_gnn_rank"]
+        and case.hybrid_rank == expected_trace["seed0_hybrid_rank"]
+        and np.isclose(
+            case.baseline_percentile,
+            expected_trace["baseline_percentile"],
+            rtol=1e-7,
+            atol=1e-8,
+        )
+        and np.isclose(
+            case.gnn_percentile,
+            expected_trace["seed0_gnn_percentile"],
+            rtol=1e-7,
+            atol=1e-8,
+        )
+    )
+    if not outer_case_parity:
+        raise ValueError(
+            "case rank fields do not match the frozen references"
+        )
+    eligibility = explainability_eligibility(
+        engine, case.person_id, case.anchor.scoring_day
+    )
+    if not eligibility["eligible"]:
+        raise ExplainerEligibilityError(eligibility)
+    component_root = snapshot.component_roots[target_index]
+    member_indices = np.flatnonzero(snapshot.component_roots == component_root)
+    member_ids = tuple(
+        sorted(engine.node_ids[int(index)] for index in member_indices)
+    )
+    if (
+        max_explainable_component_size is not None
+        and len(member_ids) > max_explainable_component_size
+    ):
+        raise ValueError(
+            f"pooled component size {len(member_ids)} exceeds maximum "
+            "explainable component size "
+            f"{max_explainable_component_size}"
+        )
+    ordered_member_indices = np.fromiter(
+        (engine.person_index[person_id] for person_id in member_ids),
+        dtype=np.int64,
+        count=len(member_ids),
+    )
+    member_logits = snapshot.prepool_logits[ordered_member_indices]
+    pooled_logit = snapshot.pooled_logits[target_index]
+    pooled_parity = bool(
+        torch.isclose(
+            pooled_logit,
+            member_logits.mean(),
+            rtol=1e-6,
+            atol=1e-6,
+        ).item()
+    )
+    if not pooled_parity:
+        raise ValueError("component member logits failed pooled-logit parity")
+
+    probability_parity = snapshot_probability_parity
+    percentile_parity = True
+    rank_parity = True
+
+    context = CounterfactualContext(
+        person_id=case.person_id,
+        row_index=case.anchor.row_index,
+        scoring_day=case.anchor.scoring_day,
+        same_day_person_row_indices=case.same_day_person_row_indices,
+        candidate_row_indices=case.hybrid_candidate_row_indices,
+        original_hybrid_rank=case.hybrid_rank,
+    )
+    diagnostic_edge_source_set_probability(engine, context, ())
+    explainer = run_member_explanation if member_explainer is None else member_explainer
+    result = explainer(
+        engine,
+        case.person_id,
+        case.anchor.scoring_day,
+        restart_seeds=seeds,
+        epochs=explainer_epochs,
+    )
+    if tuple(result.get("restart_seeds", ())) != seeds:
+        raise ValueError("target explanation restart seeds are misaligned")
+    expected_logit = float(snapshot.prepool_logits[target_index])
+    if not (
+        np.isclose(
+            result.get("local_prepool_logit", np.nan),
+            expected_logit,
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        and np.isclose(
+            result.get("full_prepool_logit", np.nan),
+            expected_logit,
+            rtol=1e-6,
+            atol=1e-6,
+        )
+    ):
+        raise ValueError("target explanation failed local/full parity")
+    local = member_subgraph(engine, case.person_id, case.anchor.scoring_day)
+    provenance = local.tensor_edge_source_row_ids
+    local_edge_index = local.edge_index.detach().cpu().numpy()
+    local_original_indices = np.asarray(local.original_node_indices, dtype=np.int64)
+    local_node_count = len(local_original_indices)
+    community_scope = engine.community(
+        case.person_id, case.anchor.scoring_day
+    )
+    if isinstance(community_scope, CommunityScope):
+        community = community_scope.materialize_local(
+            (
+                engine.node_ids[int(index)] for index in local_original_indices
+            ),
+            target_person_id=case.person_id,
+        )
+    elif isinstance(community_scope, Mapping):
+        community = copy.deepcopy(community_scope)
+    else:
+        raise ValueError("explanation community must be replayable or a mapping")
+    local_node_ids = [node["node_id"] for node in community["nodes"]]
+    selected_node_set = frozenset(local_node_ids)
+    local_positions_by_id = {
+        engine.node_ids[int(global_index)]: local_position
+        for local_position, global_index in enumerate(local_original_indices)
+        if engine.node_ids[int(global_index)] in selected_node_set
+    }
+    if set(local_positions_by_id) != selected_node_set:
+        raise ValueError("projected explanation nodes are absent from the local subgraph")
+    selected_local_positions = np.array(
+        [local_positions_by_id[node_id] for node_id in local_node_ids],
+        dtype=np.int64,
+    )
+
+    # Attribution values are a target-local overlay. The complete canonical
+    # community remains replayable through community_scope and is never copied.
+    edges = [
+        {
+            key: copy.deepcopy(value)
+            for key, value in canonical_edge.items()
+            if key != "observations"
+        }
+        for canonical_edge in community["edges"]
+    ]
+    edge_ids = [edge["edge_id"] for edge in edges]
+    # Masks are keyed by source row, so they must be aggregated against complete
+    # per-edge membership. Falling back to the displayed list would discard the
+    # weight of every row past MAX_LOCAL_SOURCE_ROWS_PER_EDGE.
+    complete_source_rows = community.pop(COMPLETE_SOURCE_ROW_INDEX, None)
+    source_to_edge = {}
+    for edge in edges:
+        edge_source_row_ids = (
+            edge["source_row_ids"]
+            if complete_source_rows is None
+            else complete_source_rows.get(edge["edge_id"], edge["source_row_ids"])
+        )
+        for source_row_id in edge_source_row_ids:
+            existing = source_to_edge.get(source_row_id)
+            if existing is not None and existing != edge["edge_id"]:
+                raise ValueError(
+                    "immutable source provenance maps to multiple display edges"
+                )
+            source_to_edge[source_row_id] = edge["edge_id"]
+
+    restart_edge_values = [defaultdict(float) for _ in seeds]
+    # Attribution completeness accounting: with the display bound tied to the
+    # explainer ceiling these should stay at zero, and the payload records them
+    # so that is demonstrated per case rather than assumed.
+    omitted_edge_mask_records = 0
+    omitted_edge_mask_mass = 0.0
+    retained_edge_mask_mass = 0.0
+    omitted_node_ids = tuple(
+        sorted(
+            {
+                engine.node_ids[int(index)] for index in local_original_indices
+            }.difference(local_node_ids)
+        )
+    )
+    feature_count = snapshot.x.shape[1]
+    edge_masks = tuple(result.get("edge_masks", ()))
+    if len(edge_masks) != len(seeds):
+        raise ValueError("target edge-mask restarts are misaligned")
+    for restart_index, mask in enumerate(edge_masks):
+        normalized = _normalize_member_mask(
+            mask,
+            expected_length=len(provenance),
+            field_name="target edge_mask",
+        )
+        for source_row_id, value in zip(provenance, normalized):
+            display_edge_id = source_to_edge.get(str(source_row_id))
+            if display_edge_id is None:
+                if isinstance(community_scope, CommunityScope):
+                    # This mask record has no displayed edge to attach to, so
+                    # its weight never reaches top_edges or the faithfulness
+                    # ledger.  Silently dropping it would let the payload claim
+                    # a "top" edge that is only top among survivors, so the loss
+                    # is counted and published instead.
+                    omitted_edge_mask_records += 1
+                    omitted_edge_mask_mass += float(value)
+                    continue
+                raise ValueError(
+                    "local tensor-edge provenance is absent from the "
+                    f"complete display community: {source_row_id}"
+                )
+            retained_edge_mask_mass += float(value)
+            restart_edge_values[restart_index][display_edge_id] += float(value)
+
+    node_feature_masks = tuple(result.get("node_feature_masks", ()))
+    if len(node_feature_masks) != len(seeds):
+        raise ValueError("target node-feature-mask restarts are misaligned")
+    normalized_node_feature_masks = []
+    for mask in node_feature_masks:
+        checked = _readonly_node_feature_mask(
+            mask,
+            expected_shape=(local_node_count, feature_count),
+            field_name="target node_feature_mask",
+        )
+        maximum = float(checked.max()) if checked.size else 0.0
+        normalized_node_feature_masks.append(
+            np.asarray(checked[selected_local_positions], dtype=float) / maximum
+            if maximum > 0.0
+            else np.zeros((len(local_node_ids), feature_count), dtype=float)
+        )
+
+    aligned_edge_masks = [
+        np.array([values[edge_id] for edge_id in edge_ids], dtype=float)
+        for values in restart_edge_values
+    ]
+    edge_aggregate = aggregate_restart_masks(aligned_edge_masks)
+    node_feature_aggregate = aggregate_restart_masks(
+        [mask.reshape(-1) for mask in normalized_node_feature_masks]
+    )
+    node_feature_stats = {
+        key: np.asarray(value).reshape(len(local_node_ids), feature_count)
+        for key, value in node_feature_aggregate.items()
+        if key in {"median", "q1", "q3", "selection_frequency"}
+    }
+    node_aggregate = aggregate_restart_masks(
+        [mask.max(axis=1) for mask in normalized_node_feature_masks]
+    )
+    target_local_index = local_node_ids.index(case.person_id)
+    feature_aggregate = aggregate_restart_masks(
+        [mask[target_local_index] for mask in normalized_node_feature_masks]
+    )
+    for index, edge in enumerate(edges):
+        edge["explainer_median"] = float(edge_aggregate["median"][index])
+        edge["explainer_q1"] = float(edge_aggregate["q1"][index])
+        edge["explainer_q3"] = float(edge_aggregate["q3"][index])
+        edge["selection_frequency"] = float(
+            edge_aggregate["selection_frequency"][index]
+        )
+
+    feature_names = list(caught_feature_names(engine.num_rel))
+    if len(feature_names) != feature_count:
+        raise ValueError("feature names are not aligned with snapshot inputs")
+    display_feature_mask_stats = [
+        {
+            "feature_name": name,
+            "explainer_median": float(feature_aggregate["median"][index]),
+            "explainer_q1": float(feature_aggregate["q1"][index]),
+            "explainer_q3": float(feature_aggregate["q3"][index]),
+            "selection_frequency": float(
+                feature_aggregate["selection_frequency"][index]
+            ),
+        }
+        for index, name in enumerate(feature_names)
+    ]
+
+    incident_source_rows = {node_id: set() for node_id in local_node_ids}
+    for tensor_edge_index, source_row_id in enumerate(provenance):
+        source = engine.node_ids[
+            int(local_original_indices[int(local_edge_index[0, tensor_edge_index])])
+        ]
+        target = engine.node_ids[
+            int(local_original_indices[int(local_edge_index[1, tensor_edge_index])])
+        ]
+        for node_id in (source, target):
+            values = incident_source_rows.get(node_id)
+            if values is None:
+                continue
+            values.add(str(source_row_id))
+            if len(values) > MAX_NODE_ATTRIBUTION_SOURCE_ROWS:
+                values.remove(max(values))
+
+    ranked_node_indices = sorted(
+        range(len(local_node_ids)),
+        key=lambda index: (
+            -float(node_aggregate["median"][index]),
+            local_node_ids[index],
+        ),
+    )[:10]
+    top_local_nodes = [
+        {
+            "rank": rank,
+            "node_id": local_node_ids[index],
+            "source_id": local_node_ids[index],
+            "source_row_ids": sorted(incident_source_rows[local_node_ids[index]]),
+            "explainer_median": float(node_aggregate["median"][index]),
+            "explainer_q1": float(node_aggregate["q1"][index]),
+            "explainer_q3": float(node_aggregate["q3"][index]),
+            "selection_frequency": float(
+                node_aggregate["selection_frequency"][index]
+            ),
+        }
+        for rank, index in enumerate(ranked_node_indices, start=1)
+    ]
+    ranked_edge_indices = sorted(
+        range(len(edges)),
+        key=lambda index: (
+            -float(edge_aggregate["median"][index]),
+            edges[index]["edge_id"],
+        ),
+    )[:10]
+    top_edges = [
+        {
+            "rank": rank,
+            "edge_id": edges[index]["edge_id"],
+            "u": edges[index]["u"],
+            "v": edges[index]["v"],
+            "edge_type": edges[index]["edge_type"],
+            "source_row_ids": list(edges[index]["source_row_ids"]),
+            "source_row_count": len(edges[index]["source_row_ids"]),
+            "complete_source_row_count": int(
+                edges[index].get(
+                    "source_row_count", len(edges[index]["source_row_ids"])
+                )
+            ),
+            "source_rows_truncated": edges[index].get(
+                "source_rows_truncated", False
+            )
+            is True,
+            "explainer_median": float(edge_aggregate["median"][index]),
+            "explainer_q1": float(edge_aggregate["q1"][index]),
+            "explainer_q3": float(edge_aggregate["q3"][index]),
+            "selection_frequency": float(
+                edge_aggregate["selection_frequency"][index]
+            ),
+        }
+        for rank, index in enumerate(ranked_edge_indices, start=1)
+    ]
+    ranked_feature_indices = sorted(
+        range(feature_count),
+        key=lambda index: (
+            -float(feature_aggregate["median"][index]),
+            feature_names[index],
+        ),
+    )[:5]
+    top_features = [
+        {
+            "rank": rank,
+            "feature_index": index,
+            "feature_name": feature_names[index],
+            "node_id": case.person_id,
+            "source_id": f"{case.person_id}:feature:{index}",
+            "feature_value": float(snapshot.x[target_index, index]),
+            "explainer_median": float(feature_aggregate["median"][index]),
+            "explainer_q1": float(feature_aggregate["q1"][index]),
+            "explainer_q3": float(feature_aggregate["q3"][index]),
+            "selection_frequency": float(
+                feature_aggregate["selection_frequency"][index]
+            ),
+        }
+        for rank, index in enumerate(ranked_feature_indices, start=1)
+    ]
+    node_feature_mask_stats = []
+    for node_index, node_id in enumerate(local_node_ids):
+        for feature_index in range(feature_count):
+            node_feature_mask_stats.append(
+                {
+                    "node_id": node_id,
+                    "feature_index": feature_index,
+                    "feature_name": feature_names[feature_index],
+                    "source_id": f"{node_id}:feature:{feature_index}",
+                    "explainer_median": float(
+                        node_feature_stats["median"][node_index, feature_index]
+                    ),
+                    "explainer_q1": float(
+                        node_feature_stats["q1"][node_index, feature_index]
+                    ),
+                    "explainer_q3": float(
+                        node_feature_stats["q3"][node_index, feature_index]
+                    ),
+                    "selection_frequency": float(
+                        node_feature_stats["selection_frequency"][
+                            node_index, feature_index
+                        ]
+                    ),
+                }
+            )
+            if len(node_feature_mask_stats) == MAX_NODE_FEATURE_MASK_STATS:
+                break
+        if len(node_feature_mask_stats) == MAX_NODE_FEATURE_MASK_STATS:
+            break
+    # This dump is bounded by record count, so it covers a shrinking fraction of
+    # nodes as the explainer ceiling rises. Publishing the shortfall keeps that
+    # visible instead of it looking like the whole picture.
+    node_feature_stats_expected = len(local_node_ids) * int(feature_count)
+    node_feature_stats_omitted = max(
+        0, node_feature_stats_expected - len(node_feature_mask_stats)
+    )
+
+    pooled_contributions = {
+        node_id: float(snapshot.prepool_logits[engine.person_index[node_id]])
+        / len(member_ids)
+        for node_id in community["nodes_by_id"]
+        if node_id in engine.person_index
+        and snapshot.component_roots[engine.person_index[node_id]] == component_root
+    }
+    ranked_source_row_ids = tuple(
+        source_row_id
+        for edge in top_edges
+        for source_row_id in edge["source_row_ids"]
+    )
+    salient_specs = build_ablation_specs(
+        snapshot,
+        case.person_id,
+        community,
+        ranked_edge_source_row_ids=ranked_source_row_ids,
+        pooled_logit_contributions=pooled_contributions,
+    )
+    rank_state = engine._Seed0ExplanationEngine__rank_state
+    engine._Seed0ExplanationEngine__factor_specs_cache[
+        (rank_state.fingerprint, context.scoring_day, context.person_id)
+    ] = tuple(salient_specs)
+
+    factors = []
+    provenance_expansions = []
+    for spec in salient_specs:
+        counterfactual = engine.score_counterfactual(context, spec)
+        frequency, iqr, restart_source = _factor_restart_metrics(
+            spec, edges, feature_names, feature_aggregate
+        )
+        expansion = build_provenance_expansion(
+            engine, snapshot, spec, community
+        )
+        if expansion is not None:
+            provenance_expansions.append(expansion)
+        factors.append(
+            {
+                "factor_id": spec.factor_id,
+                "label": spec.factor_id.replace(":", " · "),
+                "kind": spec.kind,
+                "counterfactual": counterfactual,
+                "restart": {
+                    "selection_frequency": frequency,
+                    "iqr": iqr,
+                    "source": restart_source,
+                },
+                "stability": classify_factor_stability(
+                    counterfactual, frequency, iqr
+                ),
+                "provenance_expansion_ids": (
+                    [expansion["expansion_id"]]
+                    if expansion is not None
+                    else []
+                ),
+            }
+        )
+
+    importance_by_id = {
+        edge["edge_id"]: edge["explainer_median"] for edge in edges
+    }
+    degrees = defaultdict(int)
+    for edge in edges:
+        degrees[edge["u"]] += 1
+        degrees[edge["v"]] += 1
+
+    def degree_bin(value):
+        if value <= 1:
+            return "1"
+        if value <= 4:
+            return "2-4"
+        if value <= 8:
+            return "5-8"
+        return "9+"
+
+    faithfulness_edges = [
+        {
+            "edge_id": edge["edge_id"],
+            "relation": edge["edge_type"],
+            "degree_bin": degree_bin(
+                max(degrees[edge["u"]], degrees[edge["v"]])
+            ),
+        }
+        for edge in edges
+    ]
+    edge_by_id = {edge["edge_id"]: edge for edge in edges}
+
+    def rescore(removed_edge_ids):
+        source_ids = tuple(
+            sorted(
+                {
+                    source_row_id
+                    for edge_id in removed_edge_ids
+                    for source_row_id in edge_by_id[edge_id][
+                        "source_row_ids"
+                    ]
+                }
+            )
+        )
+        return diagnostic_edge_source_set_probability(
+            engine, context, source_ids
+        )
+
+    faithfulness = edge_removal_faithfulness(
+        faithfulness_edges,
+        importance_by_id,
+        rescore=rescore,
+        seed=0,
+    )
+    stable_count = sum(
+        factor["stability"] == "stable" for factor in factors
+    )
+    def component_member(member_id):
+        prepool_logit = float(
+            snapshot.prepool_logits[engine.person_index[member_id]]
+        )
+        return {
+            "person_id": member_id,
+            "source_id": member_id,
+            "prepool_logit": prepool_logit,
+            "pooled_logit_contribution": prepool_logit / len(member_ids),
+        }
+
+    ranked_component_members = heapq.nsmallest(
+        10,
+        (component_member(member_id) for member_id in member_ids),
+        key=lambda member: (
+            -abs(member["pooled_logit_contribution"]),
+            member["person_id"],
+        ),
+    )
+    top_component_members = [
+        {"rank": rank, **member}
+        for rank, member in enumerate(ranked_component_members, start=1)
+    ]
+    component_contribution_sum = float(member_logits.sum()) / len(member_ids)
+    if not np.isclose(
+        component_contribution_sum,
+        float(pooled_logit),
+        rtol=1e-6,
+        atol=1e-6,
+    ):
+        raise ValueError("component contribution ledger failed pooled-logit parity")
+
+    baseline_term = float(decision_trace["baseline_weighted_term"])
+    gnn_term = float(decision_trace["seed0_gnn_weighted_term"])
+    hybrid_score = float(decision_trace["seed0_hybrid_score"])
+    if not np.isclose(
+        baseline_term + gnn_term,
+        hybrid_score,
+        rtol=1e-7,
+        atol=1e-8,
+    ):
+        raise ValueError("rank-fusion ledger failed hybrid-score parity")
+    decision_ledger = {
+        "component_pooling": {
+            "pooling": "exact_mean_of_member_prepool_logits",
+            "component_size": len(member_ids),
+            "pooled_logit": float(pooled_logit),
+            "contribution_sum": component_contribution_sum,
+            "top_members_by_absolute_contribution": top_component_members,
+        },
+        "rank_fusion": {
+            "percentile_reference_id": decision_trace[
+                "percentile_reference_id"
+            ],
+            "baseline_daily_reference_id": decision_trace[
+                "baseline_daily_reference_id"
+            ],
+            "hybrid_daily_reference_id": decision_trace[
+                "hybrid_daily_reference_id"
+            ],
+            "daily_budget": daily_budget,
+            "blend_weight": float(reference.blend_weight),
+            "baseline_percentile": float(
+                decision_trace["baseline_percentile"]
+            ),
+            "seed0_gnn_probability": float(
+                decision_trace["seed0_gnn_probability"]
+            ),
+            "seed0_gnn_percentile": float(
+                decision_trace["seed0_gnn_percentile"]
+            ),
+            "baseline_weighted_term": baseline_term,
+            "seed0_gnn_weighted_term": gnn_term,
+            "hybrid_score": hybrid_score,
+            "baseline_rank": int(decision_trace["baseline_rank"]),
+            "seed0_gnn_rank": int(decision_trace["seed0_gnn_rank"]),
+            "seed0_hybrid_rank": int(decision_trace["seed0_hybrid_rank"]),
+        },
+    }
+    payload = {
+        "case_id": f"case:{case.person_id}",
+        "person_id": case.person_id,
+        "event_id": case.anchor.event_id,
+        "scoring_day": snapshot.scoring_day,
+        "snapshot": {
+            "scoring_day": snapshot.scoring_day,
+        },
+        "decision_trace": decision_trace,
+        "decision_ledger": decision_ledger,
+        "attributions": {
+            "scope": {
+                "target_person_id": case.person_id,
+                "hops": 2,
+                "restart_seeds": list(seeds),
+                "epochs": int(explainer_epochs),
+                "unsigned_masks": True,
+            },
+            "unsigned_mask_caveat": (
+                "GNNExplainer masks are unsigned; direction is established only "
+                "by validated counterfactual rank effects."
+            ),
+            "top_local_nodes": top_local_nodes,
+            "top_edges": top_edges,
+            "top_features": top_features,
+            "node_feature_mask_stats": node_feature_mask_stats,
+        },
+        "factors": factors,
+        "factor_scope": "salient_counterfactual_factors",
+        "community": community,
+        "provenance_expansions": provenance_expansions,
+        "display_feature_mask_stats": display_feature_mask_stats,
+        "flow_stages": build_flow_stages(community),
+        "stable_factor_status": "stable" if stable_count else "unstable",
+        "stability": {
+            "stable_factor_count": stable_count,
+            "edge_restart_aggregate": edge_aggregate,
+            "feature_restart_aggregate": feature_aggregate,
+            "signed_effect_source": "counterfactual_only",
+        },
+        "faithfulness": faithfulness,
+        "attribution_completeness": {
+            # ``complete`` covers exactly the ranked attribution the payload
+            # asserts and the narrative quotes: top_local_nodes, top_edges and
+            # the faithfulness ledger. It is True when every node of the exact
+            # explainer input was published and every edge mask record reached a
+            # canonical edge, so "top" means top of the explanation rather than
+            # top of a projection. It deliberately does NOT cover
+            # node_feature_mask_stats, which is a bounded supplementary dump
+            # reported separately below; top_features is ranked before that
+            # bound applies and so stays complete either way.
+            "complete": (
+                omitted_edge_mask_records == 0 and not omitted_node_ids
+            ),
+            "scope": "ranked_node_and_edge_attribution",
+            "explainer_input_nodes": int(local_node_count),
+            "published_nodes": len(local_node_ids),
+            "omitted_nodes": len(omitted_node_ids),
+            "omitted_node_ids": list(omitted_node_ids),
+            "omitted_edge_mask_records": omitted_edge_mask_records,
+            "omitted_edge_mask_mass": omitted_edge_mask_mass,
+            "retained_edge_mask_mass": retained_edge_mask_mass,
+            "node_feature_stats": {
+                "complete": node_feature_stats_omitted == 0,
+                "published": len(node_feature_mask_stats),
+                "expected": node_feature_stats_expected,
+                "omitted": node_feature_stats_omitted,
+                "max_records": MAX_NODE_FEATURE_MASK_STATS,
+            },
+            "display_max_nodes": MAX_LOCAL_EXPLANATION_NODES,
+            "display_max_edges": MAX_LOCAL_EXPLANATION_EDGES,
+            "explainer_max_nodes": MAX_EXPLAINER_INPUT_NODES,
+            "explainer_max_edges": MAX_EXPLAINER_INPUT_EDGES,
+            "max_source_rows_per_edge": MAX_LOCAL_SOURCE_ROWS_PER_EDGE,
+        },
+        "parity": {
+            "production_seed0_probability": probability_parity,
+            "pooled_logit_decomposition": pooled_parity,
+            "frozen_percentile": percentile_parity,
+            "frozen_daily_hybrid_rank": rank_parity,
+            "anchor_event": anchor_event_parity,
+        },
+        "evidence_boundary": {
+            "snapshot": snapshot.scoring_day,
+            "edge_rule": "available_time < snapshot",
+            "caught_rule": "label_available_time_utc < snapshot",
+        },
+    }
+    safe_payload = json_safe(payload)
+    validate_explanation_payload(safe_payload)
+    json.dumps(
+        safe_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return CaseExplanation(safe_payload, community_scope)

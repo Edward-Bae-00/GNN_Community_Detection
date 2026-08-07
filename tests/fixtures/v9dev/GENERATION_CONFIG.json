@@ -1,0 +1,33 @@
+{
+  "counts": {
+    "businesses": 500,
+    "documents": 2400,
+    "events": 4000,
+    "families": 848,
+    "households": 1136,
+    "officer_teams": 300,
+    "orgs": 14,
+    "persons": 2000,
+    "vehicles": 1200
+  },
+  "design_changes": [
+    "phone is a data point with no edges",
+    "household-only address edges",
+    "family spans multiple households",
+    "co-travel parties create person links",
+    "undetected smuggling via hidden event_ground_truth",
+    "secondary_inspections table for stopped travellers",
+    "citizenship conditioned on border region",
+    "demographics on the person record with audit methodology preserved",
+    "hidden non-family co-offender orgs (org_membership_ground_truth.csv): cross-family cells surfacing only via co-travel/shared-vehicle/shared-carrier, with dark members truly-linked-but-unfindable"
+  ],
+  "privacy": "fully synthetic; aggregate source files used only for calibration",
+  "scale_key": "v9dev",
+  "seed": 20260613,
+  "source_files": [
+    "travelers-conveyances-fy22-fy25.csv",
+    "nationwide-drugs-fy22-fy25.csv",
+    "amo-drug-seizures-fy22-fy25.csv"
+  ],
+  "version": "v3_realism_rework"
+}

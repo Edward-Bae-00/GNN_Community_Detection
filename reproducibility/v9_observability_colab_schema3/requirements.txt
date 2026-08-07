@@ -1,0 +1,8 @@
+# Colab normally provides torch and CUDA. Install the matching PyG wheel for
+# the runtime's torch version if torch-geometric is not already present.
+torch-geometric>=2.5
+pandas>=2.0
+numpy>=1.26
+scikit-learn>=1.3
+networkx>=3.0
+scipy>=1.10

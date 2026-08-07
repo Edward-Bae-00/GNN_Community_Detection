@@ -1,0 +1,543 @@
+{
+  "arrests.csv": {
+    "columns": [
+      "arrest_id",
+      "event_id",
+      "person_id",
+      "event_timestamp_utc",
+      "arrest_timestamp_utc",
+      "arrest_reason_category",
+      "related_seizure_id",
+      "charge_category_synthetic",
+      "disposition_status",
+      "referred_agency_category",
+      "post_event_label_available_time_utc"
+    ],
+    "format": "csv"
+  },
+  "audit_attributes.csv": {
+    "columns": [
+      "person_id",
+      "synthetic_audit_group",
+      "synthetic_age_bucket",
+      "sex_marker",
+      "citizenship_country",
+      "residence_country",
+      "language_preference_synthetic",
+      "audit_only_flag",
+      "usage_note"
+    ],
+    "format": "csv"
+  },
+  "businesses.csv": {
+    "columns": [
+      "business_id",
+      "business_type",
+      "synthetic_business_name_token",
+      "country",
+      "state_or_region",
+      "business_location_id",
+      "first_seen_timestamp_utc",
+      "last_seen_timestamp_utc",
+      "total_crossings_linked",
+      "total_vehicles_linked",
+      "total_persons_linked",
+      "prior_secondary_count",
+      "prior_search_count",
+      "prior_seizure_count"
+    ],
+    "format": "csv"
+  },
+  "communities.csv": {
+    "columns": [
+      "ground_truth_community_id",
+      "family_id",
+      "community_type",
+      "home_region",
+      "latent_contraband_propensity",
+      "member_count",
+      "is_positive_interdiction_eval_cluster",
+      "documentation_note"
+    ],
+    "format": "csv"
+  },
+  "contact_anchors.csv": {
+    "columns": [
+      "contact_anchor_id",
+      "contact_anchor_type",
+      "synthetic_contact_token",
+      "linked_person_id",
+      "creates_person_links",
+      "audit_note"
+    ],
+    "format": "csv"
+  },
+  "crossing_events.csv": {
+    "columns": [
+      "event_id",
+      "event_timestamp_utc",
+      "crossing_datetime_local",
+      "fiscal_year",
+      "fiscal_month",
+      "calendar_month",
+      "day_of_week",
+      "hour_of_day",
+      "region",
+      "field_office",
+      "state",
+      "port_of_entry",
+      "port_code",
+      "mode_of_transportation",
+      "travel_category",
+      "direction",
+      "primary_person_id",
+      "observed_person_record_id",
+      "party_size",
+      "co_traveler_person_ids",
+      "vehicle_id",
+      "document_id",
+      "carrier_id",
+      "officer_team_id",
+      "inspection_lane_or_processing_context",
+      "declared_trip_purpose",
+      "origin_country",
+      "citizenship_country",
+      "residence_country",
+      "destination_state",
+      "repeat_crossing_count_prior_365d",
+      "same_vehicle_crossing_count_prior_365d",
+      "same_document_crossing_count_prior_365d",
+      "secondary_referral_flag",
+      "search_flag",
+      "seizure_flag",
+      "arrest_flag",
+      "prosecution_referral_flag",
+      "administrative_action_flag",
+      "final_disposition",
+      "synthetic_risk_score_pre_outcome",
+      "data_split",
+      "label_available_time_utc",
+      "feature_available_time_utc"
+    ],
+    "format": "csv"
+  },
+  "documents.csv": {
+    "columns": [
+      "document_id",
+      "document_type",
+      "issuing_country",
+      "synthetic_document_token",
+      "person_id",
+      "issue_year_bucket",
+      "expiration_year_bucket",
+      "first_seen_timestamp_utc",
+      "last_seen_timestamp_utc",
+      "total_crossings",
+      "mismatch_or_exception_flag",
+      "document_validity_status"
+    ],
+    "format": "csv"
+  },
+  "edges.csv": {
+    "columns": [
+      "edge_id",
+      "source_node_id",
+      "source_node_type",
+      "target_node_id",
+      "target_node_type",
+      "edge_type",
+      "event_id",
+      "edge_timestamp_utc",
+      "first_seen_timestamp_utc",
+      "last_seen_timestamp_utc",
+      "weight",
+      "confidence",
+      "evidence_source",
+      "temporal_valid_from_utc",
+      "temporal_valid_to_utc",
+      "feature_available_time_utc",
+      "leakage_safe_flag"
+    ],
+    "format": "csv"
+  },
+  "entity_resolution_pairs.csv": {
+    "columns": [
+      "pair_id",
+      "observed_person_record_id_a",
+      "observed_person_record_id_b",
+      "true_same_person",
+      "canonical_person_id_a",
+      "canonical_person_id_b",
+      "truth_relation",
+      "match_difficulty",
+      "data_split",
+      "notes"
+    ],
+    "format": "csv"
+  },
+  "entity_resolution_truth.csv": {
+    "columns": [
+      "observed_person_record_id",
+      "canonical_person_id",
+      "true_resolution_cluster_id",
+      "family_id",
+      "event_id",
+      "event_timestamp_utc",
+      "truth_label_available_time_utc",
+      "truth_label_type",
+      "notes"
+    ],
+    "format": "csv"
+  },
+  "event_features.csv": {
+    "columns": [
+      "event_id",
+      "feature_available_time_utc",
+      "feature_window_start_utc",
+      "feature_window_end_utc",
+      "pre_event_features_json",
+      "at_primary_features_json",
+      "pre_secondary_features_json",
+      "target_secondary",
+      "target_search",
+      "target_seizure",
+      "target_arrest",
+      "target_referral",
+      "leakage_safe_flag",
+      "excluded_leakage_columns"
+    ],
+    "format": "csv"
+  },
+  "event_ground_truth.csv": {
+    "columns": [
+      "event_id",
+      "event_timestamp_utc",
+      "primary_person_id",
+      "true_contraband_present",
+      "true_drug_type",
+      "true_quantity_lbs",
+      "contraband_outcome_path",
+      "detected_flag",
+      "false_negative_flag",
+      "false_positive_search_flag",
+      "label_class",
+      "notes_on_leakage_risk"
+    ],
+    "format": "csv"
+  },
+  "fairness_group_rates.csv": {
+    "columns": [
+      "synthetic_audit_group",
+      "event_count",
+      "secondary_rate",
+      "search_rate",
+      "seizure_rate",
+      "arrest_rate",
+      "negative_control_interpretation"
+    ],
+    "format": "csv"
+  },
+  "fairness_negative_control.csv": {
+    "columns": [
+      "event_id",
+      "event_timestamp_utc",
+      "target_secondary",
+      "target_search",
+      "target_seizure",
+      "target_arrest",
+      "synthetic_audit_group",
+      "synthetic_age_bucket",
+      "sex_marker",
+      "allowed_demographic_only_features",
+      "expected_result"
+    ],
+    "format": "csv"
+  },
+  "golden_seed_event_ids.csv": {
+    "columns": [
+      "event_id",
+      "subset_name",
+      "target_size",
+      "positive_inclusion_rule",
+      "notes"
+    ],
+    "format": "csv"
+  },
+  "ground_truth_community_labels.csv": {
+    "columns": [
+      "entity_id",
+      "entity_type",
+      "ground_truth_community_id",
+      "community_type",
+      "membership_source",
+      "membership_strength",
+      "valid_from_utc",
+      "valid_to_utc",
+      "is_positive_interdiction_eval_cluster",
+      "evaluation_use",
+      "notes"
+    ],
+    "format": "csv"
+  },
+  "labels.csv": {
+    "columns": [
+      "entity_id",
+      "label_type",
+      "label_value",
+      "event_timestamp_utc",
+      "label_time_utc",
+      "label_source",
+      "train_valid_test_allowed_flag",
+      "notes_on_leakage_risk"
+    ],
+    "format": "csv"
+  },
+  "locations.csv": {
+    "columns": [
+      "location_id",
+      "location_type",
+      "synthetic_location_token",
+      "country",
+      "state",
+      "region",
+      "field_office",
+      "latitude_bucket_or_synthetic_grid_id",
+      "longitude_bucket_or_synthetic_grid_id",
+      "port_of_entry_flag",
+      "port_code"
+    ],
+    "format": "csv"
+  },
+  "narrative_validation_subset.jsonl": {
+    "columns_or_keys": [
+      "event_id",
+      "narrative_text",
+      "expected_entities",
+      "expected_relations",
+      "linked_table_rows",
+      "redaction_status",
+      "ner_gold_labels"
+    ],
+    "format": "jsonl"
+  },
+  "node_features.csv": {
+    "columns": [
+      "node_id",
+      "node_type",
+      "static_features",
+      "temporal_features",
+      "count_features",
+      "categorical_features_encoded",
+      "feature_window_start_utc",
+      "feature_window_end_utc",
+      "feature_available_time_utc",
+      "leakage_safe_flag",
+      "audit_only_flag"
+    ],
+    "format": "csv"
+  },
+  "observed_person_records.csv": {
+    "columns": [
+      "observed_person_record_id",
+      "event_id",
+      "event_timestamp_utc",
+      "canonical_person_id",
+      "observed_name_token",
+      "name_convention_style",
+      "name_variant_type",
+      "observed_dob_year_bucket",
+      "observed_sex_marker",
+      "observed_document_id",
+      "observed_document_token",
+      "issuing_country_observed",
+      "transliteration_noise_flag",
+      "tokenization_noise_flag",
+      "document_mismatch_noise_flag",
+      "source_system",
+      "raw_record_available_time_utc",
+      "observed_residence_location_id"
+    ],
+    "format": "csv"
+  },
+  "officers_or_teams.csv": {
+    "columns": [
+      "officer_team_id",
+      "field_office",
+      "port_of_entry",
+      "shift_pattern",
+      "inspection_role",
+      "first_seen_timestamp_utc",
+      "last_seen_timestamp_utc",
+      "total_events_processed",
+      "secondary_referrals_made",
+      "searches_participated",
+      "seizures_participated",
+      "arrests_participated"
+    ],
+    "format": "csv"
+  },
+  "org_membership_ground_truth.csv": {
+    "columns": [
+      "org_id",
+      "person_id",
+      "org_role",
+      "org_mode_affinity",
+      "is_observable",
+      "is_dark",
+      "org_contains_train_detected_anchor",
+      "org_contains_test_false_negative",
+      "org_observability",
+      "source_family_ids",
+      "notes"
+    ],
+    "format": "csv"
+  },
+  "persons.csv": {
+    "columns": [
+      "person_id",
+      "canonical_synthetic_name_token",
+      "synthetic_dob_year_bucket",
+      "synthetic_age_bucket",
+      "sex_marker",
+      "citizenship_country",
+      "residence_country",
+      "primary_border_region",
+      "synthetic_phone_token",
+      "household_id",
+      "residence_location_id",
+      "work_location_id",
+      "employer_business_id",
+      "document_count",
+      "known_vehicle_count",
+      "first_seen_timestamp_utc",
+      "last_seen_timestamp_utc",
+      "total_crossings",
+      "air_crossings",
+      "land_crossings",
+      "pedestrian_crossings",
+      "passenger_vehicle_crossings",
+      "truck_crossings",
+      "prior_secondary_count",
+      "prior_search_count",
+      "prior_seizure_count",
+      "prior_arrest_count"
+    ],
+    "format": "csv"
+  },
+  "persons_ground_truth.csv": {
+    "columns": [
+      "person_id",
+      "family_id",
+      "ground_truth_community_id",
+      "community_type",
+      "synthetic_traveler_segment",
+      "latent_contraband_propensity",
+      "is_member_of_interdiction_cluster",
+      "ever_carried_contraband_flag",
+      "household_id",
+      "notes"
+    ],
+    "format": "csv"
+  },
+  "scale_profile_and_metrics.csv": {
+    "columns": [
+      "event_count",
+      "secondary_rate",
+      "expected_secondary_positives",
+      "search_rate",
+      "expected_search_positives",
+      "seizure_rate",
+      "expected_seizure_positives",
+      "arrest_rate",
+      "expected_arrest_positives",
+      "required_metrics"
+    ],
+    "format": "csv"
+  },
+  "secondary_inspections.csv": {
+    "columns": [
+      "secondary_inspection_id",
+      "event_id",
+      "person_id",
+      "event_timestamp_utc",
+      "secondary_start_timestamp_utc",
+      "referral_reason_category",
+      "exam_type",
+      "declared_items_category",
+      "document_reverification_result",
+      "search_conducted_flag",
+      "result_category",
+      "officer_team_id",
+      "availability_class",
+      "post_secondary_available_time_utc"
+    ],
+    "format": "csv"
+  },
+  "seizures.csv": {
+    "columns": [
+      "seizure_id",
+      "event_id",
+      "primary_person_id",
+      "event_timestamp_utc",
+      "seizure_timestamp_utc",
+      "drug_type",
+      "quantity_lbs",
+      "package_count",
+      "conveyance_context",
+      "seizure_location_context",
+      "detection_context",
+      "component",
+      "lab_confirmation_status",
+      "post_event_label_available_time_utc"
+    ],
+    "format": "csv"
+  },
+  "temporal_fields_manifest.csv": {
+    "columns": [
+      "table_name",
+      "primary_time_column",
+      "additional_time_columns",
+      "time_zone_or_basis",
+      "pre_outcome_use"
+    ],
+    "format": "csv"
+  },
+  "train_valid_test_splits.csv": {
+    "columns": [
+      "entity_id",
+      "entity_type",
+      "split",
+      "split_strategy",
+      "temporal_cutoff",
+      "group_leakage_prevention_id",
+      "notes"
+    ],
+    "format": "csv"
+  },
+  "vehicles.csv": {
+    "columns": [
+      "vehicle_id",
+      "synthetic_plate_token",
+      "plate_state_or_country",
+      "vehicle_type",
+      "make_bucket",
+      "model_bucket",
+      "model_year_bucket",
+      "color",
+      "registration_status",
+      "owner_person_id",
+      "owner_business_id",
+      "rental_flag",
+      "commercial_flag",
+      "first_seen_timestamp_utc",
+      "last_seen_timestamp_utc",
+      "total_crossings",
+      "unique_person_count",
+      "unique_port_count",
+      "prior_secondary_count",
+      "prior_search_count",
+      "prior_seizure_count"
+    ],
+    "format": "csv"
+  }
+}
