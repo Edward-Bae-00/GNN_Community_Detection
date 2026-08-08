@@ -660,3 +660,37 @@ Durable decisions and deviations from the written plan:
   reproducibility snapshot.
 - Documentation changes preserve the as-of and leakage semantics and are
   verified separately from functional model/evaluation changes.
+- At final HEAD, the root suite recorded 1,329 passed, 1 skipped, 2,971
+  warnings, and 1,079.59 seconds; the skip is the opt-in local Gemma/Ollama
+  integration requiring `RUN_OLLAMA_INTEGRATION=1`.
+- Active and bundled documentation-only proof found executable AST equivalence
+  across 21 active GNN Python files and 20 bundled GNN Python files; semantic
+  and comparator tests passed, and final independent review approved with no
+  findings.
+- Bundled schema-3 package verification recorded 72 passed plus 9 subtests,
+  with 2 warnings.
+- Both validators passed all hard checks with zero observability mismatches.
+  Full V9 has 78,613 person associations, 120,000 household edges, 800 orgs /
+  5,043 members / 507 dark, and 21,469 true-smuggling / 8,013 seized /
+  13,456 undetected. V9dev has 1,437 associations, 2,000 household edges,
+  14 orgs / 83 members / 9 dark, and 421 true-smuggling / 159 seized /
+  262 undetected.
+- Git LFS verification found 76 hydrated tracked paths, 75 unique objects, and
+  2,816,876,814 bytes; `fsck` was OK, no regular HEAD blob exceeded 100 MiB,
+  and all seven paper copies were byte-identical to their originals.
+- The explanation archive is
+  `artifacts/v9/explanations/v9_schema3_results.zip`, SHA-256
+  `54064788c0cd92893296d1db926aaa902604e30db16fdc3151545413a30008fd`, with
+  64,964 members. Known limitation: 19 exact Hybrid explanations of 20
+  selected, one failed case, and coverage gate false.
+- Dashboard verification successfully built 64,703 nonempty generated files;
+  `index.html` was 11,838,659 bytes, `data_v9.json` was 11,118,116 bytes, the
+  schema 3.0 bundle was `3df66ce7d0e5a791345797e7`, and 30 attempts / 29
+  succeeded. Results were 113 baseline recovered / 325 Hybrid total / net
+  gain 212. The generated dashboard was removed after verification. Optional
+  missing diagnostics leave some tabs sparse; this is the residual
+  operational caveat.
+- No V8 corpus or data is present; seven papers remain. The upload target and
+  remote branch name is `feature/repository-reorganization`; origin SSH
+  reachability was confirmed, but this is not a claim that it is pushed.
+- The main fallback remains untouched and is not implied to be merged.
