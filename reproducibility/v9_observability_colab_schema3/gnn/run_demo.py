@@ -24,6 +24,13 @@ from gnn import config as FC
 STRATA = ("observable", "dark", "lone")
 
 def evaluate(df, score_col, ks):
+    """Evaluate ranked scores at configured operational depths.
+
+    ``df`` supplies a score column and retrospective ``hidden`` labels; ``ks``
+    supplies inspection depths.  The returned mapping contains found, precision,
+    and recall metrics without changing the score vector.
+    """
+
     hidden = df["hidden"].values
     scores = df[score_col].values
     order = np.argsort(-scores, kind="mergesort")
@@ -203,10 +210,23 @@ def evaluate_daily_simulated_catches(
 
 
 def add_tiebreak(scores, pool):
+    """Add deterministic row-order jitter without changing rank meaningfully.
+
+    ``scores`` is copied to a floating vector and ``pool`` supplies its length;
+    the returned vector is aligned to the same rows and remains evaluation-only.
+    """
+
     rng = np.random.default_rng(42)
     return np.array(scores, dtype=float) + rng.uniform(0, 1e-9, size=len(scores))
 
 def load_pool(corpus_dir, split="test"):
+    """Load a split-aligned event pool with oracle fields reserved for retrospective evaluation.
+
+    ``corpus_dir`` selects the synthetic corpus and ``split`` selects a declared
+    partition.  The returned frame normalizes UTC event/label times and keeps
+    oracle identity/hidden fields for post-freeze evaluation only.
+    """
+
     egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id", "false_negative_flag"])
     splits = pd.read_csv(corpus_dir / "train_valid_test_splits.csv", usecols=["entity_id", "split"])
     ev = pd.read_csv(
@@ -278,6 +298,13 @@ def _build_oracle(corpus_dir):
     return dict(zip(obs["observed_person_record_id"], obs["canonical_person_id"]))
 
 def stratum_for_pool(pool, corpus_dir):
+    """Assign retrospective graph-observability strata from synthetic ground truth.
+
+    ``pool`` is aligned to event IDs and ``corpus_dir`` supplies organization
+    truth; the returned labels are evaluation annotations, never deployable
+    features or tuning inputs.
+    """
+
     if "primary_person_id" not in pool.columns:
         egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id"])
         pool = pool.merge(egt, on="event_id", how="left")
@@ -292,6 +319,13 @@ def stratum_for_pool(pool, corpus_dir):
 
 
 def paired_event_bootstrap(a, b, hidden, ks, mask=None, n_boot=2000, seed=0):
+    """Bootstrap paired baseline and hybrid metrics over shared sampled events.
+
+    ``a``/``b`` are aligned frozen scores, ``hidden`` is retrospective truth,
+    and ``ks``, ``mask``, ``n_boot``, and ``seed`` control the paired resampling.
+    The returned summaries are evaluation-only and write no artifacts.
+    """
+
     rng = np.random.default_rng(seed)
     n = len(hidden)
     diffs = {k: np.empty(n_boot) for k in ks}
@@ -364,6 +398,13 @@ def _diff_summary(d):
             "significant": bool(lo > 0)}
 
 def stratum_metrics(scores, pool, hidden, strata_labels, ks):
+    """Compute per-stratum ranking metrics for one score vector.
+
+    The aligned score, hidden-label, and stratum vectors are ranked at ``ks``;
+    ``pool`` is retained for the bundle API.  The returned counts are strictly
+    retrospective diagnostics.
+    """
+
     order = np.argsort(-scores, kind="mergesort")
     out = {}
     for st in STRATA:
@@ -830,6 +871,17 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
          explanation_limit=None, narrative=True, narrative_runner=None,
          checkpoint_root=None, schema_version="2.0", hybrid_detail_limit=20,
          baseline_control_limit=10, observability_instrumentation=None):
+    """Run the leak-safe baseline-versus-GNN V9 comparison.
+
+    Corpus/output paths and training/evaluation options configure the run and its
+    optional checkpoint/observability publications.  Oracle rows may load early
+    for alignment, but hidden/org values cannot affect deployable decisions;
+    hidden labels first affect oracle evaluation after outputs freeze.
+    """
+
+    # Oracle rows may load early for alignment, but hidden/org values cannot affect
+    # deployable features, scores, caught-label fusion, threshold, or weight choice;
+    # hidden labels first affect oracle fusion/evaluation after outputs freeze.
     if observability and (
         gnn_arm != "sage" or tuple(seeds) != (0, 1, 2)
     ):

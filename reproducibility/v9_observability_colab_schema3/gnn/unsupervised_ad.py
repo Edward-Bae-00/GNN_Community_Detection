@@ -1,3 +1,5 @@
+"""Leak-safe unsupervised and caught-supervised anomaly evaluation."""
+
 from dataclasses import dataclass
 import hashlib
 import json
@@ -1421,6 +1423,12 @@ def _official_catch_history_provenance(catch_history):
 
 
 def corpus_output_path(results_dir, corpus_dir):
+    """Return a corpus-qualified diagnostics path for anomaly results.
+
+    ``results_dir`` is the output root and ``corpus_dir`` supplies the corpus
+    basename.  The returned ``Path`` is naming-only and does not write files.
+    """
+
     corpus_name = Path(corpus_dir).name
     prefix = "synthetic_cbp_graph_corpus_"
     suffix = corpus_name[len(prefix):] if corpus_name.startswith(prefix) else corpus_name
@@ -1450,6 +1458,17 @@ def main(
     seed=FC.SEED,
     n_estimators=100,
 ):
+    """Run deployable anomaly arms, freeze scores, then attach oracle-only evaluation.
+
+    ``mode`` and ``contamination`` select the arm configuration; keyword options
+    select corpus/output paths and estimator controls.  Observable features,
+    caught supervision, scores, and thresholds freeze before complete catch
+    history or hidden targets enter retrospective evaluation.
+    """
+
+    # Cutoff-eligible seizure labels train the two caught-supervised deployable arms.
+    # Complete official catch history is materialized only after scores and thresholds
+    # freeze and is used only with oracle targets for retrospective evaluation.
     corpus_dir = Path(corpus_dir) if corpus_dir is not None else FC.CORPUS_DIR
     results_dir = Path(results_dir) if results_dir is not None else FC.RESULTS
     print(f"Loading data from {corpus_dir}...")

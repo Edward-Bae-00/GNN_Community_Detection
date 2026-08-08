@@ -108,6 +108,12 @@ class _NonnegativeUniqueAction(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the architecture-bakeoff command-line parser.
+
+    The returned parser validates positive metric depths, nonnegative unique
+    seeds, and the configured corpus/output defaults without model side effects.
+    """
+
     parser = argparse.ArgumentParser(
         description="Run the GNN-only architecture bake-off."
     )
@@ -597,6 +603,12 @@ def validate_artifact(payload):
 
 
 def main(argv=None):
+    """Train and compare configured GNN encoders on one corpus snapshot.
+
+    ``argv`` optionally supplies parser arguments; the returned payload contains
+    the validated architecture comparison after atomic publication.
+    """
+
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

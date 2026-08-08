@@ -29,6 +29,12 @@ from gnn.graphmodel_rgcn import (
 )
 
 class UF:
+    """Maintain disjoint co-travel components while replaying events in time order.
+
+    The union-find stores integer node roots for strict as-of component pooling
+    and has no persistence or artifact side effects.
+    """
+
     def __init__(self, n):
         self.parent = np.arange(n)
         self.rank = np.zeros(n)
@@ -169,6 +175,8 @@ def _asof_x_caught(node_ids, node_feat, active_edges, caught_time, T, num_rel=NU
     cell_size, distinct_hh = _asof_struct_feats(node_ids, active_edges, T)
     struct = torch.tensor(
         np.column_stack([np.log1p(cell_size), np.log1p(distinct_hh)]), dtype=torch.float)
+    # Caught state is replayed forward and frozen before scoring the current row, so
+    # the row's own outcome and all future outcomes remain unavailable features.
     caught = torch.tensor(
         [[1.0] if (caught_time.get(p) is not None and caught_time[p] < T) else [0.0]
          for p in node_ids], dtype=torch.float)
@@ -177,6 +185,12 @@ def _asof_x_caught(node_ids, node_feat, active_edges, caught_time, T, num_rel=NU
 
 @dataclass(frozen=True)
 class DaySnapshotInputs:
+    """Frozen daily graph inputs used by relational training and scoring.
+
+    The record binds the strict pre-day edges, aligned tensors, component roots,
+    edge provenance, and caught state available before ``scoring_day``.
+    """
+
     scoring_day: pd.Timestamp
     active_edges: pd.DataFrame
     x: torch.Tensor

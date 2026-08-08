@@ -793,6 +793,13 @@ def build_fact_packet(explanation):
 
 
 def build_prompt(packet):
+    """Build the bounded evidence prompt used for one recovery narrative.
+
+    ``packet`` is prevalidated structured evidence.  The returned JSON-only
+    prompt contains the bounded snapshot, ranks, community key, and selector
+    IDs without making a model call or writing a file.
+    """
+
     packet = _validated_fact_packet(packet)
     catalog = build_selector_catalog(packet)
     selector = {
@@ -1096,6 +1103,13 @@ def _validate_text(packet, record, *, supported):
 
 
 def validate_candidate(packet, candidate):
+    """Validate a generated narrative against its structured evidence contract.
+
+    ``packet`` supplies validated evidence and ``candidate`` supplies summary
+    and grounded claims.  The returned mapping is normalized and rejects
+    unknown IDs/numbers, unsupported scope, duplicate refs, and ungrounded text.
+    """
+
     packet = _validated_fact_packet(packet)
     if not isinstance(candidate, Mapping):
         raise ValueError("unsupported narrative claim: candidate must be an object")
@@ -1185,6 +1199,13 @@ def resolve_narrative_selector(packet, selector):
 
 
 def render_template(packet):
+    """Render the deterministic narrative fallback from validated evidence.
+
+    ``packet`` is normalized through the same evidence contract as production;
+    the returned narrative is JSON-compatible, deterministic, and limited to
+    observable single-seed evidence.
+    """
+
     packet = _validated_fact_packet(packet)
     factors = list(packet["factors_by_id"].items())
     factors.sort(
@@ -1268,6 +1289,15 @@ def generate_narrative(
     mode="production",
     max_retries=3,
 ):
+    """Generate and validate one narrative, failing closed outside explicit template mode.
+
+    ``packet`` is frozen evidence; ``runner``, ``timeout_seconds``, and
+    ``max_retries`` control production model execution, while ``mode="template"``
+    explicitly selects the deterministic fallback.  Production failures raise
+    rather than silently falling back, and no files are published here.
+    """
+
+    # Template mode is an explicit narrative-only fallback; production fails closed.
     if mode == "template":
         try:
             return render_template(_validated_fact_packet(packet))
@@ -1275,6 +1305,7 @@ def generate_narrative(
             return render_template(_rank_only_packet(packet))
     if mode != "production":
         raise ValueError("mode must be 'production' or 'template'")
+    # Production model failures never silently become template output.
     packet = _validated_fact_packet(packet)
     preflight_local_model(runner=runner, timeout_seconds=timeout_seconds)
     prompt = build_prompt(packet)

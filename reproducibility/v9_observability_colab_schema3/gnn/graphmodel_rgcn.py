@@ -1,3 +1,5 @@
+"""Typed as-of person-graph construction and relational GNN scoring."""
+
 from __future__ import annotations
 import hashlib
 
@@ -92,6 +94,13 @@ def caught_feature_names(num_rel):
     )
 
 class RelationSAGEEncoder(torch.nn.Module):
+    """Encode typed person relations with two relational graph-convolution layers.
+
+    ``in_dim``, ``hidden``, ``out``, and ``num_relations`` define the tensor and
+    relation widths.  ``forward`` returns one ``[out]`` embedding per node from
+    the supplied typed edge index; as-of filtering remains the caller's job.
+    """
+
     def __init__(self, in_dim, hidden=32, out=32, num_relations=4):
         super().__init__()
         self.conv1 = RGCNConv(in_dim, hidden, num_relations=num_relations)
@@ -104,6 +113,14 @@ class RelationSAGEEncoder(torch.nn.Module):
         return x
 
 def build_anchor_graph(obs_to_person, corpus_dir, include_assoc=False, include_plate=False):
+    """Build the legacy anchor graph retained for compatibility experiments.
+
+    ``obs_to_person`` resolves observed records, ``corpus_dir`` supplies the
+    synthetic source tables, and the compatibility flags select optional
+    relation families.  The returned frame carries endpoints, availability
+    timestamps, and relation types; callers must filter it strictly before T.
+    """
+
     obs = pd.read_csv(corpus_dir / "observed_person_records.csv", usecols=["observed_person_record_id", "event_id", "event_timestamp_utc", "observed_residence_location_id"])
     obs["identity"] = obs["observed_person_record_id"].map(obs_to_person)
     obs = obs.dropna(subset=["identity"])
@@ -160,6 +177,14 @@ class _RGCN(torch.nn.Module):
         return self.head(z).squeeze(-1)
 
 def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=False):
+    """Build the timestamped lifetime person graph on canonical oracle identities.
+
+    ``corpus_dir`` selects the snapshot, ``substrate`` is retained for bundle
+    compatibility, and ``include_plate`` enables plate relations.  The return is
+    ``(edges, node_ids, node_feat)`` with normalized lifetime availability times;
+    it is not itself a row-time graph snapshot and must be filtered by callers.
+    """
+
     from gnn.run_demo import _build_oracle
     corpus_dir = corpus_dir or C.CORPUS_DIR
     obs_to_person = _build_oracle(corpus_dir)
@@ -168,6 +193,7 @@ def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=
     rel_map = REL_PLATE if include_plate else REL
     e = e[e["edge_type"].isin(rel_map.keys())].copy()
     e["avail_time"] = pd.to_datetime(e["avail_time"], utc=True, errors="coerce")
+    # Availability timestamps are normalized and preserved for downstream filtering.
     e = e[e["avail_time"].notna()].copy()
     e["rel"] = e["edge_type"].map(rel_map).astype(int)
     e = _add_edge_provenance(e)
@@ -294,6 +320,14 @@ def _edge_index_typed(edges, index):
 
 def train_rgcn(edges, node_ids, node_feat, labels, train_mask,
                *, seed=0, epochs=30, lr=1e-2, device="cpu"):
+    """Fit the relational encoder on the caller-supplied training mask and labels.
+
+    The graph, node features, labels, and mask define the in-memory weighted BCE
+    fit; ``seed``, ``epochs``, ``lr``, and ``device`` configure optimization.
+    The returned evaluation-mode model scores every node, while label and edge
+    availability cutoffs remain caller contracts.
+    """
+
     torch.manual_seed(seed)
     index = {p: i for i, p in enumerate(node_ids)}
     x = _asof_x(node_ids, node_feat, edges)
@@ -315,6 +349,14 @@ def train_rgcn(edges, node_ids, node_feat, labels, train_mask,
     return model
 
 def asof_risk_rgcn(model, edges, node_ids, node_feat, rows):
+    """Score rows from graph edges available strictly before each row time.
+
+    ``model`` scores the canonical ``node_ids``/``node_feat`` universe, ``edges``
+    supplies lifetime typed provenance, and ``rows`` supplies UTC ``t`` and
+    ``person_id``.  The returned probability vector preserves row order and
+    performs no writes.
+    """
+
     index = {p: i for i, p in enumerate(node_ids)}
     out = np.zeros(len(rows))
     rows = rows.reset_index(drop=True)
@@ -322,6 +364,7 @@ def asof_risk_rgcn(model, edges, node_ids, node_feat, rows):
     model.eval()
     with torch.no_grad():
         for t, grp in rows.groupby("_t", sort=True):
+            # Strict as-of scoring excludes edges at or after T immediately before filtering.
             sub = edges[edges["avail_time"] < t]
             x = _asof_x(node_ids, node_feat, sub)
             ei, et = _edge_index_typed(sub, index)

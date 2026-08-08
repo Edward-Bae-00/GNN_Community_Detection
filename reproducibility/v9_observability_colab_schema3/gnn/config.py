@@ -1,3 +1,5 @@
+"""Runtime configuration for corpus selection and generated diagnostics."""
+
 import os
 from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]

@@ -1800,6 +1800,8 @@ def _build_schema3_artifact(
     # selection, so their failures are reported in the artifact but not fed
     # back into the selection finalizer.
     all_failures = list(failures) + list(structural_fallback_failures)
+    # Selection finalization receives the complete frozen failure set so published
+    # cohort records and diagnostics cannot drift after selection.
     selection_final = finalize_recovery_publication(
         selection,
         published_ids=published_ids,
@@ -1999,6 +2001,15 @@ def _build_schema3_artifact(
 
 
 def validate_schema3_artifact(artifact):
+    """Validate in-memory schema-3 coverage, index, and fingerprint invariants.
+
+    ``artifact`` is the complete in-memory diagnostic object; validation checks
+    schema-3 evidence before any durable ``RecoveryBundleWriter`` publication.
+    This function is pure and returns the validated detached artifact.
+    """
+
+    # Schema-3 validation is an in-memory contract; durable publication belongs
+    # to RecoveryBundleWriter after the verified evidence tree is complete.
     if not isinstance(artifact, Mapping) or artifact.get("schema_version") != SCHEMA3:
         raise ValueError("invalid schema-3 observability artifact version")
     policy = artifact.get("policy")
@@ -2544,6 +2555,13 @@ def serialize_artifact(
     inspections_per_day,
     explanation_limit,
 ):
+    """Serialize the legacy schema-2 artifact with inline explanation and community payloads.
+
+    The supplied frozen recovery reference, cohorts, explanations, failures,
+    and publication controls are converted into the legacy JSON-compatible
+    mapping; schema-3 publication uses ``RecoveryBundleWriter`` instead.
+    """
+
     explanation_by_person = {
         explanation["person_id"]: explanation for explanation in explanations
     }
@@ -2622,6 +2640,13 @@ def serialize_artifact(
 
 
 def validate_artifact_invariants(artifact):
+    """Reject observability artifacts that violate leakage or schema contracts.
+
+    Schema-3 values use the in-memory validator, while legacy schema-2 values
+    retain their inline payload and provenance checks.  Validation performs no
+    publication or mutation and returns ``True`` on success.
+    """
+
     if isinstance(artifact, Mapping) and artifact.get("schema_version") == SCHEMA3:
         return validate_schema3_artifact(artifact)
     if artifact.get("schema_version") != "2.0":
@@ -3225,6 +3250,8 @@ def _build_schema3_bundle(
         bundle_writer=writer,
     )
     selection = artifact["selection"]
+    # The verified tree and catalog are complete before RecoveryBundleWriter
+    # publishes the compact schema-3 manifest and current pointer.
     manifest = writer.finalize_schema3(
         selected_hybrid_case_ids=selection["selected_ids"]["hybrid_only"],
         selected_baseline_case_ids=selection["selected_ids"]["baseline_only"],

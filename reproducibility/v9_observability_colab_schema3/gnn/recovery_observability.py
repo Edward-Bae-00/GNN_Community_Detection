@@ -27,6 +27,12 @@ _SAFE_SUBJECT_DISPLAY_FIELDS = frozenset(
 
 @dataclass(frozen=True)
 class RecoveryAnchor:
+    """Identify one person's first recovery event for an evaluation arm.
+
+    The record preserves the person/event identity, source row, scoring day, and
+    inspected rank used by the frozen recovery run.
+    """
+
     person_id: str
     event_id: str
     row_index: int
@@ -36,6 +42,12 @@ class RecoveryAnchor:
 
 @dataclass(frozen=True)
 class DailyPoolTrace:
+    """Frozen daily candidate-pool and ranking provenance.
+
+    ``candidate_row_indices`` and ``inspected_row_indices`` retain the exact
+    daily selection inputs for deterministic replay.
+    """
+
     scoring_day: pd.Timestamp
     candidate_row_indices: tuple[int, ...]
     inspected_row_indices: tuple[int, ...]
@@ -43,6 +55,12 @@ class DailyPoolTrace:
 
 @dataclass(frozen=True)
 class RecoveryRun:
+    """Record one evaluation arm's complete daily recovery run.
+
+    The run binds its positive daily budget, recovered IDs, first anchors, pool
+    traces, and optional run/as-of identities; validation keeps mappings frozen.
+    """
+
     arm: str
     daily_budget: int
     recovered_ids: frozenset[str]
@@ -72,6 +90,12 @@ class RecoveryRun:
 
 @dataclass(frozen=True)
 class RecoveryOverlap:
+    """Overlap counts between baseline and hybrid recovery sets.
+
+    The five ID sets are normalized and checked against their exact intersection
+    and difference algebra during construction.
+    """
+
     baseline_ids: frozenset[str]
     hybrid_ids: frozenset[str]
     both_ids: frozenset[str]
@@ -115,6 +139,12 @@ class RecoveryOverlap:
 
 @dataclass(frozen=True)
 class FrozenRankReference:
+    """Freeze pool-wide rank and score arrays for deterministic reference.
+
+    Event IDs and all score/percentile vectors are copied and aligned, with the
+    blend weight and content-derived reference ID validating the rank contract.
+    """
+
     percentile_reference_id: str
     event_ids: tuple[str, ...]
     baseline_raw: np.ndarray
@@ -172,6 +202,12 @@ class FrozenRankReference:
 
 @dataclass(frozen=True)
 class HybridOnlyCase:
+    """A hidden carrier recovered by Hybrid but missed by the baseline.
+
+    The frozen case records arm ranks, percentiles, relationship categories, and
+    the decision-trace row references used for retrospective explanation.
+    """
+
     person_id: str
     anchor: RecoveryAnchor
     baseline_rank: int

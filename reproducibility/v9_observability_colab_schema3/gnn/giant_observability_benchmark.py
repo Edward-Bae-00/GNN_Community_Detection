@@ -1656,6 +1656,14 @@ def run_benchmark(
     preflight_runner: Callable | None = None,
     structural_runner: Callable | None = None,
 ):
+    """Measure schema-3 observability memory and publication behavior on the full graph.
+
+    Corpus, checkpoint, and output paths identify the verified run; injectable
+    loaders, runners, estimators, and instrumentation support bounded tests.
+    The validated result is published atomically and snapshot caches are released
+    in ``finally``; failures do not publish partial output.
+    """
+
     holder = {}
 
     def capturing_loader(*args):
@@ -1702,6 +1710,13 @@ def run_benchmark(
 
 
 def main(argv=None):
+    """Parse CLI arguments and run the giant observability benchmark.
+
+    ``argv`` optionally supplies ``--corpus``, ``--checkpoint``, and ``--output``;
+    the returned mapping is the benchmark result and publication remains owned
+    by ``run_benchmark``.
+    """
+
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark the largest real Hybrid-only V9 explanation from a "

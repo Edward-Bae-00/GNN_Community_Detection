@@ -32,6 +32,13 @@ CATEGORICAL_FEATURES = frozenset(["sex", *_EVENT_CATEGORICAL_FEATURES])
 
 @dataclass(frozen=True)
 class FeatureBundle:
+    """Leak-safe tabular and relational feature frames plus provenance.
+
+    Event IDs, numeric matrices, ordered names, categorical names, and display
+    values remain aligned; relational proxies are comparison features, not hidden
+    outcomes or future labels.
+    """
+
     event_ids: list[str]
     matrix: np.ndarray
     names: list[str]
@@ -41,6 +48,12 @@ class FeatureBundle:
 
 @dataclass(frozen=True)
 class EncodedSplits:
+    """Encoded train, validation, and test matrices with frozen schemas.
+
+    The matrices share training-derived feature order and the optional encoder;
+    unseen categories remain handled by the training-only encoding contract.
+    """
+
     train: np.ndarray
     validation: np.ndarray
     test: np.ndarray

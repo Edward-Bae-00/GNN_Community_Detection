@@ -16,7 +16,7 @@ PACKAGE_ROOTS = (
         id="schema3",
     ),
 )
-REQUIRED_ACTIVE_MODULE_SENTENCES = {
+REQUIRED_MODULE_SENTENCES = {
     "__init__.py": "Active leak-safe GNN anomaly-detection research package.",
     "config.py": "Runtime configuration for corpus selection and generated diagnostics.",
     "detector.py": "Scikit-learn fitting helpers shared by tabular detector experiments.",
@@ -25,7 +25,7 @@ REQUIRED_ACTIVE_MODULE_SENTENCES = {
     "unsupervised_ad.py": "Leak-safe unsupervised and caught-supervised anomaly evaluation.",
 }
 
-REQUIRED_ACTIVE_API_SENTENCES = {
+REQUIRED_API_SENTENCES = {
     "demo_baseline.build_baseline_features": (
         "Build leak-safe as-of tabular features for requested crossing events."
     ),
@@ -232,20 +232,22 @@ def test_gnn_modules_and_public_top_level_apis_are_documented(package_root: Path
     assert not missing, "missing GNN documentation contracts:\n" + "\n".join(missing)
 
 
-def test_active_required_module_docstring_first_sentences_are_stable():
-    for filename, sentence in REQUIRED_ACTIVE_MODULE_SENTENCES.items():
-        path = REPOSITORY_ROOT / "gnn" / filename
+@pytest.mark.parametrize("package_root", PACKAGE_ROOTS)
+def test_required_gnn_docstring_first_sentences_are_stable(package_root: Path):
+    missing = []
+    for filename, sentence in REQUIRED_MODULE_SENTENCES.items():
+        path = package_root / filename
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         docstring = ast.get_docstring(tree, clean=False)
-        assert docstring is not None
-        assert docstring.strip().splitlines()[0] == sentence, path
-
-
-def test_active_required_api_docstring_first_sentences_are_stable():
-    missing = []
-    for qualified_name, sentence in REQUIRED_ACTIVE_API_SENTENCES.items():
+        first_sentence = (docstring or "").strip().splitlines()
+        if not first_sentence or first_sentence[0] != sentence:
+            actual = first_sentence[0] if first_sentence else "<missing>"
+            missing.append(
+                f"{filename}: expected first sentence {sentence!r}; got {actual!r}"
+            )
+    for qualified_name, sentence in REQUIRED_API_SENTENCES.items():
         module_name, symbol_name = qualified_name.split(".", 1)
-        path = REPOSITORY_ROOT / "gnn" / f"{module_name}.py"
+        path = package_root / f"{module_name}.py"
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         node = next(
             (
@@ -268,5 +270,5 @@ def test_active_required_api_docstring_first_sentences_are_stable():
             missing.append(
                 f"{qualified_name}: expected first sentence {sentence!r}; got {actual!r}"
             )
-    assert len(REQUIRED_ACTIVE_API_SENTENCES) == 58
-    assert not missing, "incorrect active API documentation:\n" + "\n".join(missing)
+    assert len(REQUIRED_API_SENTENCES) == 58
+    assert not missing, "incorrect GNN documentation:\n" + "\n".join(missing)

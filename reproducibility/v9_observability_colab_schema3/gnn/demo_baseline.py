@@ -85,6 +85,14 @@ def _observed_demo(corpus_dir) -> pd.DataFrame:
 
 
 def build_baseline_features(rows: pd.DataFrame, corpus_dir, obs_to_identity):
+    """Build leak-safe as-of tabular features for requested crossing events.
+
+    ``rows`` supplies event IDs, observed records, and UTC row times;
+    ``corpus_dir`` supplies observable context; and ``obs_to_identity`` maps
+    records to canonical identities.  The returned matrix and ordered feature
+    names use only own history strictly before each row time, with no graph or
+    future-outcome features.
+    """
     hist = _asof_history(corpus_dir, obs_to_identity)
     ctx = _event_context(corpus_dir)
     js = _pre_event_json(corpus_dir)

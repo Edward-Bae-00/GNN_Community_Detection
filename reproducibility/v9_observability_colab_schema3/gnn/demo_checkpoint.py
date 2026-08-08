@@ -202,12 +202,24 @@ def _verify_checkpoint_closure(path, metadata):
 
 @dataclass(frozen=True)
 class WrittenDemoCheckpoint:
+    """Paths and identity metadata for a newly written checkpoint.
+
+    ``checkpoint_id`` names the content-derived publication and ``path`` points
+    to its atomically written directory after closure checks succeed.
+    """
+
     checkpoint_id: str
     path: Path
 
 
 @dataclass(frozen=True)
 class LoadedDemoCheckpoint:
+    """Validated models, scores, and metadata loaded from a checkpoint.
+
+    The record contains hash-checked metadata, model mappings, score arrays, and
+    aligned validation/test event IDs reconstructed from the verified payload.
+    """
+
     checkpoint_id: str
     path: Path
     metadata: dict
@@ -367,6 +379,12 @@ def write_demo_checkpoint(
 
 
 def read_demo_checkpoint_metadata(checkpoint_path):
+    """Read checkpoint metadata without loading model tensors or score arrays.
+
+    ``checkpoint_path`` names a checkpoint directory.  The returned mapping is
+    JSON-decoded and schema/identity checked without publishing or mutating any
+    files; unreadable or incompatible metadata raises ``ValueError``.
+    """
     path = Path(checkpoint_path)
     try:
         metadata = json.loads((path / "metadata.json").read_text())
