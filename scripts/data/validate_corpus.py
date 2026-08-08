@@ -53,10 +53,16 @@ def _infer_observable_people(org_rows_by_person, event_rows):
     for row in event_rows:
         primary = row['primary_person_id']
         primary_org = org_by_person.get(primary)
-        if primary_org is None:
-            continue
         cotravelers = list(filter(None, (row.get('co_traveler_person_ids') or '').split(';')))
 
+        if row.get('vehicle_id'):
+            for person_id in [primary, *cotravelers]:
+                person_org = org_by_person.get(person_id)
+                if person_org is not None:
+                    vehicle_people[(person_org, row['vehicle_id'])].add(person_id)
+
+        if primary_org is None:
+            continue
         for cotraveler in cotravelers:
             if (
                 org_by_person.get(cotraveler) == primary_org
@@ -66,11 +72,6 @@ def _infer_observable_people(org_rows_by_person, event_rows):
                 observable_people.add(primary)
                 observable_people.add(cotraveler)
 
-        if row.get('vehicle_id'):
-            for person_id in [primary, *cotravelers]:
-                person_org = org_by_person.get(person_id)
-                if person_org is not None:
-                    vehicle_people[(person_org, row['vehicle_id'])].add(person_id)
         if row.get('carrier_id'):
             carrier_people[(primary_org, row['carrier_id'])].add(primary)
 

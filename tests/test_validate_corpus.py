@@ -42,6 +42,56 @@ def test_cross_org_cotravel_is_ignored():
     assert _infer(rows, [{"primary_person_id": "P1", "co_traveler_person_ids": "P2"}]) == set()
 
 
+def test_vehicle_groups_org_cotravelers_when_primary_has_no_org():
+    rows = _org_rows(("P1", "O1", False), ("P2", "O1", False))
+    events = [
+        {
+            "primary_person_id": "N1",
+            "co_traveler_person_ids": "P1;P2",
+            "vehicle_id": "V1",
+        }
+    ]
+
+    assert _infer(rows, events) == {"P1", "P2"}
+
+
+def test_vehicle_grouping_keeps_orgs_separate():
+    rows = _org_rows(("P1", "O1", False), ("P2", "O2", False))
+    events = [
+        {
+            "primary_person_id": "N1",
+            "co_traveler_person_ids": "P1;P2",
+            "vehicle_id": "V1",
+        }
+    ]
+
+    assert _infer(rows, events) == set()
+
+
+def test_carrier_grouping_keeps_orgs_separate():
+    rows = _org_rows(("P1", "O1", False), ("P2", "O2", False))
+    events = [
+        {"primary_person_id": "P1", "co_traveler_person_ids": "", "carrier_id": "B1"},
+        {"primary_person_id": "P2", "co_traveler_person_ids": "", "carrier_id": "B1"},
+    ]
+
+    assert _infer(rows, events) == set()
+
+
+def test_carrier_evidence_counts_primaries_not_cotravelers():
+    rows = _org_rows(("P1", "O1", False), ("P2", "O1", False))
+    events = [
+        {
+            "primary_person_id": "N1",
+            "co_traveler_person_ids": "P1",
+            "carrier_id": "B1",
+        },
+        {"primary_person_id": "P2", "co_traveler_person_ids": "", "carrier_id": "B1"},
+    ]
+
+    assert _infer(rows, events) == set()
+
+
 @pytest.mark.parametrize(
     "events",
     [
