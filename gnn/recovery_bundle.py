@@ -1729,6 +1729,8 @@ class RecoveryBundleWriter:
             "bundle_path": bundle_path.as_posix(),
             "manifest_sha256": _sha256(manifest_content),
         }
+        # Sidecar references carry hashes and byte counts; publishing the pointer JSON
+        # before the verified evidence tree would create a corrupt but plausible run.
         _atomic_write(self.final_root / "current.json", _canonical_bytes(pointer))
         if self.staging_root.exists():
             shutil.rmtree(self.staging_root)
@@ -1908,6 +1910,8 @@ class RecoveryBundleWriter:
                 "bundle_path": bundle_path.as_posix(),
                 "manifest_sha256": _sha256(manifest_content),
             }
+            # Sidecar references carry hashes and byte counts; publishing the pointer JSON
+            # before the verified evidence tree would create a corrupt but plausible run.
             _atomic_write(self.final_root / "current.json", _canonical_bytes(pointer))
             if self.staging_root.exists():
                 shutil.rmtree(self.staging_root)

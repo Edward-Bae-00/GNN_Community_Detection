@@ -106,6 +106,8 @@ def _canonical_string_ids(values, *, field_name):
 
 @dataclass(frozen=True)
 class AblationSpec:
+    """Describe one evidence factor removed for a counterfactual score."""
+
     factor_id: str
     kind: str
     edge_source_row_ids: tuple[str, ...] = ()
@@ -214,6 +216,8 @@ def _nonnegative_unique_indices(values, *, field_name):
 
 @dataclass(frozen=True)
 class CounterfactualContext:
+    """Reusable graph state for grouped counterfactual scoring."""
+
     person_id: str
     row_index: int
     scoring_day: pd.Timestamp
@@ -265,6 +269,8 @@ class CounterfactualContext:
 
 @dataclass(frozen=True)
 class DaySnapshot:
+    """As-of graph, features, and scores frozen for one evaluation day."""
+
     scoring_day: pd.Timestamp
     active_edges: pd.DataFrame
     x: torch.Tensor
@@ -303,8 +309,9 @@ def display_hop_ring_layout(nodes, edges, target_person_id):
     ``message_distance`` and sorted ``node_id``, so the same community always
     lays out identically.
 
-    The body is kept identical to the copy in the schema-3 producer package
-    (v9_observability_colab_schema3/gnn/sage_explainer.py) and is mirrored by
+    The body is kept identical to the schema-3 handoff at
+    ``reproducibility/v9_observability_colab_schema3/gnn/sage_explainer.py``
+    and is mirrored by
     ``recoveryHopRingLayout`` in the recovery explainer UI, which recomputes the
     same placement in the browser so bundles published from the older sqrt(N)
     grid still read structurally. ``tests/test_recovery_layout_parity.py``
@@ -963,6 +970,8 @@ def _rank_reference_fingerprint(reference, row_bindings):
 
 
 class Seed0ExplanationEngine:
+    """Generate deterministic seed-0 GNNExplainer evidence for selected cases."""
+
     def __init__(
         self,
         *,
@@ -1527,6 +1536,7 @@ class Seed0ExplanationEngine:
 
 
 def score_grouped_counterfactual(engine, context, factor):
+    """Score grouped evidence ablations without rebuilding unchanged graph state."""
     if not isinstance(engine, Seed0ExplanationEngine):
         raise ValueError("engine must be a Seed0ExplanationEngine")
     return engine._Seed0ExplanationEngine__score_grouped_counterfactual(
@@ -1560,6 +1570,7 @@ def _length_framed_hash(parts):
 
 
 def member_subgraph(engine, person_id, scoring_day):
+    """Materialize the exact member-induced subgraph used by one explanation."""
     if not isinstance(engine, Seed0ExplanationEngine):
         raise ValueError("engine must be a Seed0ExplanationEngine")
     if person_id not in engine.person_index:
@@ -1663,6 +1674,7 @@ def explainability_eligibility(
 
 
 def make_gnn_explainer(wrapper, epochs=EXPLAINER_EPOCHS):
+    """Construct the configured PyG GNNExplainer wrapper."""
     if not isinstance(wrapper, PrePoolSAGELogitWrapper):
         raise ValueError("wrapper must be a PrePoolSAGELogitWrapper")
     epochs = _validated_explainer_epochs(epochs)
@@ -1832,6 +1844,7 @@ def _flow_stage_rules():
 
 
 def build_flow_stages(community):
+    """Describe how observable evidence flows through the two-hop scoring pipeline."""
     if isinstance(community, CommunityScope):
         return _flow_stage_rules()
     if not isinstance(community, Mapping):
@@ -1844,6 +1857,7 @@ def build_flow_stages(community):
 
 
 def aggregate_restart_masks(masks, top_fraction=0.1):
+    """Aggregate restart attribution masks with completeness diagnostics."""
     try:
         fraction = float(top_fraction)
     except (TypeError, ValueError) as exc:
@@ -1903,6 +1917,7 @@ def aggregate_restart_masks(masks, top_fraction=0.1):
 def matched_random_controls(
     edge_records, *, selected_edge_ids, seed
 ):
+    """Select deterministic matched controls for faithfulness comparisons."""
     pairs, _ = _matched_control_details(
         edge_records, selected_edge_ids=selected_edge_ids, seed=seed
     )
@@ -1967,6 +1982,7 @@ def _validated_probability(value, *, field_name):
 def edge_removal_faithfulness(
     edge_records, importance_by_id, *, rescore, seed=0
 ):
+    """Measure score change after removing attributed versus control edges."""
     records = tuple(edge_records)
     edge_ids = tuple(record["edge_id"] for record in records)
     if len(set(edge_ids)) != len(edge_ids):
@@ -2257,6 +2273,7 @@ def frozen_peer_rank(
 def classify_factor_stability(
     counterfactual, restart_selection_frequency, restart_iqr
 ):
+    """Classify whether an evidence factor is stable across explanation restarts."""
     try:
         frequency = float(restart_selection_frequency)
         iqr = float(restart_iqr)
@@ -2397,6 +2414,7 @@ def build_ablation_specs(
     ranked_edge_source_row_ids=(),
     pooled_logit_contributions=None,
 ):
+    """Build deterministic node, edge, and relation ablation specifications."""
     if not isinstance(person_id, str) or not person_id.strip():
         raise ValueError("person_id must be a non-blank string")
     required = {
@@ -2606,6 +2624,7 @@ def build_ablation_specs(
 
 
 def build_complete_community(engine, target_person_id, scoring_day):
+    """Stream the complete community while bounding the display projection."""
     if target_person_id not in engine.person_index:
         raise KeyError(f"unknown person_id: {target_person_id}")
     snapshot = engine.snapshot(scoring_day)

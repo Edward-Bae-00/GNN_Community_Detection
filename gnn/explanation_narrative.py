@@ -670,6 +670,7 @@ def build_fact_packet(explanation):
 
 
 def build_prompt(packet):
+    """Build the bounded evidence prompt used for one recovery narrative."""
     packet = _validated_fact_packet(packet)
     catalog = build_selector_catalog(packet)
     selector = {
@@ -973,6 +974,7 @@ def _validate_text(packet, record, *, supported):
 
 
 def validate_candidate(packet, candidate):
+    """Validate a generated narrative against its structured evidence contract."""
     packet = _validated_fact_packet(packet)
     if not isinstance(candidate, Mapping):
         raise ValueError("unsupported narrative claim: candidate must be an object")
@@ -1062,6 +1064,7 @@ def resolve_narrative_selector(packet, selector):
 
 
 def render_template(packet):
+    """Render the deterministic narrative fallback from validated evidence."""
     packet = _validated_fact_packet(packet)
     factors = list(packet["factors_by_id"].items())
     factors.sort(
@@ -1145,6 +1148,7 @@ def generate_narrative(
     mode="production",
     max_retries=3,
 ):
+    """Generate and validate one narrative, recording deterministic fallback diagnostics."""
     if mode == "template":
         try:
             return render_template(_validated_fact_packet(packet))

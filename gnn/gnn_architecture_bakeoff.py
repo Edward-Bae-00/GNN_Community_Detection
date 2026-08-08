@@ -108,6 +108,7 @@ class _NonnegativeUniqueAction(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the architecture-bakeoff command-line parser."""
     parser = argparse.ArgumentParser(
         description="Run the GNN-only architecture bake-off."
     )
@@ -597,6 +598,7 @@ def validate_artifact(payload):
 
 
 def main(argv=None):
+    """Train and compare configured GNN encoders on one corpus snapshot."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

@@ -85,6 +85,7 @@ def _observed_demo(corpus_dir) -> pd.DataFrame:
 
 
 def build_baseline_features(rows: pd.DataFrame, corpus_dir, obs_to_identity):
+    """Build leak-safe as-of tabular features for requested crossing events."""
     hist = _asof_history(corpus_dir, obs_to_identity)
     ctx = _event_context(corpus_dir)
     js = _pre_event_json(corpus_dir)

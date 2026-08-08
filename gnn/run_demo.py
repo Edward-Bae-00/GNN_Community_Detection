@@ -25,6 +25,7 @@ from gnn import config as FC
 STRATA = ("observable", "dark", "lone")
 
 def evaluate(df, score_col, ks):
+    """Evaluate ranked scores at configured operational depths."""
     hidden = df["hidden"].values
     scores = df[score_col].values
     order = np.argsort(-scores, kind="mergesort")
@@ -204,10 +205,17 @@ def evaluate_daily_simulated_catches(
 
 
 def add_tiebreak(scores, pool):
+    """Add deterministic event-ID jitter without changing rank meaningfully."""
     rng = np.random.default_rng(42)
     return np.array(scores, dtype=float) + rng.uniform(0, 1e-9, size=len(scores))
 
 def load_pool(corpus_dir, split="test"):
+    """Load the observable event pool and normalize timestamps and split labels.
+
+    The current flow reads ``event_ground_truth.csv`` here to align rows and
+    carries hidden outcomes for later metrics; feature construction and
+    deployable threshold selection must not consume those oracle-only fields.
+    """
     egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id", "false_negative_flag"])
     splits = pd.read_csv(corpus_dir / "train_valid_test_splits.csv", usecols=["entity_id", "split"])
     ev = pd.read_csv(
@@ -279,6 +287,7 @@ def _build_oracle(corpus_dir):
     return dict(zip(obs["observed_person_record_id"], obs["canonical_person_id"]))
 
 def stratum_for_pool(pool, corpus_dir):
+    """Assign graph-observability strata from leak-safe structural features."""
     if "primary_person_id" not in pool.columns:
         egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id"])
         pool = pool.merge(egt, on="event_id", how="left")
@@ -293,6 +302,7 @@ def stratum_for_pool(pool, corpus_dir):
 
 
 def paired_event_bootstrap(a, b, hidden, ks, mask=None, n_boot=2000, seed=0):
+    """Bootstrap paired baseline and hybrid metrics over shared sampled events."""
     rng = np.random.default_rng(seed)
     n = len(hidden)
     diffs = {k: np.empty(n_boot) for k in ks}
@@ -365,6 +375,7 @@ def _diff_summary(d):
             "significant": bool(lo > 0)}
 
 def stratum_metrics(scores, pool, hidden, strata_labels, ks):
+    """Compute per-stratum ranking metrics for one score vector."""
     order = np.argsort(-scores, kind="mergesort")
     out = {}
     for st in STRATA:
@@ -831,6 +842,11 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
          explanation_limit=None, narrative=True, narrative_runner=None,
          checkpoint_root=None, schema_version="2.0", hybrid_detail_limit=20,
          baseline_control_limit=10, observability_instrumentation=None):
+    """Run the leak-safe baseline-versus-GNN V9 comparison.
+
+    Oracle-only fusion and retrospective evaluation occur only after the
+    deployable outputs and threshold selection are frozen.
+    """
     if observability and (
         gnn_arm != "sage" or tuple(seeds) != (0, 1, 2)
     ):
@@ -861,6 +877,9 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
         valid_pool = valid_pool.sample(valid_sample, random_state=FC.SEED).reset_index(drop=True)
     # CAUGHT label on validation (the only label available in real deployment);
     # the MISSED label (`hidden`) is a synthetic-only oracle used for the ceiling.
+    # event_ground_truth is loaded early to align the caught validation label.
+    # Hidden/outcome fields remain outside features and deployable threshold
+    # selection; oracle fusion/evaluation happens after deployable outputs freeze.
     _egt_det = pd.read_csv(cd / "event_ground_truth.csv", usecols=["event_id", "detected_flag"])
     valid_detected = (valid_pool.merge(_egt_det, on="event_id", how="left")["detected_flag"]
                       .fillna(False).astype(bool).values)
@@ -926,6 +945,8 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
         ks,
     )
     hybrid = add_tiebreak(_rank_fuse(base_raw, gnn_test_raw, w_gnn), pool)
+    # Oracle files are opened only after every deployable score and threshold has
+    # frozen; data below this boundary is evaluation-only.
     # Ceiling: tune on the MISSED-carrier oracle label. Not deployable; it shows
     # how much the caught-only tuning costs (the biased-proxy gap).
     w_gnn_oracle = _pick_fusion_weight(

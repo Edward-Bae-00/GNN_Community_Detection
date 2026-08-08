@@ -27,6 +27,8 @@ _SAFE_SUBJECT_DISPLAY_FIELDS = frozenset(
 
 @dataclass(frozen=True)
 class RecoveryAnchor:
+    """One baseline-missed person selected for recovery analysis."""
+
     person_id: str
     event_id: str
     row_index: int
@@ -36,6 +38,8 @@ class RecoveryAnchor:
 
 @dataclass(frozen=True)
 class DailyPoolTrace:
+    """Frozen daily candidate-pool and ranking provenance."""
+
     scoring_day: pd.Timestamp
     candidate_row_indices: tuple[int, ...]
     inspected_row_indices: tuple[int, ...]
@@ -43,6 +47,8 @@ class DailyPoolTrace:
 
 @dataclass(frozen=True)
 class RecoveryRun:
+    """Complete baseline-versus-hybrid recovery output for one evaluation run."""
+
     arm: str
     daily_budget: int
     recovered_ids: frozenset[str]
@@ -72,6 +78,8 @@ class RecoveryRun:
 
 @dataclass(frozen=True)
 class RecoveryOverlap:
+    """Overlap counts between baseline and hybrid recovery sets."""
+
     baseline_ids: frozenset[str]
     hybrid_ids: frozenset[str]
     both_ids: frozenset[str]
@@ -115,6 +123,8 @@ class RecoveryOverlap:
 
 @dataclass(frozen=True)
 class FrozenRankReference:
+    """Immutable rank and score reference for one candidate."""
+
     percentile_reference_id: str
     event_ids: tuple[str, ...]
     baseline_raw: np.ndarray
@@ -172,6 +182,8 @@ class FrozenRankReference:
 
 @dataclass(frozen=True)
 class HybridOnlyCase:
+    """A hidden carrier recovered by Hybrid but missed by the baseline."""
+
     person_id: str
     anchor: RecoveryAnchor
     baseline_rank: int

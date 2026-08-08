@@ -1656,6 +1656,7 @@ def run_benchmark(
     preflight_runner: Callable | None = None,
     structural_runner: Callable | None = None,
 ):
+    """Measure schema-3 observability memory and publication behavior on the full graph."""
     holder = {}
 
     def capturing_loader(*args):
@@ -1702,6 +1703,7 @@ def run_benchmark(
 
 
 def main(argv=None):
+    """Parse CLI arguments and run the giant observability benchmark."""
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark the largest real Hybrid-only V9 explanation from a "

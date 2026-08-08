@@ -202,12 +202,16 @@ def _verify_checkpoint_closure(path, metadata):
 
 @dataclass(frozen=True)
 class WrittenDemoCheckpoint:
+    """Paths and identity metadata for a newly written checkpoint."""
+
     checkpoint_id: str
     path: Path
 
 
 @dataclass(frozen=True)
 class LoadedDemoCheckpoint:
+    """Validated models, scores, and metadata loaded from a checkpoint."""
+
     checkpoint_id: str
     path: Path
     metadata: dict
@@ -367,6 +371,7 @@ def write_demo_checkpoint(
 
 
 def read_demo_checkpoint_metadata(checkpoint_path):
+    """Read checkpoint metadata without loading model tensors or score arrays."""
     path = Path(checkpoint_path)
     try:
         metadata = json.loads((path / "metadata.json").read_text())

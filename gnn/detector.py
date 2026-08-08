@@ -1,3 +1,5 @@
+"""Scikit-learn fitting helpers shared by tabular detector experiments."""
+
 from __future__ import annotations
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -6,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
 
 def fit_predict(X_train, y_train, X_test, *, model="hgb", seed=42, sample_weight=None):
+    """Fit the tabular detector and return positive-class scores for validation and test rows."""
     y = np.asarray(y_train).astype(int)
     if model == "hgb":
         clf = HistGradientBoostingClassifier(random_state=seed,

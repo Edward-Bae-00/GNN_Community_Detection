@@ -29,6 +29,8 @@ from gnn.graphmodel_rgcn import (
 )
 
 class UF:
+    """Maintain disjoint co-travel components while replaying events in time order."""
+
     def __init__(self, n):
         self.parent = np.arange(n)
         self.rank = np.zeros(n)
@@ -177,6 +179,8 @@ def _asof_x_caught(node_ids, node_feat, active_edges, caught_time, T, num_rel=NU
 
 @dataclass(frozen=True)
 class DaySnapshotInputs:
+    """Frozen daily graph inputs used by relational training and scoring."""
+
     scoring_day: pd.Timestamp
     active_edges: pd.DataFrame
     x: torch.Tensor
@@ -396,6 +400,8 @@ def build_day_snapshot_inputs(
         for person_id, available_time in source.caught_time.items()
         if available_time < day
     )
+    # Caught state is replayed forward and frozen before scoring the current row, so
+    # the row's own outcome and all future outcomes remain unavailable features.
 
     if x.shape[0] != len(source.node_ids) or roots.shape != (len(source.node_ids),):
         raise RuntimeError("snapshot node features and component roots are misaligned")

@@ -1615,6 +1615,8 @@ def _build_schema3_artifact(
     # selection, so their failures are reported in the artifact but not fed
     # back into the selection finalizer.
     all_failures = list(failures) + list(structural_fallback_failures)
+    # Sidecar references carry hashes and byte counts; publishing the pointer JSON
+    # before the verified evidence tree would create a corrupt but plausible run.
     selection_final = finalize_recovery_publication(
         selection,
         published_ids=published_ids,
@@ -1810,6 +1812,7 @@ def _build_schema3_artifact(
 
 
 def validate_schema3_artifact(artifact):
+    """Validate schema-3 pointer, coverage, and evidence invariants."""
     if not isinstance(artifact, Mapping) or artifact.get("schema_version") != SCHEMA3:
         raise ValueError("invalid schema-3 observability artifact version")
     policy = artifact.get("policy")
@@ -2351,6 +2354,7 @@ def serialize_artifact(
     inspections_per_day,
     explanation_limit,
 ):
+    """Serialize a validated observability artifact without inlining sidecar evidence."""
     explanation_by_person = {
         explanation["person_id"]: explanation for explanation in explanations
     }
@@ -2429,6 +2433,7 @@ def serialize_artifact(
 
 
 def validate_artifact_invariants(artifact):
+    """Reject observability artifacts that violate leakage or schema contracts."""
     if isinstance(artifact, Mapping) and artifact.get("schema_version") == SCHEMA3:
         return validate_schema3_artifact(artifact)
     if artifact.get("schema_version") != "2.0":

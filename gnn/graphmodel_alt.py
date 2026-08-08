@@ -1,9 +1,13 @@
+"""Alternative GraphSAGE, GAT, GIN, and KPI-AA encoder definitions."""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import SAGEConv, GATConv, GINConv, GCNConv
 
 class SAGEEncoder(torch.nn.Module):
+    """Encode person nodes with two GraphSAGE message-passing layers."""
+
     def __init__(self, in_dim, hidden=32, out=32):
         super().__init__()
         self.conv1 = SAGEConv(in_dim, hidden)
@@ -17,6 +21,8 @@ class SAGEEncoder(torch.nn.Module):
         return x
 
 class GATEncoder(torch.nn.Module):
+    """Encode person nodes with relation-collapsed graph attention layers."""
+
     def __init__(self, in_dim, hidden=32, out=32, heads=2):
         super().__init__()
         # GAT outputs hidden * heads, so we adjust dims
@@ -51,6 +57,8 @@ class _GAT(torch.nn.Module):
         return self.head(z).squeeze(-1)
 
 class GINEncoder(torch.nn.Module):
+    """Encode person nodes with graph isomorphism network layers."""
+
     def __init__(self, in_dim, hidden=32, out=32):
         super().__init__()
         nn1 = nn.Sequential(nn.Linear(in_dim, hidden), nn.ReLU(), nn.Linear(hidden, hidden))
@@ -65,6 +73,8 @@ class GINEncoder(torch.nn.Module):
         return x
 
 class KPIAAEncoder(torch.nn.Module):
+    """Encode person nodes with KPI-AA-inspired gated relation aggregation."""
+
     def __init__(self, in_dim, hidden=32, out=32):
         super().__init__()
         # Approximation of KPI-AA using GCN and combining local/global features

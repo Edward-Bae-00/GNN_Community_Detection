@@ -1,3 +1,5 @@
+"""Leak-safe unsupervised and caught-supervised anomaly evaluation."""
+
 from dataclasses import dataclass
 import hashlib
 import json
@@ -1446,7 +1448,7 @@ def _logical_corpus_name(corpus_dir):
 
 
 def corpus_output_path(results_dir, corpus_dir):
-    """Return a storage path whose suffix follows the corpus directory basename."""
+    """Return a corpus-qualified diagnostics path for anomaly results."""
     corpus_name = Path(corpus_dir).name
     prefix = "synthetic_cbp_graph_corpus_"
     suffix = corpus_name[len(prefix):] if corpus_name.startswith(prefix) else corpus_name
@@ -1476,6 +1478,7 @@ def main(
     seed=FC.SEED,
     n_estimators=100,
 ):
+    """Run deployable anomaly arms, freeze scores, then attach oracle-only evaluation."""
     corpus_dir = Path(corpus_dir) if corpus_dir is not None else FC.CORPUS_DIR
     results_dir = Path(results_dir) if results_dir is not None else FC.RESULTS
     print(f"Loading data from {corpus_dir}...")
@@ -1512,6 +1515,8 @@ def main(
         catch_history = build_official_catch_history(
             observable, set(observable["event_id"])
         )
+        # Oracle files are opened only after every deployable score and threshold has
+        # frozen; data below this boundary is evaluation-only.
         oracle = load_oracle_evaluation(corpus_dir)
         evaluated_arms = evaluate_frozen_arms(
             frozen_arms, oracle, catch_history

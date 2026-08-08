@@ -1,3 +1,5 @@
+"""Typed as-of person-graph construction and relational GNN scoring."""
+
 from __future__ import annotations
 import hashlib
 
@@ -92,6 +94,8 @@ def caught_feature_names(num_rel):
     )
 
 class RelationSAGEEncoder(torch.nn.Module):
+    """Encode typed person relations with relation-specific GraphSAGE convolutions."""
+
     def __init__(self, in_dim, hidden=32, out=32, num_relations=4):
         super().__init__()
         self.conv1 = RGCNConv(in_dim, hidden, num_relations=num_relations)
@@ -104,6 +108,7 @@ class RelationSAGEEncoder(torch.nn.Module):
         return x
 
 def build_anchor_graph(obs_to_person, corpus_dir, include_assoc=False, include_plate=False):
+    """Build the legacy anchor graph retained for compatibility experiments."""
     obs = pd.read_csv(corpus_dir / "observed_person_records.csv", usecols=["observed_person_record_id", "event_id", "event_timestamp_utc", "observed_residence_location_id"])
     obs["identity"] = obs["observed_person_record_id"].map(obs_to_person)
     obs = obs.dropna(subset=["identity"])
@@ -160,6 +165,7 @@ class _RGCN(torch.nn.Module):
         return self.head(z).squeeze(-1)
 
 def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=False):
+    """Build the typed person graph using only observable as-of relations."""
     from gnn.run_demo import _build_oracle
     corpus_dir = corpus_dir or C.CORPUS_DIR
     obs_to_person = _build_oracle(corpus_dir)
@@ -167,6 +173,8 @@ def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=
                            include_plate=include_plate)  # +SHARED_PLATE(_HOT) if include_plate
     rel_map = REL_PLATE if include_plate else REL
     e = e[e["edge_type"].isin(rel_map.keys())].copy()
+    # Relation timestamps are availability times: an edge at or after the scored
+    # row is excluded even when its underlying real-world event happened earlier.
     e["avail_time"] = pd.to_datetime(e["avail_time"], utc=True, errors="coerce")
     e = e[e["avail_time"].notna()].copy()
     e["rel"] = e["edge_type"].map(rel_map).astype(int)
@@ -294,6 +302,7 @@ def _edge_index_typed(edges, index):
 
 def train_rgcn(edges, node_ids, node_feat, labels, train_mask,
                *, seed=0, epochs=30, lr=1e-2, device="cpu"):
+    """Fit the relational encoder on labels available by the training cutoff."""
     torch.manual_seed(seed)
     index = {p: i for i, p in enumerate(node_ids)}
     x = _asof_x(node_ids, node_feat, edges)
@@ -315,6 +324,7 @@ def train_rgcn(edges, node_ids, node_feat, labels, train_mask,
     return model
 
 def asof_risk_rgcn(model, edges, node_ids, node_feat, rows):
+    """Score rows from graph state and caught labels available strictly as of each row time."""
     index = {p: i for i, p in enumerate(node_ids)}
     out = np.zeros(len(rows))
     rows = rows.reset_index(drop=True)

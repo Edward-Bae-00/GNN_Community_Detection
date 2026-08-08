@@ -32,6 +32,8 @@ CATEGORICAL_FEATURES = frozenset(["sex", *_EVENT_CATEGORICAL_FEATURES])
 
 @dataclass(frozen=True)
 class FeatureBundle:
+    """Leak-safe tabular and relational feature frames plus provenance."""
+
     event_ids: list[str]
     matrix: np.ndarray
     names: list[str]
@@ -41,6 +43,8 @@ class FeatureBundle:
 
 @dataclass(frozen=True)
 class EncodedSplits:
+    """Encoded train, validation, and test matrices with frozen schemas."""
+
     train: np.ndarray
     validation: np.ndarray
     test: np.ndarray
