@@ -1624,7 +1624,7 @@ Expected: FAIL listing the bundled module/public API gaps.
 Use these module docstrings at the top of the bundled files:
 
 ```text
-gnn/__init__.py: "Active leak-safe GNN anomaly-detection research package."
+gnn/__init__.py: "Bundled schema-3 GNN reproducibility snapshot."
 gnn/config.py: "Runtime configuration for corpus selection and generated diagnostics."
 gnn/detector.py: "Scikit-learn fitting helpers shared by tabular detector experiments."
 gnn/graphmodel_alt.py: "Alternative GraphSAGE, GAT, GIN, and KPI-AA encoder definitions."

@@ -212,8 +212,9 @@ def evaluate_daily_simulated_catches(
 def add_tiebreak(scores, pool):
     """Add deterministic row-order jitter without changing rank meaningfully.
 
-    ``scores`` is copied to a floating vector and ``pool`` supplies its length;
-    the returned vector is aligned to the same rows and remains evaluation-only.
+    ``scores`` supplies both values and output length; ``pool`` is an unused
+    compatibility context.  The returned floating vector adds deterministic
+    jitter aligned to the input score vector and remains evaluation-only.
     """
 
     rng = np.random.default_rng(42)
@@ -223,8 +224,11 @@ def load_pool(corpus_dir, split="test"):
     """Load a split-aligned event pool with oracle fields reserved for retrospective evaluation.
 
     ``corpus_dir`` selects the synthetic corpus and ``split`` selects a declared
-    partition.  The returned frame normalizes UTC event/label times and keeps
-    oracle identity/hidden fields for post-freeze evaluation only.
+    partition.  The returned frame coerces event and label timestamps to UTC,
+    with malformed values becoming ``NaT``.  It includes the shared canonical
+    identity substrate and hidden outcomes; hidden and organization/stratum
+    oracle values may materialize early but cannot affect deployable features,
+    scores, caught-label fusion, thresholds, or fusion weights.
     """
 
     egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id", "false_negative_flag"])
@@ -301,8 +305,9 @@ def stratum_for_pool(pool, corpus_dir):
     """Assign retrospective graph-observability strata from synthetic ground truth.
 
     ``pool`` is aligned to event IDs and ``corpus_dir`` supplies organization
-    truth; the returned labels are evaluation annotations, never deployable
-    features or tuning inputs.
+    truth.  These oracle strata may be materialized before scoring finishes, but
+    the returned labels remain retrospective annotations and cannot affect
+    deployable features, scores, caught-label fusion, thresholds, or weights.
     """
 
     if "primary_person_id" not in pool.columns:
@@ -873,15 +878,23 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
          baseline_control_limit=10, observability_instrumentation=None):
     """Run the leak-safe baseline-versus-GNN V9 comparison.
 
-    Corpus/output paths and training/evaluation options configure the run and its
-    optional checkpoint/observability publications.  Oracle rows may load early
-    for alignment, but hidden/org values cannot affect deployable decisions;
-    hidden labels first affect oracle evaluation after outputs freeze.
+    Corpus/output paths and training/evaluation options configure the run.  The
+    return value is the comparison mapping.  Checkpoint, comparison JSON, and
+    optional observability output are separate atomic publication stages; a
+    later observability failure can leave the earlier checkpoint and comparison
+    output in place.
+
+    Oracle rows and strata may materialize early for alignment, but hidden/org
+    values cannot affect deployable features, scores, caught-label fusion,
+    thresholds, or the deployable fusion weight.  After those outputs freeze,
+    hidden labels first tune the separate oracle-ceiling fusion and then enter
+    retrospective evaluation.
     """
 
     # Oracle rows may load early for alignment, but hidden/org values cannot affect
-    # deployable features, scores, caught-label fusion, threshold, or weight choice;
-    # hidden labels first affect oracle fusion/evaluation after outputs freeze.
+    # deployable features, scores, caught-label fusion, thresholds, or deployable
+    # fusion weight; hidden labels first affect oracle fusion after outputs freeze,
+    # then remain confined to retrospective evaluation.
     if observability and (
         gnn_arm != "sage" or tuple(seeds) != (0, 1, 2)
     ):

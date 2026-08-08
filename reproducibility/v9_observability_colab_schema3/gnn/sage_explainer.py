@@ -135,8 +135,8 @@ def _canonical_string_ids(values, *, field_name):
 class AblationSpec:
     """Describe one evidence factor removed for a counterfactual score.
 
-    The frozen record identifies a validated factor kind and its observable
-    source rows/people for one strict as-of explanation.
+    The frozen record validates its factor kind and kind-specific source-row,
+    caught-person, or provenance-node identifiers for one ablation.
     """
 
     factor_id: str
@@ -348,10 +348,10 @@ def display_hop_ring_layout(nodes, edges, target_person_id):
     ``message_distance`` and sorted ``node_id``, so the same community always
     lays out identically.
 
-    The body is kept identical to the schema-3 handoff at
-    ``reproducibility/v9_observability_colab_schema3/gnn/sage_explainer.py``;
-    the parity contract is documented without importing or deduplicating the
-    bundled snapshot.
+    This bundled function is the schema-3 parity reference.  The active root
+    ``gnn/sage_explainer.py`` implementation and ``recoveryHopRingLayout`` in
+    ``scripts/dashboard/v9_recovery_explainer_ui.py`` mirror this placement;
+    ``tests/test_recovery_layout_parity.py`` enforces their numeric agreement.
     """
     if not nodes:
         return {}

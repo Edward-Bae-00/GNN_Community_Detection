@@ -11,8 +11,9 @@ def fit_predict(X_train, y_train, X_test, *, model="hgb", seed=42, sample_weight
     """Fit the tabular detector and return positive-class scores for the supplied rows.
 
     ``X_train``/``y_train`` define the binary fit, ``X_test`` supplies rows to
-    score, and ``model``, ``seed``, and ``sample_weight`` select the in-memory
-    estimator configuration.  The returned one-dimensional array is aligned to
+    score, ``model`` selects HGB or logistic regression, and ``sample_weight``
+    is forwarded to that fit.  ``seed`` configures only the HGB arm; the logistic
+    pipeline ignores it.  The returned one-dimensional array is aligned to
     ``X_test``; temporal and leakage policy remain the caller's responsibility.
     """
     y = np.asarray(y_train).astype(int)

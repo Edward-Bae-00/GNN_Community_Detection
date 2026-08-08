@@ -9,20 +9,30 @@ import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_ROOTS = (
-    pytest.param(REPOSITORY_ROOT / "gnn", id="active"),
+PACKAGES = (
+    pytest.param("active", REPOSITORY_ROOT / "gnn", id="active"),
     pytest.param(
+        "schema3",
         REPOSITORY_ROOT / "reproducibility" / "v9_observability_colab_schema3" / "gnn",
         id="schema3",
     ),
 )
-REQUIRED_MODULE_SENTENCES = {
-    "__init__.py": "Active leak-safe GNN anomaly-detection research package.",
+SHARED_REQUIRED_MODULE_SENTENCES = {
     "config.py": "Runtime configuration for corpus selection and generated diagnostics.",
     "detector.py": "Scikit-learn fitting helpers shared by tabular detector experiments.",
     "graphmodel_alt.py": "Alternative GraphSAGE, GAT, GIN, and KPI-AA encoder definitions.",
     "graphmodel_rgcn.py": "Typed as-of person-graph construction and relational GNN scoring.",
     "unsupervised_ad.py": "Leak-safe unsupervised and caught-supervised anomaly evaluation.",
+}
+REQUIRED_MODULE_SENTENCES_BY_PACKAGE = {
+    "active": {
+        "__init__.py": "Active leak-safe GNN anomaly-detection research package.",
+        **SHARED_REQUIRED_MODULE_SENTENCES,
+    },
+    "schema3": {
+        "__init__.py": "Bundled schema-3 GNN reproducibility snapshot.",
+        **SHARED_REQUIRED_MODULE_SENTENCES,
+    },
 }
 
 REQUIRED_API_SENTENCES = {
@@ -212,8 +222,10 @@ def _public_definitions(tree: ast.Module):
     )
 
 
-@pytest.mark.parametrize("package_root", PACKAGE_ROOTS)
-def test_gnn_modules_and_public_top_level_apis_are_documented(package_root: Path):
+@pytest.mark.parametrize(("package_name", "package_root"), PACKAGES)
+def test_gnn_modules_and_public_top_level_apis_are_documented(
+    package_name: str, package_root: Path
+):
     missing = []
     if not package_root.is_dir():
         missing.append(f"{package_root}: package root does not exist")
@@ -232,10 +244,13 @@ def test_gnn_modules_and_public_top_level_apis_are_documented(package_root: Path
     assert not missing, "missing GNN documentation contracts:\n" + "\n".join(missing)
 
 
-@pytest.mark.parametrize("package_root", PACKAGE_ROOTS)
-def test_required_gnn_docstring_first_sentences_are_stable(package_root: Path):
+@pytest.mark.parametrize(("package_name", "package_root"), PACKAGES)
+def test_required_gnn_docstring_first_sentences_are_stable(
+    package_name: str, package_root: Path
+):
     missing = []
-    for filename, sentence in REQUIRED_MODULE_SENTENCES.items():
+    required_module_sentences = REQUIRED_MODULE_SENTENCES_BY_PACKAGE[package_name]
+    for filename, sentence in required_module_sentences.items():
         path = package_root / filename
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         docstring = ast.get_docstring(tree, clean=False)

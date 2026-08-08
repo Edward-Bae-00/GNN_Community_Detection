@@ -795,9 +795,10 @@ def build_fact_packet(explanation):
 def build_prompt(packet):
     """Build the bounded evidence prompt used for one recovery narrative.
 
-    ``packet`` is prevalidated structured evidence.  The returned JSON-only
-    prompt contains the bounded snapshot, ranks, community key, and selector
-    IDs without making a model call or writing a file.
+    ``packet`` supplies structured evidence and is validated before use.  The
+    returned text instructs the model to emit selector JSON and embeds bounded
+    snapshot, rank, community-key, and unsigned-mask context without making a
+    model call or writing a file.
     """
 
     packet = _validated_fact_packet(packet)
@@ -1291,7 +1292,7 @@ def generate_narrative(
 ):
     """Generate and validate one narrative, failing closed outside explicit template mode.
 
-    ``packet`` is frozen evidence; ``runner``, ``timeout_seconds``, and
+    ``packet`` is structured evidence; ``runner``, ``timeout_seconds``, and
     ``max_retries`` control production model execution, while ``mode="template"``
     explicitly selects the deterministic fallback.  Production failures raise
     rather than silently falling back, and no files are published here.

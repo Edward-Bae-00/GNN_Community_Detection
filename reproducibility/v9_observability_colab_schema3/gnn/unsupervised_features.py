@@ -34,9 +34,10 @@ CATEGORICAL_FEATURES = frozenset(["sex", *_EVENT_CATEGORICAL_FEATURES])
 class FeatureBundle:
     """Leak-safe tabular and relational feature frames plus provenance.
 
-    Event IDs, numeric matrices, ordered names, categorical names, and display
-    values remain aligned; relational proxies are comparison features, not hidden
-    outcomes or future labels.
+    The fields carry event IDs, a numeric matrix, ordered names, categorical
+    names, and display values produced by the feature builder.  This frozen
+    dataclass prevents attribute reassignment but does not validate alignment or
+    deep-freeze its mutable values; builder functions enforce those contracts.
     """
 
     event_ids: list[str]
@@ -50,8 +51,10 @@ class FeatureBundle:
 class EncodedSplits:
     """Encoded train, validation, and test matrices with frozen schemas.
 
-    The matrices share training-derived feature order and the optional encoder;
-    unseen categories remain handled by the training-only encoding contract.
+    The fields carry train, validation, and test matrices plus an optional
+    training-fitted encoder.  The frozen dataclass does not validate or deep-copy
+    those values; ``encode_feature_splits`` enforces aligned schemas and maps
+    unseen validation/test categories through its training-only encoder.
     """
 
     train: np.ndarray

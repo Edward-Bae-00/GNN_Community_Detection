@@ -1,1 +1,1 @@
-"""Active leak-safe GNN anomaly-detection research package."""
+"""Bundled schema-3 GNN reproducibility snapshot."""

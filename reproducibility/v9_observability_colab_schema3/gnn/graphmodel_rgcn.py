@@ -115,10 +115,11 @@ class RelationSAGEEncoder(torch.nn.Module):
 def build_anchor_graph(obs_to_person, corpus_dir, include_assoc=False, include_plate=False):
     """Build the legacy anchor graph retained for compatibility experiments.
 
-    ``obs_to_person`` resolves observed records, ``corpus_dir`` supplies the
-    synthetic source tables, and the compatibility flags select optional
-    relation families.  The returned frame carries endpoints, availability
-    timestamps, and relation types; callers must filter it strictly before T.
+    ``obs_to_person`` resolves observed records and ``corpus_dir`` supplies the
+    synthetic source tables.  ``include_assoc`` is an unused compatibility
+    parameter; only ``include_plate`` enables optional shared-plate relations.
+    The returned frame carries endpoints, availability timestamps, and relation
+    types; callers must filter it strictly before T.
     """
 
     obs = pd.read_csv(corpus_dir / "observed_person_records.csv", usecols=["observed_person_record_id", "event_id", "event_timestamp_utc", "observed_residence_location_id"])
@@ -179,8 +180,9 @@ class _RGCN(torch.nn.Module):
 def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=False):
     """Build the timestamped lifetime person graph on canonical oracle identities.
 
-    ``corpus_dir`` selects the snapshot, ``substrate`` is retained for bundle
-    compatibility, and ``include_plate`` enables plate relations.  The return is
+    ``corpus_dir`` selects the snapshot, ``substrate`` is an ignored compatibility
+    parameter, and ``include_plate`` enables plate relations.  The implementation
+    always resolves canonical oracle identities.  The return is
     ``(edges, node_ids, node_feat)`` with normalized lifetime availability times;
     it is not itself a row-time graph snapshot and must be filtered by callers.
     """
@@ -323,7 +325,8 @@ def train_rgcn(edges, node_ids, node_feat, labels, train_mask,
     """Fit the relational encoder on the caller-supplied training mask and labels.
 
     The graph, node features, labels, and mask define the in-memory weighted BCE
-    fit; ``seed``, ``epochs``, ``lr``, and ``device`` configure optimization.
+    fit; ``seed``, ``epochs``, and ``lr`` configure optimization.  ``device`` is
+    an ignored compatibility parameter and this implementation remains CPU-only.
     The returned evaluation-mode model scores every node, while label and edge
     availability cutoffs remain caller contracts.
     """
@@ -352,9 +355,11 @@ def asof_risk_rgcn(model, edges, node_ids, node_feat, rows):
     """Score rows from graph edges available strictly before each row time.
 
     ``model`` scores the canonical ``node_ids``/``node_feat`` universe, ``edges``
-    supplies lifetime typed provenance, and ``rows`` supplies UTC ``t`` and
-    ``person_id``.  The returned probability vector preserves row order and
-    performs no writes.
+    supplies lifetime typed provenance, and ``rows`` supplies ``t`` and
+    ``person_id``.  The returned probability vector preserves row order.
+    Malformed timestamps coerce to ``NaT`` and retain their initialized zero
+    output; unknown person IDs likewise remain zero.  The function performs no
+    writes.
     """
 
     index = {p: i for i, p in enumerate(node_ids)}

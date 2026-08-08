@@ -205,7 +205,8 @@ class WrittenDemoCheckpoint:
     """Paths and identity metadata for a newly written checkpoint.
 
     ``checkpoint_id`` names the content-derived publication and ``path`` points
-    to its atomically written directory after closure checks succeed.
+    to its atomically written directory.  The writer returns this record after
+    score alignment, model serialization, metadata hashing, and publication.
     """
 
     checkpoint_id: str
@@ -381,9 +382,11 @@ def write_demo_checkpoint(
 def read_demo_checkpoint_metadata(checkpoint_path):
     """Read checkpoint metadata without loading model tensors or score arrays.
 
-    ``checkpoint_path`` names a checkpoint directory.  The returned mapping is
-    JSON-decoded and schema/identity checked without publishing or mutating any
-    files; unreadable or incompatible metadata raises ``ValueError``.
+    ``checkpoint_path`` names a checkpoint directory.  The decoded JSON receives
+    only basic schema-version and checkpoint-ID checks; model tensors, scores,
+    hashes, and closure are not verified here.  Missing files, JSON failures, or
+    failed basic checks raise ``ValueError``, while valid non-object JSON can
+    raise native ``AttributeError`` when mapping access is attempted.
     """
     path = Path(checkpoint_path)
     try:

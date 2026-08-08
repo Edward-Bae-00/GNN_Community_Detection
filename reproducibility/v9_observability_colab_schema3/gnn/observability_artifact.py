@@ -2005,7 +2005,8 @@ def validate_schema3_artifact(artifact):
 
     ``artifact`` is the complete in-memory diagnostic object; validation checks
     schema-3 evidence before any durable ``RecoveryBundleWriter`` publication.
-    This function is pure and returns the validated detached artifact.
+    This function does not copy or mutate the value and returns the same supplied
+    mapping after validation.
     """
 
     # Schema-3 validation is an in-memory contract; durable publication belongs
@@ -2558,8 +2559,9 @@ def serialize_artifact(
     """Serialize the legacy schema-2 artifact with inline explanation and community payloads.
 
     The supplied frozen recovery reference, cohorts, explanations, failures,
-    and publication controls are converted into the legacy JSON-compatible
-    mapping; schema-3 publication uses ``RecoveryBundleWriter`` instead.
+    seeds, blend weight, and daily budget are converted into the legacy
+    JSON-compatible mapping.  ``explanation_limit`` is an unused compatibility
+    input; schema-3 publication uses ``RecoveryBundleWriter`` instead.
     """
 
     explanation_by_person = {
@@ -2644,7 +2646,8 @@ def validate_artifact_invariants(artifact):
 
     Schema-3 values use the in-memory validator, while legacy schema-2 values
     retain their inline payload and provenance checks.  Validation performs no
-    publication or mutation and returns ``True`` on success.
+    publication or mutation and returns the same supplied artifact mapping for
+    either schema.
     """
 
     if isinstance(artifact, Mapping) and artifact.get("schema_version") == SCHEMA3:
@@ -3250,8 +3253,10 @@ def _build_schema3_bundle(
         bundle_writer=writer,
     )
     selection = artifact["selection"]
-    # The verified tree and catalog are complete before RecoveryBundleWriter
-    # publishes the compact schema-3 manifest and current pointer.
+    # The in-memory case index is validated and per-case/catalog records are staged.
+    # finalize_schema3 builds the durable run-global catalog/index/count surface,
+    # compacts generation diagnostics, verifies the evidence tree, then publishes
+    # the versioned bundle and current pointer.
     manifest = writer.finalize_schema3(
         selected_hybrid_case_ids=selection["selected_ids"]["hybrid_only"],
         selected_baseline_case_ids=selection["selected_ids"]["baseline_only"],

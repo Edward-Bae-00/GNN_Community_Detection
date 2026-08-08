@@ -110,8 +110,9 @@ class _NonnegativeUniqueAction(argparse.Action):
 def build_parser() -> argparse.ArgumentParser:
     """Build the architecture-bakeoff command-line parser.
 
-    The returned parser validates positive metric depths, nonnegative unique
-    seeds, and the configured corpus/output defaults without model side effects.
+    The returned parser validates positive metric depths and nonnegative unique
+    seeds during parsing.  It supplies corpus and output path defaults but does
+    not check whether those paths exist; construction has no model side effects.
     """
 
     parser = argparse.ArgumentParser(
