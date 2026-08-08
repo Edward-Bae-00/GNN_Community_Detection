@@ -126,9 +126,11 @@ not allowed to see future catches, hidden org labels, or lifetime outcomes.
 ## Current Results
 
 The canonical V9 result log is `docs/research/changes_3.md`, and its historical
-measured summaries are authoritative. `gnn/diagnostics/` is generated and
-ignored; these files are not checked in: `demo_comparison_v9.json`,
-`demo_smoke.json`, `unsupervised_ad_results.json`, the preferred
+measured summaries are authoritative. The published 5/10/25 dashboard uses
+the committed frozen reproducibility input
+`gnn/diagnostics/demo_comparison_v9.json`. All other files under
+`gnn/diagnostics/` are generated and ignored, including `demo_smoke.json`,
+`unsupervised_ad_results.json`, the preferred
 `unsupervised_ad_results_v9.json`, and `gnn_architecture_comparison_v9.json`.
 The unsupervised producer emits both unsupervised filenames, while the
 dashboard prefers the corpus-qualified `unsupervised_ad_results_v9.json`; both
@@ -229,8 +231,14 @@ model claims.
 - The canonical V9 corpus includes `dashboard_data.json` and
   `dashboard_standalone.html`.
 - The current V9 dashboard rebuild target is `artifacts/v9/dashboard/`, which
-  receives `index.html` and `data_v9.json` from
+  receives the committed Git LFS-backed `index.html` snapshot and the ignored
+  `data_v9.json` from
   `python -m scripts.dashboard.build_v9_dashboard`.
+- The builder refreshes `artifacts/v9/dashboard/index.html`; all other files
+  under that directory, including recovery sidecars and generated JSON, remain
+  generated and ignored.
+- The committed demo diagnostic is the release input for the published daily
+  budgets 5, 10, and 25; rebuilds must preserve that three-budget contract.
 - V9dev intentionally does not include dashboard payloads; it is for tests and
   smoke runs.
 
@@ -238,7 +246,8 @@ After a fresh clone is hydrated with Git LFS, the dashboard can render canonical
 corpus content plus the committed schema-3 explanation evidence. The generated
 demo, anomaly-ranking, and GNN-architecture sections may be absent or sparse
 until their ignored diagnostics are regenerated with the commands above. The
-dashboard itself is also generated/ignored; it is not a versioned artifact.
+HTML snapshot is versioned through Git LFS, while its generated data and
+recovery sidecars remain ignored.
 
 Rebuild the current dashboard after generating any desired local diagnostics:
 
@@ -281,7 +290,8 @@ reproducibility/v9_observability_colab_schema3/corpus/
   synthetic_cbp_graph_corpus_v9/   # full V9 positive-control corpus
 
 tests/fixtures/v9dev/              # small V9-profile test corpus
-artifacts/v9/dashboard/            # generated dashboard rebuild target
+artifacts/v9/dashboard/index.html  # committed Git LFS dashboard snapshot
+artifacts/v9/dashboard/            # other generated output is ignored
 
 scripts/data/
   validate_corpus.py

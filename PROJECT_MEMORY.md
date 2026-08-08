@@ -697,3 +697,18 @@ Durable decisions and deviations from the written plan:
   current onboarding is in `README.md` and active `docs/`, while immutable
   historical records may retain older `tasks/` references.
 - The main fallback remains untouched and is not implied to be merged.
+
+## 2026-08-08: generated dashboard snapshot policy
+
+- `artifacts/v9/dashboard/index.html` is the committed Git LFS-backed HTML
+  snapshot and must be refreshed only by
+  `python -m scripts.dashboard.build_v9_dashboard` from the organized branch.
+- All other files under `artifacts/v9/dashboard/`, including `data_v9.json`,
+  recovery sidecars, and generated subdirectories, remain ignored and local-only
+  for serving the snapshot.
+- The published V9 Results release contract is daily budgets 5/10/25 and
+  depends on the committed normal-Git diagnostic
+  `gnn/diagnostics/demo_comparison_v9.json` with SHA-256
+  `a43d2b63ea43058d503ce0c3043636462b6564b1ee97fa06f3ad2567b5604066`.
+  Never rebuild or version release HTML from the canonical-corpus K=5 fallback;
+  verify this diagnostic hash and the embedded `[5, 10, 25]` contract first.

@@ -45,7 +45,7 @@ reproducibility/v9_observability_colab_schema3/
                                       Full V9 corpus, checkpoint, notebook, runner
 tests/fixtures/v9dev/                 Tracked small V9 development/test corpus
 artifacts/v9/explanations/            Committed schema-3 evidence ZIP and manifest
-artifacts/v9/dashboard/               Generated V9 dashboard target
+artifacts/v9/dashboard/index.html     Committed Git LFS V9 dashboard snapshot
 docs/data/                            Active data guide
 docs/research/                        V9 research log and historical ideas page
 docs/superpowers/                     Immutable historical plans/specifications
@@ -92,8 +92,10 @@ PyTorch, PyTorch Geometric, scikit-learn, networkx, pandas, numpy, and pytest.
 python -m gnn.run_demo
 ```
 
-Results are written to the generated `gnn/diagnostics/` tree. To use an
-intentional compatible override:
+Results are written to the generated `gnn/diagnostics/` tree. The published
+5/10/25 dashboard rebuild uses the committed frozen diagnostic
+`gnn/diagnostics/demo_comparison_v9.json`; other diagnostics remain generated
+and ignored. To use an intentional compatible override:
 
 ```bash
 CBP_CORPUS_DIR=/path/to/compatible/corpus python -m gnn.run_demo
@@ -184,9 +186,11 @@ python -m scripts.dashboard.build_v9_dashboard
 python -m http.server 8000 --directory artifacts/v9/dashboard
 ```
 
-The builder reads the canonical V9 contracts and publishes the generated
-dashboard under `artifacts/v9/dashboard/`. Serve it over HTTP so sidecar-backed
-pages can fetch their data.
+The builder reads the canonical V9 contracts and refreshes the committed,
+Git LFS-backed snapshot at `artifacts/v9/dashboard/index.html`. Other files
+under `artifacts/v9/dashboard/`, including `data_v9.json` and recovery
+sidecars, remain generated and ignored. Serve the directory over HTTP so
+sidecar-backed pages can fetch their data.
 
 ## Research papers
 
@@ -202,12 +206,16 @@ The seven Git LFS-backed papers are:
 
 ## Generated and local-only files
 
-Generated diagnostics under `gnn/diagnostics/`, extracted explanation trees
-under `artifacts/v9/explanations/extracted/`, generated dashboard files under
-`artifacts/v9/dashboard/`, Python caches, pytest caches, and local scratch/log
-files are ignored or local-only. The V9 explanation ZIP, its manifest, the
-schema-3 checkpoint, corpora, V9dev fixture, and papers are the committed/LFS
-inputs; do not replace them with untracked generated copies.
+Generated diagnostics under `gnn/diagnostics/`, except for the committed
+frozen `demo_comparison_v9.json`, extracted explanation trees under
+`artifacts/v9/explanations/extracted/`, dashboard data and recovery sidecars
+under `artifacts/v9/dashboard/`, Python caches, pytest caches, and local
+scratch/log files are ignored or local-only. The generated dashboard HTML
+snapshot at `artifacts/v9/dashboard/index.html` is also committed through Git
+LFS and refreshed by the builder. The V9 explanation ZIP, its manifest, the
+frozen demo diagnostic, schema-3 checkpoint, corpora, V9dev fixture, and papers
+are the committed/LFS inputs; do not replace them with untracked generated
+copies.
 
 ## Known schema-3 result limitation
 

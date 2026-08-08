@@ -38,10 +38,12 @@ Documents/GNN/
 
 # Generated dashboards and diagnostics
 Documents/Data/v9_dashboard/
-gnn/diagnostics/
+gnn/diagnostics/*
+!gnn/diagnostics/demo_comparison_v9.json
 
 # Reorganized generated outputs
-/artifacts/v9/dashboard/
+/artifacts/v9/dashboard/*
+!/artifacts/v9/dashboard/index.html
 /artifacts/v9/explanations/extracted/
 /reproducibility/v9_observability_colab_schema3/**/__pycache__/
 /reproducibility/v9_observability_colab_schema3/**/.pytest_cache/

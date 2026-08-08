@@ -32,6 +32,29 @@ def _clear_schema3_results_override(monkeypatch):
     monkeypatch.delenv("V9_SCHEMA3_RESULTS_ZIP", raising=False)
 
 
+def _committed_dashboard_data():
+    html = (ROOT / "artifacts/v9/dashboard/index.html").read_text()
+    match = re.search(
+        r"\nlet DATA = (\{.*\});\nlet D = DATA;",
+        html,
+        re.DOTALL,
+    )
+    assert match, "committed dashboard is missing its embedded DATA JSON"
+    return json.loads(match.group(1))
+
+
+def test_committed_dashboard_embeds_published_daily_budget_contract():
+    demo = _committed_dashboard_data()["v9Demo"]
+
+    assert demo["daily_ks"] == [5, 10, 25]
+    expected_budgets = {5: 1365, 10: 2730, 25: 6825}
+    for arm in ("baseline", "hybrid"):
+        metrics = demo["overall_daily"][arm]
+        for budget, expected in expected_budgets.items():
+            assert metrics[f"daily_budget@{budget}"] == expected
+            assert metrics[f"daily_found_by_day@{budget}"]
+
+
 # Frozen from the pre-architecture V9 Results renderer.  Keep these explicit
 # (rather than deriving them from the implementation) so additive integration
 # cannot silently reorder or drop an existing mount target.
