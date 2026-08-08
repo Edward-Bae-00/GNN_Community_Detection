@@ -208,6 +208,69 @@ REQUIRED_API_SENTENCES = {
     ),
 }
 
+RUN_DEMO_PATHS = (
+    REPOSITORY_ROOT / "gnn" / "run_demo.py",
+    REPOSITORY_ROOT
+    / "reproducibility"
+    / "v9_observability_colab_schema3"
+    / "gnn"
+    / "run_demo.py",
+)
+
+
+def _top_level_function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    return next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
+@pytest.mark.parametrize("path", RUN_DEMO_PATHS, ids=lambda path: str(path.parent))
+def test_run_demo_documents_default_graphsage_late_fusion_contract(path: Path):
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    main = _top_level_function(tree, "main")
+    defaults = dict(
+        zip(
+            [argument.arg for argument in main.args.args[-len(main.args.defaults) :]],
+            main.args.defaults,
+        )
+    )
+
+    assert ast.literal_eval(defaults["seeds"]) == (0, 1, 2)
+    assert ast.literal_eval(defaults["gnn_arm"]) == "sage"
+
+    module_docstring = (ast.get_docstring(tree) or "").lower()
+    for required_phrase in (
+        "three-seed graphsage",
+        "rank-normalized",
+        "validation-tuned convex late rank fusion",
+        "caught labels available to deployment",
+    ):
+        assert required_phrase in module_docstring
+
+
+def test_data_guide_describes_active_graphsage_rank_fusion_arm():
+    guide = (REPOSITORY_ROOT / "docs" / "data" / "DATA_GUIDE.md").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "as-of caught-propagation RGCN, and a hybrid method that combines them"
+        not in guide
+    )
+    assert "out-of-fold GNN scores" not in guide
+    assert "HGB" not in guide
+    for required_phrase in (
+        "three-seed GraphSAGE caught-propagation arm",
+        "validation-tuned convex late rank fusion",
+        "caught labels available to deployment",
+        "graphmodel_alt.py",
+        "default GraphSAGE arm",
+        "graphmodel_rgcn.py",
+        "optional RGCN model",
+    ):
+        assert required_phrase in guide
+
 
 def _python_files(package_root: Path) -> list[Path]:
     return sorted(path for path in package_root.rglob("*.py") if path.is_file())

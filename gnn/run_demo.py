@@ -1,8 +1,13 @@
-"""V9 positive-control demo: a realistic tabular baseline vs an as-of caught-
-propagation RGCN over {COTRAVEL, RESIDENCE, SHARED_PLATE, SHARED_PLATE_HOT}. Same
+"""V9 positive-control demo: a realistic tabular baseline versus a three-seed
+GraphSAGE caught-propagation arm over {COTRAVEL, RESIDENCE, SHARED_PLATE,
+SHARED_PLATE_HOT}. Same
 pool, same substrate (oracle identity — ER is NOT the question here and both arms
 share it, so the comparison is fair), leak-free; paired-event bootstrap for
-significance. The default is the Git-LFS-backed canonical V9 corpus:
+significance. The default is a three-seed GraphSAGE run with seeds ``(0, 1, 2)``
+on the Git-LFS-backed canonical V9 corpus. Hybrid scores are rank-normalized and
+combined with baseline scores by validation-tuned convex late rank fusion. The
+deployable fusion weight is tuned only on caught labels available to deployment;
+hidden labels tune only the explicitly non-deployable oracle ceiling:
 
     python -m gnn.run_demo
 
@@ -664,10 +669,13 @@ def _seed_level_unique_person_recovery(
 
 def _pick_fusion_weight(base_valid, gnn_valid, hidden_valid, ks,
                         grid=tuple(np.round(np.linspace(0.0, 1.0, 21), 3))):
-    """Choose the GNN blend weight on the held-out validation split (leak-free
-    w.r.t. test). Objective = mean recall of hidden carriers across `ks`, so the
-    weight adapts to how much real relational signal the GNN carries: ~1.0 when
-    the graph dominates, ~0.0 when it is noise and the baseline should win."""
+    """Choose a convex late-rank-fusion weight from validation tuning targets.
+
+    The third argument, ``hidden_valid``, is caller-supplied tuning targets:
+    callers pass caught labels available to deployment for deployable fusion and
+    hidden labels only for the explicitly non-deployable oracle ceiling. The
+    objective is mean recall across ``ks`` on those supplied targets.
+    """
     hv = np.asarray(hidden_valid, dtype=bool)
     denom = int(hv.sum())
     if denom == 0:

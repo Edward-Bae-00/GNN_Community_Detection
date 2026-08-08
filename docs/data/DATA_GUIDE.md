@@ -43,15 +43,17 @@ python -m scripts.dashboard.build_v9_dashboard
 
 ## Current Research Track
 
-The active `gnn/` track compares a strong leak-free tabular baseline, an
-as-of caught-propagation RGCN, and a hybrid method that combines them.
+The active `gnn/` track compares a strong leak-free tabular baseline, the
+default three-seed GraphSAGE caught-propagation arm, and a hybrid method that
+combines their scores with validation-tuned convex late rank fusion.
 
 | File | Current role |
 | --- | --- |
 | `gnn/config.py` | Repository paths, default corpus, diagnostics path |
 | `gnn/run_demo.py` | Main baseline-vs-GNN evaluation harness |
 | `gnn/demo_baseline.py` | 14-feature leak-safe tabular baseline |
-| `gnn/graphmodel_rgcn.py` | Typed graph construction and RGCN model |
+| `gnn/graphmodel_alt.py` | Alternative encoders, including the default GraphSAGE arm |
+| `gnn/graphmodel_rgcn.py` | Typed graph construction and optional RGCN model |
 | `gnn/learned_cell.py` | As-of caught-propagation scoring |
 | `gnn/detector.py` | sklearn model fitting helper |
 | `gnn/unsupervised_ad.py` | Unsupervised anomaly detection per border (region) |
@@ -69,8 +71,10 @@ The comparison is intentionally narrow:
   `COTRAVEL`, `RESIDENCE`, `SHARED_PLATE`, and `SHARED_PLATE_HOT`.
 - Edges and caught labels are only used when available strictly before the
   scoring time.
-- The hybrid arm combines tabular baseline features with leak-free out-of-fold 
-  GNN scores to train a gradient boosting model (HGB).
+- The hybrid arm rank-normalizes baseline and GNN scores, then applies a
+  validation-tuned convex late rank fusion. Its deployable fusion weight is
+  tuned only on caught labels available to deployment; hidden labels tune only
+  the explicitly non-deployable oracle ceiling.
 
 The current 14 baseline features are:
 
