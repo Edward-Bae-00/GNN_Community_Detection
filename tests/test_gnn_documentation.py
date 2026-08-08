@@ -51,7 +51,7 @@ REQUIRED_ACTIVE_API_SENTENCES = {
         "Render the deterministic narrative fallback from validated evidence."
     ),
     "explanation_narrative.generate_narrative": (
-        "Generate and validate one narrative, recording deterministic fallback diagnostics."
+        "Generate and validate one narrative, failing closed outside explicit template mode."
     ),
     "giant_observability_benchmark.run_benchmark": (
         "Measure schema-3 observability memory and publication behavior on the full graph."
@@ -99,7 +99,7 @@ REQUIRED_ACTIVE_API_SENTENCES = {
         "Frozen daily graph inputs used by relational training and scoring."
     ),
     "observability_artifact.validate_schema3_artifact": (
-        "Validate schema-3 pointer, coverage, and evidence invariants."
+        "Validate in-memory schema-3 coverage, index, and fingerprint invariants."
     ),
     "observability_artifact.serialize_artifact": (
         "Serialize the legacy schema-2 artifact with inline explanation and community payloads."

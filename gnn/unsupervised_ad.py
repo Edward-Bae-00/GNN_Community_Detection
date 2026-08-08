@@ -1494,10 +1494,12 @@ def main(
     and Isolation Forest ``n_estimators``.  The return value is the schema-v3
     results mapping and the function writes generic and corpus-qualified JSON
     diagnostics under ``results_dir``.  Model-visible rows, features, scores,
-    and thresholds are frozen from observable inputs before oracle targets are
-    admitted; hidden outcomes and official catch history are used only for
-    retrospective evaluation, and ``unsupervised_ad`` preserves its explicit
-    caught-state as-of boundary.  Invalid modes, corpus contracts, or feature
+    and thresholds are frozen from observable inputs before oracle carrier
+    targets are admitted.  The two caught-supervised deployable arms train on
+    seizure/caught labels whose availability is strictly before ``fit_as_of``;
+    immature outcomes remain unlabeled.  Separately, the complete post-freeze
+    ``OfficialCatchHistory`` object is used only with oracle targets for
+    retrospective evaluation.  Invalid modes, corpus contracts, or feature
     alignment raise without silently producing a partial result.
     """
     corpus_dir = Path(corpus_dir) if corpus_dir is not None else FC.CORPUS_DIR
@@ -1533,6 +1535,9 @@ def main(
             seed=seed,
             n_estimators=n_estimators,
         )
+        # Cutoff-eligible training seizures supervise the two caught arms above.
+        # This complete catch-history object is materialized after scores and
+        # thresholds freeze and is used only for retrospective evaluation.
         catch_history = build_official_catch_history(
             observable, set(observable["event_id"])
         )

@@ -236,7 +236,9 @@ def load_pool(corpus_dir, split="test"):
     loaded early to align event IDs, but hidden outcomes and organization
     labels cannot affect feature construction, score generation, caught-label
     fusion, threshold selection, or blend-weight selection.  The function reads
-    CSVs only and raises pandas/file errors for missing or malformed inputs.
+    CSVs only.  Missing files or required columns propagate their file/pandas
+    exceptions, while malformed event and label-availability timestamps are
+    coerced to ``NaT``.
     """
     egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id", "false_negative_flag"])
     splits = pd.read_csv(corpus_dir / "train_valid_test_splits.csv", usecols=["entity_id", "split"])
@@ -420,10 +422,10 @@ def _diff_summary(d):
 def stratum_metrics(scores, pool, hidden, strata_labels, ks):
     """Compute per-stratum ranking metrics for one score vector.
 
-    ``scores`` and ``hidden`` are aligned pool arrays, ``pool`` provides the
-    ranking population, ``strata_labels`` assigns each row to the three known
-    strata, and ``ks`` supplies operational depths.  The return value maps each
-    stratum to hidden denominators and found/recall counts at every depth.
+    ``scores`` and ``hidden`` are aligned arrays, ``pool`` is an unused
+    compatibility parameter, ``strata_labels`` assigns each row to the three
+    known strata, and ``ks`` supplies operational depths.  The return value maps
+    each stratum to hidden denominators and found/recall counts at every depth.
     Computation is pure and writes no artifacts; hidden labels and synthetic
     strata are retrospective evaluation inputs and must never be fed back into
     score or threshold selection.
@@ -902,8 +904,10 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     ``n_boot``, and ``observability_instrumentation`` configure evaluation;
     ``observability``, narrative/checkpoint options, and the two detail limits
     control optional evidence publication.  The return value is the comparison
-    result mapping, while score and checkpoint/observability paths are written
-    atomically as requested.  Validation errors are raised before publication.
+    result mapping.  Checkpoint, comparison JSON, and optional observability
+    outputs are each published atomically at their own stage; a later
+    observability failure can leave the earlier checkpoint and comparison JSON
+    in place.
 
     Oracle rows may load early for event/split alignment, but hidden and
     organization oracle values cannot affect deployable feature construction,

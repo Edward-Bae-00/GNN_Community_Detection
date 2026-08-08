@@ -1462,7 +1462,7 @@ detector.fit_predict — "Fit the tabular detector and return positive-class sco
 explanation_narrative.build_prompt — "Build the bounded evidence prompt used for one recovery narrative."
 explanation_narrative.validate_candidate — "Validate a generated narrative against its structured evidence contract."
 explanation_narrative.render_template — "Render the deterministic narrative fallback from validated evidence."
-explanation_narrative.generate_narrative — "Generate and validate one narrative, recording deterministic fallback diagnostics."
+explanation_narrative.generate_narrative — "Generate and validate one narrative, failing closed outside explicit template mode."
 giant_observability_benchmark.run_benchmark — "Measure schema-3 observability memory and publication behavior on the full graph."
 giant_observability_benchmark.main — "Parse CLI arguments and run the giant observability benchmark."
 gnn_architecture_bakeoff.build_parser — "Build the architecture-bakeoff command-line parser."
@@ -1478,7 +1478,7 @@ graphmodel_rgcn.train_rgcn — "Fit the relational encoder on the caller-supplie
 graphmodel_rgcn.asof_risk_rgcn — "Score rows from graph edges available strictly before each row time."
 learned_cell.UF — "Maintain disjoint co-travel components while replaying events in time order."
 learned_cell.DaySnapshotInputs — "Frozen daily graph inputs used by relational training and scoring."
-observability_artifact.validate_schema3_artifact — "Validate schema-3 pointer, coverage, and evidence invariants."
+observability_artifact.validate_schema3_artifact — "Validate in-memory schema-3 coverage, index, and fingerprint invariants."
 observability_artifact.serialize_artifact — "Serialize the legacy schema-2 artifact with inline explanation and community payloads."
 observability_artifact.validate_artifact_invariants — "Reject observability artifacts that violate leakage or schema contracts."
 recovery_observability.RecoveryAnchor — "Identify one person's first recovery event for an evaluation arm."
@@ -1543,7 +1543,15 @@ in `learned_cell` at caught-history snapshot construction;
 # hidden labels first affect oracle fusion/evaluation after outputs freeze.
 ```
 
-in `run_demo.main` and `unsupervised_ad.main` at their oracle boundaries;
+in `run_demo.main` at its oracle boundary;
+
+```python
+# Cutoff-eligible seizure labels train the two caught-supervised deployable arms.
+# Complete official catch history is materialized only after scores and thresholds
+# freeze and is used only with oracle targets for retrospective evaluation.
+```
+
+in `unsupervised_ad.main` at its evaluation boundary;
 
 ```python
 # Selection finalization receives the complete frozen failure set so published
@@ -1636,7 +1644,7 @@ detector.fit_predict — "Fit the tabular detector and return positive-class sco
 explanation_narrative.build_prompt — "Build the bounded evidence prompt used for one recovery narrative."
 explanation_narrative.validate_candidate — "Validate a generated narrative against its structured evidence contract."
 explanation_narrative.render_template — "Render the deterministic narrative fallback from validated evidence."
-explanation_narrative.generate_narrative — "Generate and validate one narrative, recording deterministic fallback diagnostics."
+explanation_narrative.generate_narrative — "Generate and validate one narrative, failing closed outside explicit template mode."
 giant_observability_benchmark.run_benchmark — "Measure schema-3 observability memory and publication behavior on the full graph."
 giant_observability_benchmark.main — "Parse CLI arguments and run the giant observability benchmark."
 gnn_architecture_bakeoff.build_parser — "Build the architecture-bakeoff command-line parser."
@@ -1652,7 +1660,7 @@ graphmodel_rgcn.train_rgcn — "Fit the relational encoder on the caller-supplie
 graphmodel_rgcn.asof_risk_rgcn — "Score rows from graph edges available strictly before each row time."
 learned_cell.UF — "Maintain disjoint co-travel components while replaying events in time order."
 learned_cell.DaySnapshotInputs — "Frozen daily graph inputs used by relational training and scoring."
-observability_artifact.validate_schema3_artifact — "Validate schema-3 pointer, coverage, and evidence invariants."
+observability_artifact.validate_schema3_artifact — "Validate in-memory schema-3 coverage, index, and fingerprint invariants."
 observability_artifact.serialize_artifact — "Serialize the legacy schema-2 artifact with inline explanation and community payloads."
 observability_artifact.validate_artifact_invariants — "Reject observability artifacts that violate leakage or schema contracts."
 recovery_observability.RecoveryAnchor — "Identify one person's first recovery event for an evaluation arm."
@@ -1705,6 +1713,10 @@ Add these comments only at equivalent bundled boundaries:
 # Oracle rows may load early for alignment, but hidden/org values cannot affect
 # deployable features, scores, caught-label fusion, threshold, or weight choice;
 # hidden labels first affect oracle fusion/evaluation after outputs freeze.
+
+# Cutoff-eligible seizure labels train the two caught-supervised deployable arms.
+# Complete official catch history is materialized only after scores and thresholds
+# freeze and is used only with oracle targets for retrospective evaluation.
 
 # Selection finalization receives the complete frozen failure set so published
 # cohort records and diagnostics cannot drift after selection.

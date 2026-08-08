@@ -1177,17 +1177,20 @@ def generate_narrative(
     mode="production",
     max_retries=3,
 ):
-    """Generate and validate one narrative, recording deterministic fallback diagnostics.
+    """Generate and validate one narrative, failing closed outside explicit template mode.
 
     ``packet`` is the structured evidence; ``runner`` and ``timeout_seconds``
     control the injected local-model process; ``mode`` selects production or
-    deterministic-template behavior; and ``max_retries`` bounds production
-    attempts.  The return value is a validated narrative mapping with source,
-    model, prompt, and fallback diagnostics.  Production preflight/model
-    failures fall back to the deterministic template and update the caller's
-    observable diagnostics; invalid modes or evidence raise ``ValueError``.
-    This function consumes only the frozen packet, never adds future/hidden
-    facts, and does not publish files itself.
+    explicit deterministic-template behavior; and ``max_retries`` bounds
+    production retries.  The return value is a validated narrative mapping with
+    source, model, prompt-version, summary, source references, and claims.
+    Production preflight failures propagate and exhausted generation attempts
+    raise ``RuntimeError``; they do not fall back to a template.  Only explicit
+    ``mode="template"`` returns deterministic template output, retrying with a
+    rank-only packet if the full-packet path raises ``ValueError``.  Invalid modes
+    or unusable evidence raise ``ValueError``.  This function consumes only the
+    frozen packet, never adds future/hidden facts, and does not publish files
+    itself.
     """
     if mode == "template":
         try:

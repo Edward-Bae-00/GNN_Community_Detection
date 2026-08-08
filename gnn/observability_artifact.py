@@ -1812,16 +1812,16 @@ def _build_schema3_artifact(
 
 
 def validate_schema3_artifact(artifact):
-    """Validate schema-3 pointer, coverage, and evidence invariants.
+    """Validate in-memory schema-3 coverage, index, and fingerprint invariants.
 
-    ``artifact`` is the detached schema-3 mapping produced by the streaming
-    publication path.  The function returns the same validated mapping after
-    checking policy/seed scope, overlap and score arithmetic, cohort and
+    ``artifact`` is the detached schema-3 mapping assembled before
+    ``RecoveryBundleWriter`` publication.  The function returns the same mapping
+    after checking policy/seed scope, overlap and score arithmetic, cohort and
     selection coverage, run/as-of/corpus identities, detail/community/catalog
     indexes, generation counters, and run-fingerprint material.  It performs no
-    writes; invalid mappings are rejected during these in-memory checks.  Durable
-    sidecar hashes, byte counts, and publication closure are outside this
-    validator and belong to ``RecoveryBundleWriter``.
+    writes or durable sidecar traversal; invalid mappings are rejected during
+    these in-memory checks.  ``RecoveryBundleWriter`` later owns publication and
+    durable sidecar path, hash, and byte-count verification.
     """
     if not isinstance(artifact, Mapping) or artifact.get("schema_version") != SCHEMA3:
         raise ValueError("invalid schema-3 observability artifact version")
@@ -2459,14 +2459,16 @@ def serialize_artifact(
 def validate_artifact_invariants(artifact):
     """Reject observability artifacts that violate leakage or schema contracts.
 
-    ``artifact`` may be the legacy schema-2 inline mapping or a schema-3
-    sidecar-pointer mapping.  The return value is the validated artifact (or
-    the schema-3 validator's detached result), while policy, overlap algebra,
-    cohort coverage, explanation/community references, and as-of evidence are
-    checked without mutating or publishing anything.  Invalid versions,
-    missing fields, mismatched counts, unsafe evidence, or leakage boundaries
-    raise ``ValueError``.  Oracle fields are accepted only in retrospective
-    validation payloads after deployable outputs and selection have frozen.
+    ``artifact`` may be the legacy schema-2 inline mapping or an in-memory
+    schema-3 mapping.  The return value is the validated artifact (or the
+    schema-3 validator's detached result), while policy, overlap algebra, cohort
+    coverage, explanation/community indexes, and as-of evidence are checked
+    without mutating or publishing anything.  Durable sidecar paths, hashes,
+    and byte counts are verified later by ``RecoveryBundleWriter`` during
+    publication.  Invalid versions, missing fields, mismatched counts, unsafe
+    evidence, or leakage boundaries raise ``ValueError``.  Oracle fields are
+    accepted only in retrospective validation payloads after deployable outputs
+    and selection have frozen.
     """
     if isinstance(artifact, Mapping) and artifact.get("schema_version") == SCHEMA3:
         return validate_schema3_artifact(artifact)
