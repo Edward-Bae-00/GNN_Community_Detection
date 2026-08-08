@@ -1,5 +1,5 @@
 """End-to-end smoke of the V9 baseline-vs-GNN demo on the tiny v9dev corpus.
-See tasks/v9_demo_corpus_plan.md (Task 10)."""
+See docs/research/changes_3.md."""
 from dataclasses import FrozenInstanceError
 import inspect
 import json

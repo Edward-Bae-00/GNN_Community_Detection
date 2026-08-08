@@ -50,7 +50,6 @@ docs/data/                            Active data guide
 docs/research/                        V9 research log and historical ideas page
 docs/superpowers/                     Immutable historical plans/specifications
 references/papers/                    Seven tracked research papers
-tasks/                                Current reorganization notes and task records
 ```
 
 The canonical full V9 corpus is

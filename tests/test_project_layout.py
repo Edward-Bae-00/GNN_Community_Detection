@@ -58,6 +58,11 @@ def test_canonical_v9_paths_are_repo_relative():
     assert "synthetic_cbp_graph_corpus_v8" not in str(paths.V9_CORPUS_DIR)
 
 
+def test_completed_task_records_are_absent_from_active_layout():
+    assert not (ROOT / "tasks").exists()
+    assert "tasks/" not in (ROOT / "README.md").read_text()
+
+
 def test_corpus_override_isolated_subprocess(tmp_path):
     expected = tmp_path / "override-corpus"
     parent_value = os.environ.get("CBP_CORPUS_DIR")

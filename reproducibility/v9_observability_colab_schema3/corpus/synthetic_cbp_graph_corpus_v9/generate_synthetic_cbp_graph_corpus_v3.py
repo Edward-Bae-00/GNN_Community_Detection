@@ -78,8 +78,8 @@ SCALES = {
     # so all non-observed-record files stay byte-identical to v7.
     'v8': dict(events=200_000, persons=120_000),
     # v9 == designed positive-control DEMO: v8 scale + amplified relational signal
-    # (denser co-offender co-travel, ~10% catch rate, shared plates, more connectivity;
-    # see tasks/v9_demo_corpus_design.md). v9dev is a tiny scale for fast tests/iteration.
+    # (denser co-offender co-travel, ~4% measured catch rate (initial target: ~10%), shared plates, more connectivity;
+    # see docs/research/changes_3.md). v9dev is a tiny scale for fast tests/iteration.
     'v9':    dict(events=200_000, persons=120_000),
     'v9mid': dict(events=50_000,  persons=30_000),   # fast iteration scale for the demo
     'v9dev': dict(events=4_000,   persons=2_000),
@@ -268,7 +268,7 @@ def main(scale_key):
     ENABLE_ORGS = scale_key in ('v6', 'v7', 'v8', 'v9', 'v9mid', 'v9dev')   # hidden co-offender cells in v6+
     N_ORGS = max(20, int(N_PERSONS / 500))  # calibration knob for FN->anchor reachability
 
-    # --- V9 designed-signal knobs (tasks/v9_demo_corpus_design.md). Locals so the
+    # --- V9 designed-signal knobs (docs/research/changes_3.md). Locals so the
     # v6/v7/v8 paths (module-level constants) stay untouched and byte-identical. ---
     IS_V9 = scale_key in ('v9', 'v9mid', 'v9dev')
     org_size, org_size_w = ORG_SIZE, ORG_SIZE_W

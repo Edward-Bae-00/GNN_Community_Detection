@@ -1,5 +1,5 @@
 """Realistic tabular baseline: shape, feature set, and as-of correctness.
-See tasks/v9_demo_corpus_plan.md (Task 9)."""
+See docs/research/changes_3.md."""
 import numpy as np
 import pandas as pd
 

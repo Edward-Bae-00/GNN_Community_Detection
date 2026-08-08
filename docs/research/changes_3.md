@@ -110,8 +110,10 @@ that checkout.
 
 **Current organized-layout note (2026-08-06):** The active full V9 corpus is
 under `reproducibility/v9_observability_colab_schema3/corpus/`, V9dev is under
-`tests/fixtures/v9dev/`, and current task records are under `tasks/`. V8 remains
-historical context; its corpus is absent from the organized checkout.
+`tests/fixtures/v9dev/`. Temporary task records were intentionally removed
+after implementation; active guidance is in the root `README.md` and the
+documentation under `docs/data/` and `docs/research/`. V8 remains historical
+context; its corpus is absent from the organized checkout.
 
 **Corpus knobs** (V9 snapshot: 120K persons / 200K events; `v9dev` snapshot:
 2K/4K for tests):

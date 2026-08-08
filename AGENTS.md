@@ -69,6 +69,6 @@ being extended. Do not restore removed historical notes based on stale paths.
 - Keep generated diagnostics under `gnn/diagnostics/` and generated dashboard
   output under `artifacts/v9/dashboard/`.
 - Keep active docs synchronized with the filesystem. Root `README.md` is
-  authoritative for onboarding; `tasks/README.md` and
-  `docs/superpowers/README.md` explain the status of historical task records.
+  authoritative for onboarding; `docs/superpowers/README.md` explains the
+  status of historical plan/spec records.
 - Prefix shell commands with `rtk` in this environment.

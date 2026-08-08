@@ -59,6 +59,5 @@ leakage safety, and the strong-baseline contract, then run affected tests.
 - Keep generated diagnostics under `gnn/diagnostics/` and generated dashboard
   output under `artifacts/v9/dashboard/`.
 - Root `README.md` is authoritative for onboarding. Historical plans and specs
-  are preserved as records; see `tasks/README.md` and
-  `docs/superpowers/README.md` for their status.
+  are preserved as records; see `docs/superpowers/README.md` for their status.
 - Prefix shell commands with `rtk` in this environment.

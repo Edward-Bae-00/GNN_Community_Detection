@@ -693,4 +693,7 @@ Durable decisions and deviations from the written plan:
 - No V8 corpus or data is present; seven papers remain. The upload target and
   remote branch name is `feature/repository-reorganization`; origin SSH
   reachability was confirmed, but this is not a claim that it is pushed.
+- `tasks/` was intentionally removed at the user's request after implementation;
+  current onboarding is in `README.md` and active `docs/`, while immutable
+  historical records may retain older `tasks/` references.
 - The main fallback remains untouched and is not implied to be merged.
