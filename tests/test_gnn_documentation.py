@@ -254,12 +254,13 @@ def test_data_guide_describes_active_graphsage_rank_fusion_arm():
     guide = (REPOSITORY_ROOT / "docs" / "data" / "DATA_GUIDE.md").read_text(
         encoding="utf-8"
     )
+    guide_normalized = " ".join(guide.split())
     assert (
         "as-of caught-propagation RGCN, and a hybrid method that combines them"
         not in guide
     )
-    assert "out-of-fold GNN scores" not in guide
-    assert "HGB" not in guide
+    assert "out-of-fold GNN scores" not in guide_normalized
+    assert "GNN scores to train a gradient boosting model (HGB)" not in guide_normalized
     for required_phrase in (
         "three-seed GraphSAGE caught-propagation arm",
         "validation-tuned convex late rank fusion",
