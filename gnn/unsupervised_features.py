@@ -32,7 +32,18 @@ CATEGORICAL_FEATURES = frozenset(["sex", *_EVENT_CATEGORICAL_FEATURES])
 
 @dataclass(frozen=True)
 class FeatureBundle:
-    """Leak-safe tabular and relational feature frames plus provenance."""
+    """Leak-safe tabular and relational feature frames plus provenance.
+
+    ``event_ids`` preserves requested row order; ``matrix`` is the numeric
+    baseline-plus-relational-proxy array; ``names`` gives its column order;
+    ``categorical_names`` identifies raw categorical columns; and ``display``
+    retains aligned human-readable categorical values for train-only encoding.
+    The dataclass is frozen, but its arrays, lists, and DataFrame are caller
+    owned, so producers must treat them as immutable after construction.
+    Builders validate event/observed IDs, source columns, uniqueness, and row
+    alignment, and relational proxies remain comparison features rather than
+    hidden outcomes or future labels.
+    """
 
     event_ids: list[str]
     matrix: np.ndarray
@@ -43,7 +54,17 @@ class FeatureBundle:
 
 @dataclass(frozen=True)
 class EncodedSplits:
-    """Encoded train, validation, and test matrices with frozen schemas."""
+    """Encoded train, validation, and test matrices with frozen schemas.
+
+    ``train``, ``validation``, and ``test`` are numeric matrices with identical
+    feature-column order; ``encoder`` is the training-fitted
+    ``OrdinalEncoder`` or ``None`` when no categorical columns exist.  The
+    frozen dataclass protects attribute reassignment but does not deep-freeze
+    NumPy arrays or the encoder, so callers must not mutate them after score
+    generation.  ``encode_feature_splits`` validates required columns and
+    nonempty training data, learns categories from training only, and maps
+    unseen validation/test categories to ``-1`` without admitting future labels.
+    """
 
     train: np.ndarray
     validation: np.ndarray

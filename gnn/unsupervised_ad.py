@@ -1448,7 +1448,15 @@ def _logical_corpus_name(corpus_dir):
 
 
 def corpus_output_path(results_dir, corpus_dir):
-    """Return a corpus-qualified diagnostics path for anomaly results."""
+    """Return a corpus-qualified diagnostics path for anomaly results.
+
+    ``results_dir`` is the output directory and ``corpus_dir`` supplies the
+    corpus basename used to form the qualified filename.  The return value is a
+    ``Path`` ending in ``unsupervised_ad_results_<corpus>.json``; it does not
+    create directories or write content.  The naming rule avoids collisions
+    between synthetic corpus scales while preserving the caller's requested
+    output root, and invalid path-like values fail through ``Path`` conversion.
+    """
     corpus_name = Path(corpus_dir).name
     prefix = "synthetic_cbp_graph_corpus_"
     suffix = corpus_name[len(prefix):] if corpus_name.startswith(prefix) else corpus_name
@@ -1478,7 +1486,20 @@ def main(
     seed=FC.SEED,
     n_estimators=100,
 ):
-    """Run deployable anomaly arms, freeze scores, then attach oracle-only evaluation."""
+    """Run deployable anomaly arms, freeze scores, then attach oracle-only evaluation.
+
+    ``mode`` selects strict/assisted legacy modes, ``contamination`` controls
+    the alert-rate operating point, and the keyword arguments select corpus and
+    results paths, whether the four deployable arms run, the random ``seed``,
+    and Isolation Forest ``n_estimators``.  The return value is the schema-v3
+    results mapping and the function writes generic and corpus-qualified JSON
+    diagnostics under ``results_dir``.  Model-visible rows, features, scores,
+    and thresholds are frozen from observable inputs before oracle targets are
+    admitted; hidden outcomes and official catch history are used only for
+    retrospective evaluation, and ``unsupervised_ad`` preserves its explicit
+    caught-state as-of boundary.  Invalid modes, corpus contracts, or feature
+    alignment raise without silently producing a partial result.
+    """
     corpus_dir = Path(corpus_dir) if corpus_dir is not None else FC.CORPUS_DIR
     results_dir = Path(results_dir) if results_dir is not None else FC.RESULTS
     print(f"Loading data from {corpus_dir}...")
@@ -1515,8 +1536,8 @@ def main(
         catch_history = build_official_catch_history(
             observable, set(observable["event_id"])
         )
-        # Oracle files are opened only after every deployable score and threshold has
-        # frozen; data below this boundary is evaluation-only.
+        # Observable features, deployable scores, and thresholds are frozen
+        # above; oracle targets enter only for retrospective evaluation below.
         oracle = load_oracle_evaluation(corpus_dir)
         evaluated_arms = evaluate_frozen_arms(
             frozen_arms, oracle, catch_history

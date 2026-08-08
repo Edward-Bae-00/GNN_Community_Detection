@@ -106,7 +106,16 @@ def _canonical_string_ids(values, *, field_name):
 
 @dataclass(frozen=True)
 class AblationSpec:
-    """Describe one evidence factor removed for a counterfactual score."""
+    """Describe one evidence factor removed for a counterfactual score.
+
+    ``factor_id`` is the stable generated identifier, ``kind`` selects one of
+    the supported relation/caught/provenance/pooling factors, and the three
+    tuple fields identify source rows, caught people, or provenance nodes.  The
+    frozen record normalizes IDs into sorted tuples and validates kind-specific
+    exclusivity, nonempty evidence, and ID syntax; no input collection is kept
+    by reference.  A spec is an observable as-of ablation instruction only and
+    cannot carry hidden labels or future edges.
+    """
 
     factor_id: str
     kind: str
@@ -216,7 +225,17 @@ def _nonnegative_unique_indices(values, *, field_name):
 
 @dataclass(frozen=True)
 class CounterfactualContext:
-    """Reusable graph state for grouped counterfactual scoring."""
+    """Freeze candidate and same-day row references for grouped counterfactual scoring.
+
+    ``person_id`` and ``row_index`` identify the anchor, ``scoring_day`` fixes
+    its UTC snapshot, ``same_day_person_row_indices`` identifies aligned rows
+    for that person, ``candidate_row_indices`` identifies the full pool used by
+    rank recalculation, and ``original_hybrid_rank`` records the unablated rank.
+    Validation normalizes IDs/day and immutable index tuples, checks subset and
+    rank bounds, and prevents caller mutation through the frozen fields.  This
+    context owns candidate/rank references—not tensors or graph embeddings—and
+    all scoring must reuse the same as-of snapshot.
+    """
 
     person_id: str
     row_index: int
@@ -269,7 +288,18 @@ class CounterfactualContext:
 
 @dataclass(frozen=True)
 class DaySnapshot:
-    """As-of graph, features, and scores frozen for one evaluation day."""
+    """As-of graph, features, and scores frozen for one evaluation day.
+
+    ``scoring_day`` is the UTC day; ``active_edges``, ``x``, ``edge_index``, and
+    ``edge_type`` are the strict pre-day graph inputs; provenance and
+    ``component_roots`` preserve edge/source and pooling semantics;
+    ``prepool_embeddings``, ``prepool_logits``, and ``pooled_logits`` capture
+    model intermediates; ``probabilities`` is the pooled node score array; and
+    ``caught_before_snapshot`` records caught state available before the day.
+    The frozen dataclass does not deep-copy or validate every field itself, so
+    ``Seed0ExplanationEngine.snapshot`` is the construction contract and callers
+    must treat tensors/arrays as detached, read-only reference state.
+    """
 
     scoring_day: pd.Timestamp
     active_edges: pd.DataFrame
@@ -970,7 +1000,18 @@ def _rank_reference_fingerprint(reference, row_bindings):
 
 
 class Seed0ExplanationEngine:
-    """Generate deterministic seed-0 GNNExplainer evidence for selected cases."""
+    """Generate deterministic seed-0 GNNExplainer evidence for selected cases.
+
+    The constructor accepts a trained ``model``, timestamped ``edges_typed``,
+    canonical ``node_ids``/``node_feat``, caught availability times, relation
+    count, and an optional pool-wide ``rank_reference`` with row bindings.  It
+    deep-copies the model into evaluation mode, prepares detached lifetime
+    inputs, and manages day/community/counterfactual caches; it writes no
+    artifacts until a caller serializes the returned evidence.  Snapshot and
+    explanation methods enforce strict availability filtering, bounded local
+    projections, and the optional rank-reference contract, while invalid IDs,
+    misaligned references, or ineligible communities fail closed.
+    """
 
     def __init__(
         self,
@@ -1536,7 +1577,17 @@ class Seed0ExplanationEngine:
 
 
 def score_grouped_counterfactual(engine, context, factor):
-    """Score grouped evidence ablations without rebuilding unchanged graph state."""
+    """Score grouped evidence ablations without rebuilding unchanged graph state.
+
+    ``engine`` must be a ``Seed0ExplanationEngine``, ``context`` must bind one
+    candidate/day reference, and ``factor`` must be an ``AblationSpec``.  The
+    return value is a validated JSON-compatible counterfactual record containing
+    original/ablated rank and score evidence plus any rebuilt caught/pooling
+    diagnostics.  Unchanged snapshot state is reused while the affected group
+    is removed, and results may be cached by the engine; invalid factor scope or
+    rank bindings raises ``ValueError``.  Only graph/caught state available at
+    the context day is eligible.
+    """
     if not isinstance(engine, Seed0ExplanationEngine):
         raise ValueError("engine must be a Seed0ExplanationEngine")
     return engine._Seed0ExplanationEngine__score_grouped_counterfactual(
@@ -1570,7 +1621,16 @@ def _length_framed_hash(parts):
 
 
 def member_subgraph(engine, person_id, scoring_day):
-    """Materialize the exact member-induced subgraph used by one explanation."""
+    """Materialize the exact member-induced subgraph used by one explanation.
+
+    ``engine`` supplies the detached day snapshot, ``person_id`` selects the
+    target node, and ``scoring_day`` selects the strict as-of state.  The return
+    value is a validated ``MemberSubgraph`` with two-hop ``x``/``edge_index``,
+    target mapping, original node indices, and per-tensor-edge source IDs;
+    tensors and provenance are defensive copies.  Unknown people, malformed
+    snapshots, or out-of-range provenance raise, and no pruning or filesystem
+    publication occurs here.
+    """
     if not isinstance(engine, Seed0ExplanationEngine):
         raise ValueError("engine must be a Seed0ExplanationEngine")
     if person_id not in engine.person_index:
@@ -1674,7 +1734,16 @@ def explainability_eligibility(
 
 
 def make_gnn_explainer(wrapper, epochs=EXPLAINER_EPOCHS):
-    """Construct the configured PyG GNNExplainer wrapper."""
+    """Construct the configured PyG GNNExplainer wrapper.
+
+    ``wrapper`` must expose pre-pool GraphSAGE logits through
+    ``PrePoolSAGELogitWrapper`` and ``epochs`` must equal the fixed explainer
+    policy.  The return value is a PyG ``Explainer`` configured for binary,
+    node-level raw-logit explanations with attribute and edge masks.  Creation
+    is in-memory and has no artifact side effect; invalid wrapper types or
+    non-policy epoch counts raise ``ValueError``.  The caller still supplies a
+    strictly as-of member subgraph when invoking the explainer.
+    """
     if not isinstance(wrapper, PrePoolSAGELogitWrapper):
         raise ValueError("wrapper must be a PrePoolSAGELogitWrapper")
     epochs = _validated_explainer_epochs(epochs)
@@ -1844,7 +1913,15 @@ def _flow_stage_rules():
 
 
 def build_flow_stages(community):
-    """Describe how observable evidence flows through the two-hop scoring pipeline."""
+    """Describe how observable evidence flows through the two-hop scoring pipeline.
+
+    ``community`` may be a live ``CommunityScope`` or a detached mapping with
+    ``nodes_by_id`` and ``edges``.  The return value is the deterministic list of
+    structural message-passing stages plus rank fusion, each carrying its edge
+    rule.  Input validation checks only the required community shape; this pure
+    description writes no artifact and includes no hidden labels, future edges,
+    or tensor references.
+    """
     if isinstance(community, CommunityScope):
         return _flow_stage_rules()
     if not isinstance(community, Mapping):
@@ -1857,7 +1934,17 @@ def build_flow_stages(community):
 
 
 def aggregate_restart_masks(masks, top_fraction=0.1):
-    """Aggregate restart attribution masks with completeness diagnostics."""
+    """Aggregate restart attribution masks with completeness diagnostics.
+
+    ``masks`` is a nonempty sequence of aligned one-dimensional nonnegative
+    finite arrays and ``top_fraction`` controls each restart's selected prefix.
+    The return value contains median/IQR arrays, selection frequencies, restart
+    count, agreement, and a status; empty-width inputs return a no-message-edge
+    record.  The function copies/normalizes inputs and writes no files, raising
+    ``ValueError`` for shape, finiteness, or range violations.  Attribution is
+    diagnostic evidence for the frozen as-of explanation, not a deployable
+    feature or outcome label.
+    """
     try:
         fraction = float(top_fraction)
     except (TypeError, ValueError) as exc:
@@ -1917,7 +2004,16 @@ def aggregate_restart_masks(masks, top_fraction=0.1):
 def matched_random_controls(
     edge_records, *, selected_edge_ids, seed
 ):
-    """Select deterministic matched controls for faithfulness comparisons."""
+    """Select deterministic matched controls for faithfulness comparisons.
+
+    ``edge_records`` supplies unique edge IDs with relation and degree-bin
+    metadata, ``selected_edge_ids`` identifies attributed edges, and ``seed``
+    controls the deterministic choice among unused same-stratum controls.  The
+    return value is a tuple of control IDs in selected-edge order; unmatched
+    selections are omitted from this compact API and are reported by the
+    internal detail helper.  Unknown/duplicate IDs raise ``ValueError`` and no
+    graph or artifact is changed.
+    """
     pairs, _ = _matched_control_details(
         edge_records, selected_edge_ids=selected_edge_ids, seed=seed
     )
@@ -1982,7 +2078,17 @@ def _validated_probability(value, *, field_name):
 def edge_removal_faithfulness(
     edge_records, importance_by_id, *, rescore, seed=0
 ):
-    """Measure score change after removing attributed versus control edges."""
+    """Measure score change after removing attributed versus control edges.
+
+    ``edge_records`` defines unique scored edges, ``importance_by_id`` provides
+    finite nonnegative attribution weights, ``rescore`` accepts a removed-ID
+    tuple and returns a probability, and ``seed`` controls matched controls.
+    The return value reports original probability and 10/25/50-percent removal
+    points with matched drops and unmatched counts.  The function validates
+    probability/edge contracts, performs only caller-supplied rescoring, and
+    writes no artifacts; it measures the frozen as-of explanation rather than
+    changing deployable scores.
+    """
     records = tuple(edge_records)
     edge_ids = tuple(record["edge_id"] for record in records)
     if len(set(edge_ids)) != len(edge_ids):
@@ -2273,7 +2379,15 @@ def frozen_peer_rank(
 def classify_factor_stability(
     counterfactual, restart_selection_frequency, restart_iqr
 ):
-    """Classify whether an evidence factor is stable across explanation restarts."""
+    """Classify whether an evidence factor is stable across explanation restarts.
+
+    ``counterfactual`` must contain a finite ``hybrid_rank_delta``;
+    ``restart_selection_frequency`` must be in ``[0, 1]``; and ``restart_iqr``
+    must be nonnegative.  The return value is ``stable``, ``countervailing``, or
+    ``unstable`` using the fixed two-thirds/0.25 policy.  Invalid numeric or
+    mapping inputs raise ``ValueError``; this pure diagnostic never changes
+    scores and does not use future outcomes.
+    """
     try:
         frequency = float(restart_selection_frequency)
         iqr = float(restart_iqr)
@@ -2414,7 +2528,17 @@ def build_ablation_specs(
     ranked_edge_source_row_ids=(),
     pooled_logit_contributions=None,
 ):
-    """Build deterministic node, edge, and relation ablation specifications."""
+    """Build deterministic node, edge, and relation ablation specifications.
+
+    ``snapshot`` supplies provenance-bearing active edges, ``person_id`` names
+    the visible target, and ``community`` is either a ``CommunityScope`` or
+    detached community mapping.  Optional ranked source IDs prioritize edge
+    groups and pooled logit contributions prioritize member factors.  The
+    return value is a sorted list of validated ``AblationSpec`` records bounded
+    by the explanation policy.  Missing provenance, unknown target/community
+    members, or inconsistent factor evidence raises ``ValueError``; all factors
+    are derived from the snapshot day and no files are written.
+    """
     if not isinstance(person_id, str) or not person_id.strip():
         raise ValueError("person_id must be a non-blank string")
     required = {
@@ -2624,7 +2748,16 @@ def build_ablation_specs(
 
 
 def build_complete_community(engine, target_person_id, scoring_day):
-    """Stream the complete community while bounding the display projection."""
+    """Stream the complete community while bounding the display projection.
+
+    ``engine`` supplies the cached strict as-of graph, ``target_person_id``
+    selects the pooled component, and ``scoring_day`` fixes its UTC snapshot.
+    The return value is a ``CommunityScope`` that streams complete nodes/edges
+    and provenance while its materialized display projection is bounded by the
+    local node/edge/source-row limits.  Unknown people or invalid day state
+    raise, the engine may cache the scope, and the community contains only
+    observable edges/evidence available before the scoring day.
+    """
     if target_person_id not in engine.person_index:
         raise KeyError(f"unknown person_id: {target_person_id}")
     snapshot = engine.snapshot(scoring_day)

@@ -108,7 +108,15 @@ class _NonnegativeUniqueAction(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the architecture-bakeoff command-line parser."""
+    """Build the architecture-bakeoff command-line parser.
+
+    The parser groups the corpus/output paths with positive epoch and metric
+    depths, nonnegative unique seeds, and the train-bucket contract.  It returns
+    an ``argparse.ArgumentParser`` whose defaults target the canonical V9
+    corpus and output artifact; custom values are validated before training.
+    Parsing has no filesystem or model side effects, and invalid integer lists
+    become argparse errors rather than silently changing the experiment.
+    """
     parser = argparse.ArgumentParser(
         description="Run the GNN-only architecture bake-off."
     )
@@ -598,7 +606,17 @@ def validate_artifact(payload):
 
 
 def main(argv=None):
-    """Train and compare configured GNN encoders on one corpus snapshot."""
+    """Train and compare configured GNN encoders on one corpus snapshot.
+
+    ``argv`` optionally supplies the CLI argument vector.  The command parses
+    corpus/output paths, seeds, epochs, train bucket, and global/daily ``k``
+    depths, runs every registered architecture, validates its metric payload,
+    atomically writes the comparison JSON, prints a concise publication line,
+    and returns the payload mapping.  Parser and training contract failures are
+    reported through argparse; each arm must use the same timestamped graph and
+    caller-selected training cutoff, and no future/oracle evaluation field may
+    affect the deployable score generation.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

@@ -1615,8 +1615,8 @@ def _build_schema3_artifact(
     # selection, so their failures are reported in the artifact but not fed
     # back into the selection finalizer.
     all_failures = list(failures) + list(structural_fallback_failures)
-    # Sidecar references carry hashes and byte counts; publishing the pointer JSON
-    # before the verified evidence tree would create a corrupt but plausible run.
+    # Selection finalization receives the complete frozen failure set so the
+    # published cohort records and diagnostics cannot drift after selection.
     selection_final = finalize_recovery_publication(
         selection,
         published_ids=published_ids,
@@ -1812,7 +1812,17 @@ def _build_schema3_artifact(
 
 
 def validate_schema3_artifact(artifact):
-    """Validate schema-3 pointer, coverage, and evidence invariants."""
+    """Validate schema-3 pointer, coverage, and evidence invariants.
+
+    ``artifact`` is the detached schema-3 mapping produced by the streaming
+    publication path.  The function returns the same validated mapping after
+    checking policy/seed scope, overlap algebra, cohort counts, run and
+    as-of/corpus identities, pointer references, complete community evidence,
+    narrative grounding, and sidecar hash/byte-count closure.  It performs no
+    writes; malformed mappings raise ``ValueError``.  The validator treats the
+    schema-3 pointer as a durability boundary: deployable scores and selection
+    are already frozen, and oracle/evidence payloads are retrospective only.
+    """
     if not isinstance(artifact, Mapping) or artifact.get("schema_version") != SCHEMA3:
         raise ValueError("invalid schema-3 observability artifact version")
     policy = artifact.get("policy")
@@ -2354,7 +2364,20 @@ def serialize_artifact(
     inspections_per_day,
     explanation_limit,
 ):
-    """Serialize a validated observability artifact without inlining sidecar evidence."""
+    """Serialize the legacy schema-2 artifact with inline explanation and community payloads.
+
+    ``reference`` supplies the pool-wide rank reference; ``overlap`` supplies
+    the recovery partitions; the two case collections, ``explanations``,
+    ``failures``, ``communities``, and ``community_keys_by_case`` supply the
+    selected cohorts and inline evidence; ``seed_level_unique_person_recovery``
+    records the seed-level diagnostic; and keyword ``seeds``, ``blend_weight``,
+    ``inspections_per_day``, and ``explanation_limit`` preserve the run policy.
+    The return value is a JSON-compatible schema-2 mapping with inline
+    explanations and communities plus coverage diagnostics.  Inputs must
+    already be frozen and aligned; missing case/community keys or inconsistent
+    counts raise during construction.  This legacy serializer writes no files
+    and does not admit future outcomes into deployable scores.
+    """
     explanation_by_person = {
         explanation["person_id"]: explanation for explanation in explanations
     }
@@ -2433,7 +2456,17 @@ def serialize_artifact(
 
 
 def validate_artifact_invariants(artifact):
-    """Reject observability artifacts that violate leakage or schema contracts."""
+    """Reject observability artifacts that violate leakage or schema contracts.
+
+    ``artifact`` may be the legacy schema-2 inline mapping or a schema-3
+    sidecar-pointer mapping.  The return value is the validated artifact (or
+    the schema-3 validator's detached result), while policy, overlap algebra,
+    cohort coverage, explanation/community references, and as-of evidence are
+    checked without mutating or publishing anything.  Invalid versions,
+    missing fields, mismatched counts, unsafe evidence, or leakage boundaries
+    raise ``ValueError``.  Oracle fields are accepted only in retrospective
+    validation payloads after deployable outputs and selection have frozen.
+    """
     if isinstance(artifact, Mapping) and artifact.get("schema_version") == SCHEMA3:
         return validate_schema3_artifact(artifact)
     if artifact.get("schema_version") != "2.0":

@@ -670,7 +670,17 @@ def build_fact_packet(explanation):
 
 
 def build_prompt(packet):
-    """Build the bounded evidence prompt used for one recovery narrative."""
+    """Build the bounded evidence prompt used for one recovery narrative.
+
+    ``packet`` is the already structured explanation evidence; it is validated
+    and reduced to a deterministic selector catalog before use.  The return
+    value is a JSON-only prompt string containing the prompt version, scope,
+    ranks, community key, and unsigned attribution context, while the model is
+    asked to return only prevalidated summary/claim IDs.  No model call or file
+    write occurs here.  Invalid evidence, forbidden future/hidden fields, or
+    selector-shape failures raise ``ValueError``; caller code must keep the
+    packet within the single observability seed and as-of snapshot contract.
+    """
     packet = _validated_fact_packet(packet)
     catalog = build_selector_catalog(packet)
     selector = {
@@ -974,7 +984,17 @@ def _validate_text(packet, record, *, supported):
 
 
 def validate_candidate(packet, candidate):
-    """Validate a generated narrative against its structured evidence contract."""
+    """Validate a generated narrative against its structured evidence contract.
+
+    ``packet`` supplies the validated evidence and ``candidate`` supplies one
+    summary plus a list of grounded claims with source references.  The return
+    value is a normalized mapping containing only validated text and refs; it
+    rejects unknown IDs/numbers, causal or multi-seed language, duplicate refs,
+    unsupported claims, and malformed fields with ``ValueError``.  Validation
+    is pure and writes no narrative artifact.  It enforces evidence grounding
+    and single-seed scope, so callers must not use it to authorize hidden labels
+    or future edges.
+    """
     packet = _validated_fact_packet(packet)
     if not isinstance(candidate, Mapping):
         raise ValueError("unsupported narrative claim: candidate must be an object")
@@ -1064,7 +1084,16 @@ def resolve_narrative_selector(packet, selector):
 
 
 def render_template(packet):
-    """Render the deterministic narrative fallback from validated evidence."""
+    """Render the deterministic narrative fallback from validated evidence.
+
+    ``packet`` is normalized through the same evidence contract used by the
+    model path.  The return value is a validated JSON-compatible narrative with
+    deterministic summary, claims, source references, and template provenance;
+    it selects the largest rank-impact factor and bounded observable evidence.
+    No external model or filesystem is touched.  If full evidence is malformed,
+    the caller may pass a rank-only salvage packet, but future outcomes,
+    organization labels, and unvalidated text remain forbidden.
+    """
     packet = _validated_fact_packet(packet)
     factors = list(packet["factors_by_id"].items())
     factors.sort(
@@ -1148,7 +1177,18 @@ def generate_narrative(
     mode="production",
     max_retries=3,
 ):
-    """Generate and validate one narrative, recording deterministic fallback diagnostics."""
+    """Generate and validate one narrative, recording deterministic fallback diagnostics.
+
+    ``packet`` is the structured evidence; ``runner`` and ``timeout_seconds``
+    control the injected local-model process; ``mode`` selects production or
+    deterministic-template behavior; and ``max_retries`` bounds production
+    attempts.  The return value is a validated narrative mapping with source,
+    model, prompt, and fallback diagnostics.  Production preflight/model
+    failures fall back to the deterministic template and update the caller's
+    observable diagnostics; invalid modes or evidence raise ``ValueError``.
+    This function consumes only the frozen packet, never adds future/hidden
+    facts, and does not publish files itself.
+    """
     if mode == "template":
         try:
             return render_template(_validated_fact_packet(packet))

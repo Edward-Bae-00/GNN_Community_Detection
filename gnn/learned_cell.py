@@ -29,7 +29,16 @@ from gnn.graphmodel_rgcn import (
 )
 
 class UF:
-    """Maintain disjoint co-travel components while replaying events in time order."""
+    """Maintain disjoint co-travel components while replaying events in time order.
+
+    ``parent`` stores each integer node's representative and ``rank`` stores
+    the union-by-rank heuristic; ``find(i)`` returns a compressed root and
+    ``union(i, j)`` merges two roots in place.  Construction allocates fresh
+    NumPy arrays for ``n`` nodes, and callers must pass a nonnegative integer
+    size plus valid integer indices.  This helper is an in-memory membership
+    structure only: it has no artifact side effects and must be fed edges that
+    are already filtered to the relevant as-of time.
+    """
 
     def __init__(self, n):
         self.parent = np.arange(n)
@@ -179,7 +188,18 @@ def _asof_x_caught(node_ids, node_feat, active_edges, caught_time, T, num_rel=NU
 
 @dataclass(frozen=True)
 class DaySnapshotInputs:
-    """Frozen daily graph inputs used by relational training and scoring."""
+    """Frozen daily graph inputs used by relational training and scoring.
+
+    ``scoring_day`` identifies the UTC day; ``active_edges`` is the strict
+    pre-day typed edge frame; ``x``, ``edge_index``, and ``edge_type`` are the
+    aligned PyTorch node and relation tensors; ``tensor_edge_source_row_ids``
+    preserves edge provenance; ``component_roots`` records as-of COTRAVEL
+    components; and ``caught_before_snapshot`` records only officially
+    available catches before the snapshot.  The frozen dataclass protects field
+    reassignment, while the prepared-source path supplies detached inputs; the
+    builder validates alignment and availability cutoffs.  Callers must never
+    reuse this snapshot for a later day without rebuilding it.
+    """
 
     scoring_day: pd.Timestamp
     active_edges: pd.DataFrame

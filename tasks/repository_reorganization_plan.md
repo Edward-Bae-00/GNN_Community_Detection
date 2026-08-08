@@ -1511,7 +1511,7 @@ demo_baseline.build_baseline_features — "Build leak-safe as-of tabular feature
 demo_checkpoint.WrittenDemoCheckpoint — "Paths and identity metadata for a newly written checkpoint."
 demo_checkpoint.LoadedDemoCheckpoint — "Validated models, scores, and metadata loaded from a checkpoint."
 demo_checkpoint.read_demo_checkpoint_metadata — "Read checkpoint metadata without loading model tensors or score arrays."
-detector.fit_predict — "Fit the tabular detector and return positive-class scores for validation and test rows."
+detector.fit_predict — "Fit the tabular detector and return positive-class scores for the supplied rows."
 explanation_narrative.build_prompt — "Build the bounded evidence prompt used for one recovery narrative."
 explanation_narrative.validate_candidate — "Validate a generated narrative against its structured evidence contract."
 explanation_narrative.render_template — "Render the deterministic narrative fallback from validated evidence."
@@ -1523,32 +1523,32 @@ gnn_architecture_bakeoff.main — "Train and compare configured GNN encoders on 
 graphmodel_alt.SAGEEncoder — "Encode person nodes with two GraphSAGE message-passing layers."
 graphmodel_alt.GATEncoder — "Encode person nodes with relation-collapsed graph attention layers."
 graphmodel_alt.GINEncoder — "Encode person nodes with graph isomorphism network layers."
-graphmodel_alt.KPIAAEncoder — "Encode person nodes with KPI-AA-inspired gated relation aggregation."
-graphmodel_rgcn.RelationSAGEEncoder — "Encode typed person relations with relation-specific GraphSAGE convolutions."
+graphmodel_alt.KPIAAEncoder — "Approximate the KPI-AA comparison arm with two homogeneous graph-convolution layers."
+graphmodel_rgcn.RelationSAGEEncoder — "Encode typed person relations with two relational graph-convolution layers."
 graphmodel_rgcn.build_anchor_graph — "Build the legacy anchor graph retained for compatibility experiments."
-graphmodel_rgcn.build_person_graph_typed — "Build the typed person graph using only observable as-of relations."
-graphmodel_rgcn.train_rgcn — "Fit the relational encoder on labels available by the training cutoff."
-graphmodel_rgcn.asof_risk_rgcn — "Score rows from graph state and caught labels available strictly as of each row time."
+graphmodel_rgcn.build_person_graph_typed — "Build the timestamped lifetime person graph on canonical oracle identities."
+graphmodel_rgcn.train_rgcn — "Fit the relational encoder on the caller-supplied training mask and labels."
+graphmodel_rgcn.asof_risk_rgcn — "Score rows from graph edges available strictly before each row time."
 learned_cell.UF — "Maintain disjoint co-travel components while replaying events in time order."
 learned_cell.DaySnapshotInputs — "Frozen daily graph inputs used by relational training and scoring."
 observability_artifact.validate_schema3_artifact — "Validate schema-3 pointer, coverage, and evidence invariants."
-observability_artifact.serialize_artifact — "Serialize a validated observability artifact without inlining sidecar evidence."
+observability_artifact.serialize_artifact — "Serialize the legacy schema-2 artifact with inline explanation and community payloads."
 observability_artifact.validate_artifact_invariants — "Reject observability artifacts that violate leakage or schema contracts."
-recovery_observability.RecoveryAnchor — "One baseline-missed person selected for recovery analysis."
+recovery_observability.RecoveryAnchor — "Identify one person's first recovery event for an evaluation arm."
 recovery_observability.DailyPoolTrace — "Frozen daily candidate-pool and ranking provenance."
-recovery_observability.RecoveryRun — "Complete baseline-versus-hybrid recovery output for one evaluation run."
+recovery_observability.RecoveryRun — "Record one evaluation arm's complete daily recovery run."
 recovery_observability.RecoveryOverlap — "Overlap counts between baseline and hybrid recovery sets."
-recovery_observability.FrozenRankReference — "Immutable rank and score reference for one candidate."
+recovery_observability.FrozenRankReference — "Freeze pool-wide rank and score arrays for deterministic reference."
 recovery_observability.HybridOnlyCase — "A hidden carrier recovered by Hybrid but missed by the baseline."
 run_demo.evaluate — "Evaluate ranked scores at configured operational depths."
-run_demo.add_tiebreak — "Add deterministic event-ID jitter without changing rank meaningfully."
-run_demo.load_pool — "Load the observable event pool and normalize timestamps and split labels."
-run_demo.stratum_for_pool — "Assign graph-observability strata from leak-safe structural features."
+run_demo.add_tiebreak — "Add deterministic row-order jitter without changing rank meaningfully."
+run_demo.load_pool — "Load a split-aligned event pool with oracle fields reserved for retrospective evaluation."
+run_demo.stratum_for_pool — "Assign retrospective graph-observability strata from synthetic ground truth."
 run_demo.paired_event_bootstrap — "Bootstrap paired baseline and hybrid metrics over shared sampled events."
 run_demo.stratum_metrics — "Compute per-stratum ranking metrics for one score vector."
 run_demo.main — "Run the leak-safe baseline-versus-GNN V9 comparison."
 sage_explainer.AblationSpec — "Describe one evidence factor removed for a counterfactual score."
-sage_explainer.CounterfactualContext — "Reusable graph state for grouped counterfactual scoring."
+sage_explainer.CounterfactualContext — "Freeze candidate and same-day row references for grouped counterfactual scoring."
 sage_explainer.DaySnapshot — "As-of graph, features, and scores frozen for one evaluation day."
 sage_explainer.Seed0ExplanationEngine — "Generate deterministic seed-0 GNNExplainer evidence for selected cases."
 sage_explainer.score_grouped_counterfactual — "Score grouped evidence ablations without rebuilding unchanged graph state."
@@ -1576,11 +1576,12 @@ Place these comments at the corresponding boundaries if an equivalent comment
 is not already present:
 
 ```python
-# Relation timestamps are availability times: an edge at or after the scored
-# row is excluded even when its underlying real-world event happened earlier.
+# Availability timestamps are normalized and preserved for downstream filtering.
+# Strict as-of scoring excludes edges at or after T immediately before filtering.
 ```
 
-in `graphmodel_rgcn.build_person_graph_typed` before temporal edge filtering;
+in `graphmodel_rgcn.build_person_graph_typed` and immediately before the
+`avail_time < t` scoring filter;
 
 ```python
 # Caught state is replayed forward and frozen before scoring the current row, so
@@ -1590,18 +1591,20 @@ in `graphmodel_rgcn.build_person_graph_typed` before temporal edge filtering;
 in `learned_cell` at caught-history snapshot construction;
 
 ```python
-# Oracle files are opened only after every deployable score and threshold has
-# frozen; data below this boundary is evaluation-only.
+# Oracle rows may load early for alignment, but hidden/org values cannot affect
+# deployable features, scores, caught-label fusion, threshold, or weight choice;
+# hidden labels first affect oracle fusion/evaluation after outputs freeze.
 ```
 
-in `run_demo.main` and `unsupervised_ad.main` at oracle loading;
+in `run_demo.main` and `unsupervised_ad.main` at their oracle boundaries;
 
 ```python
-# Sidecar references carry hashes and byte counts; publishing the pointer JSON
-# before the verified evidence tree would create a corrupt but plausible run.
+# Selection finalization receives the complete frozen failure set so published
+# cohort records and diagnostics cannot drift after selection.
 ```
 
-in `observability_artifact`/`recovery_bundle` at final publication.
+in `observability_artifact` at selection finalization; retain the durability
+comment at actual `recovery_bundle` pointer writes.
 
 In `gnn/sage_explainer.py`, update the snapshot-reference comment to
 `reproducibility/v9_observability_colab_schema3/gnn/sage_explainer.py`; do not
@@ -1679,7 +1682,7 @@ demo_baseline.build_baseline_features — "Build leak-safe as-of tabular feature
 demo_checkpoint.WrittenDemoCheckpoint — "Paths and identity metadata for a newly written checkpoint."
 demo_checkpoint.LoadedDemoCheckpoint — "Validated models, scores, and metadata loaded from a checkpoint."
 demo_checkpoint.read_demo_checkpoint_metadata — "Read checkpoint metadata without loading model tensors or score arrays."
-detector.fit_predict — "Fit the tabular detector and return positive-class scores for validation and test rows."
+detector.fit_predict — "Fit the tabular detector and return positive-class scores for the supplied rows."
 explanation_narrative.build_prompt — "Build the bounded evidence prompt used for one recovery narrative."
 explanation_narrative.validate_candidate — "Validate a generated narrative against its structured evidence contract."
 explanation_narrative.render_template — "Render the deterministic narrative fallback from validated evidence."
@@ -1691,32 +1694,32 @@ gnn_architecture_bakeoff.main — "Train and compare configured GNN encoders on 
 graphmodel_alt.SAGEEncoder — "Encode person nodes with two GraphSAGE message-passing layers."
 graphmodel_alt.GATEncoder — "Encode person nodes with relation-collapsed graph attention layers."
 graphmodel_alt.GINEncoder — "Encode person nodes with graph isomorphism network layers."
-graphmodel_alt.KPIAAEncoder — "Encode person nodes with KPI-AA-inspired gated relation aggregation."
-graphmodel_rgcn.RelationSAGEEncoder — "Encode typed person relations with relation-specific GraphSAGE convolutions."
+graphmodel_alt.KPIAAEncoder — "Approximate the KPI-AA comparison arm with two homogeneous graph-convolution layers."
+graphmodel_rgcn.RelationSAGEEncoder — "Encode typed person relations with two relational graph-convolution layers."
 graphmodel_rgcn.build_anchor_graph — "Build the legacy anchor graph retained for compatibility experiments."
-graphmodel_rgcn.build_person_graph_typed — "Build the typed person graph using only observable as-of relations."
-graphmodel_rgcn.train_rgcn — "Fit the relational encoder on labels available by the training cutoff."
-graphmodel_rgcn.asof_risk_rgcn — "Score rows from graph state and caught labels available strictly as of each row time."
+graphmodel_rgcn.build_person_graph_typed — "Build the timestamped lifetime person graph on canonical oracle identities."
+graphmodel_rgcn.train_rgcn — "Fit the relational encoder on the caller-supplied training mask and labels."
+graphmodel_rgcn.asof_risk_rgcn — "Score rows from graph edges available strictly before each row time."
 learned_cell.UF — "Maintain disjoint co-travel components while replaying events in time order."
 learned_cell.DaySnapshotInputs — "Frozen daily graph inputs used by relational training and scoring."
 observability_artifact.validate_schema3_artifact — "Validate schema-3 pointer, coverage, and evidence invariants."
-observability_artifact.serialize_artifact — "Serialize a validated observability artifact without inlining sidecar evidence."
+observability_artifact.serialize_artifact — "Serialize the legacy schema-2 artifact with inline explanation and community payloads."
 observability_artifact.validate_artifact_invariants — "Reject observability artifacts that violate leakage or schema contracts."
-recovery_observability.RecoveryAnchor — "One baseline-missed person selected for recovery analysis."
+recovery_observability.RecoveryAnchor — "Identify one person's first recovery event for an evaluation arm."
 recovery_observability.DailyPoolTrace — "Frozen daily candidate-pool and ranking provenance."
-recovery_observability.RecoveryRun — "Complete baseline-versus-hybrid recovery output for one evaluation run."
+recovery_observability.RecoveryRun — "Record one evaluation arm's complete daily recovery run."
 recovery_observability.RecoveryOverlap — "Overlap counts between baseline and hybrid recovery sets."
-recovery_observability.FrozenRankReference — "Immutable rank and score reference for one candidate."
+recovery_observability.FrozenRankReference — "Freeze pool-wide rank and score arrays for deterministic reference."
 recovery_observability.HybridOnlyCase — "A hidden carrier recovered by Hybrid but missed by the baseline."
 run_demo.evaluate — "Evaluate ranked scores at configured operational depths."
-run_demo.add_tiebreak — "Add deterministic event-ID jitter without changing rank meaningfully."
-run_demo.load_pool — "Load the observable event pool and normalize timestamps and split labels."
-run_demo.stratum_for_pool — "Assign graph-observability strata from leak-safe structural features."
+run_demo.add_tiebreak — "Add deterministic row-order jitter without changing rank meaningfully."
+run_demo.load_pool — "Load a split-aligned event pool with oracle fields reserved for retrospective evaluation."
+run_demo.stratum_for_pool — "Assign retrospective graph-observability strata from synthetic ground truth."
 run_demo.paired_event_bootstrap — "Bootstrap paired baseline and hybrid metrics over shared sampled events."
 run_demo.stratum_metrics — "Compute per-stratum ranking metrics for one score vector."
 run_demo.main — "Run the leak-safe baseline-versus-GNN V9 comparison."
 sage_explainer.AblationSpec — "Describe one evidence factor removed for a counterfactual score."
-sage_explainer.CounterfactualContext — "Reusable graph state for grouped counterfactual scoring."
+sage_explainer.CounterfactualContext — "Freeze candidate and same-day row references for grouped counterfactual scoring."
 sage_explainer.DaySnapshot — "As-of graph, features, and scores frozen for one evaluation day."
 sage_explainer.Seed0ExplanationEngine — "Generate deterministic seed-0 GNNExplainer evidence for selected cases."
 sage_explainer.score_grouped_counterfactual — "Score grouped evidence ablations without rebuilding unchanged graph state."
@@ -1743,17 +1746,18 @@ schema-3 behavior.
 Add these comments only at equivalent bundled boundaries:
 
 ```python
-# Relation timestamps are availability times: an edge at or after the scored
-# row is excluded even when its underlying real-world event happened earlier.
+# Availability timestamps are normalized and preserved for downstream filtering.
+# Strict as-of scoring excludes edges at or after T immediately before filtering.
 
 # Caught state is replayed forward and frozen before scoring the current row, so
 # the row's own outcome and all future outcomes remain unavailable features.
 
-# Oracle files are opened only after every deployable score and threshold has
-# frozen; data below this boundary is evaluation-only.
+# Oracle rows may load early for alignment, but hidden/org values cannot affect
+# deployable features, scores, caught-label fusion, threshold, or weight choice;
+# hidden labels first affect oracle fusion/evaluation after outputs freeze.
 
-# Sidecar references carry hashes and byte counts; publishing the pointer JSON
-# before the verified evidence tree would create a corrupt but plausible run.
+# Selection finalization receives the complete frozen failure set so published
+# cohort records and diagnostics cannot drift after selection.
 ```
 
 - [ ] **Step 3: Prove snapshot changes are documentation-only**

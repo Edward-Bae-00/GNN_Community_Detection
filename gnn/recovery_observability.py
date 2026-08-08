@@ -27,7 +27,16 @@ _SAFE_SUBJECT_DISPLAY_FIELDS = frozenset(
 
 @dataclass(frozen=True)
 class RecoveryAnchor:
-    """One baseline-missed person selected for recovery analysis."""
+    """Identify one person's first recovery event for an evaluation arm.
+
+    ``person_id`` and ``event_id`` identify the synthetic subject and anchor
+    crossing, ``row_index`` points into the aligned pool, ``scoring_day`` is the
+    UTC evaluation day, and ``inspected_rank`` is the rank at which the arm
+    inspected that event.  The dataclass is frozen but intentionally performs
+    no coercion or validation; producers must supply nonblank IDs, a normalized
+    timestamp, and a positive rank from a frozen selection.  An anchor may
+    belong to either the baseline or hybrid arm.
+    """
 
     person_id: str
     event_id: str
@@ -38,7 +47,16 @@ class RecoveryAnchor:
 
 @dataclass(frozen=True)
 class DailyPoolTrace:
-    """Frozen daily candidate-pool and ranking provenance."""
+    """Frozen daily candidate-pool and ranking provenance.
+
+    ``scoring_day`` identifies the UTC day, ``candidate_row_indices`` records
+    the complete aligned pool considered that day, and
+    ``inspected_row_indices`` records the rows actually consumed by the arm's
+    daily budget.  Tuple fields prevent accidental list mutation and the frozen
+    dataclass prevents reassignment; callers must pre-validate bounds and
+    ordering against the source pool because this record has no post-init
+    validator and writes no artifacts.
+    """
 
     scoring_day: pd.Timestamp
     candidate_row_indices: tuple[int, ...]
@@ -47,7 +65,19 @@ class DailyPoolTrace:
 
 @dataclass(frozen=True)
 class RecoveryRun:
-    """Complete baseline-versus-hybrid recovery output for one evaluation run."""
+    """Record one evaluation arm's complete daily recovery run.
+
+    ``arm`` names the single baseline or hybrid arm, ``daily_budget`` is its
+    positive per-day capacity, ``recovered_ids`` is the arm's recovered-person
+    set, ``first_recovery`` maps each recovered person to its first
+    ``RecoveryAnchor``, and ``days`` maps each UTC scoring day to its
+    ``DailyPoolTrace``.  Optional ``run_identity`` and ``as_of_identity`` bind
+    the run to published checkpoints and temporal semantics.  Construction
+    freezes the set and defensively copies mappings behind read-only proxies;
+    it validates the budget and optional IDs but leaves cross-field recovery
+    consistency to the producer.  This is one arm's result, not a combined
+    baseline-versus-hybrid record.
+    """
 
     arm: str
     daily_budget: int
@@ -78,7 +108,14 @@ class RecoveryRun:
 
 @dataclass(frozen=True)
 class RecoveryOverlap:
-    """Overlap counts between baseline and hybrid recovery sets."""
+    """Overlap counts between baseline and hybrid recovery sets.
+
+    The five fields are the baseline, hybrid, intersection, hybrid-only, and
+    baseline-only person-ID sets.  Construction defensively converts each to a
+    ``frozenset`` and validates the three derived partitions; ``summary`` then
+    returns integer counts and net gain without mutating the record.  IDs are
+    treated as already canonical and no files or model scores are consulted.
+    """
 
     baseline_ids: frozenset[str]
     hybrid_ids: frozenset[str]
@@ -123,7 +160,18 @@ class RecoveryOverlap:
 
 @dataclass(frozen=True)
 class FrozenRankReference:
-    """Immutable rank and score reference for one candidate."""
+    """Freeze pool-wide rank and score arrays for deterministic reference.
+
+    ``percentile_reference_id`` fingerprints the ordered ``event_ids`` pool;
+    the eight one-dimensional arrays hold raw, percentile, hybrid, and arm
+    selection scores aligned to that entire pool; and ``blend_weight`` records
+    the percentile-fusion parameter.  Construction normalizes event IDs,
+    defensively copies finite float arrays, enforces equal lengths and unique
+    IDs, validates the blend range, and checks the ordered-pool fingerprint.
+    The frozen dataclass protects field reassignment, but callers should treat
+    returned arrays as reference data and not mutate them; this reference is
+    pool-wide, not a single-candidate snapshot and not a future-outcome label.
+    """
 
     percentile_reference_id: str
     event_ids: tuple[str, ...]
@@ -182,7 +230,18 @@ class FrozenRankReference:
 
 @dataclass(frozen=True)
 class HybridOnlyCase:
-    """A hidden carrier recovered by Hybrid but missed by the baseline."""
+    """A hidden carrier recovered by Hybrid but missed by the baseline.
+
+    ``person_id`` and ``anchor`` identify the recovered subject; the three rank
+    fields and two percentiles preserve arm comparison; relationship categories
+    and ``scoring_period`` describe observable context; row-index tuples retain
+    same-day and arm-candidate provenance; and ``decision_trace`` stores the
+    frozen selection ledger.  Construction validates identity consistency,
+    positive ranks, bounded finite percentiles, nonblank categories/period, and
+    mapping-shaped trace data, then freezes tuples and a JSON-like defensive
+    copy.  It is an evaluation artifact only: hidden status may select the case
+    retrospectively and must not enter deployable scoring.
+    """
 
     person_id: str
     anchor: RecoveryAnchor

@@ -25,7 +25,15 @@ from gnn import config as FC
 STRATA = ("observable", "dark", "lone")
 
 def evaluate(df, score_col, ks):
-    """Evaluate ranked scores at configured operational depths."""
+    """Evaluate ranked scores at configured operational depths.
+
+    ``df`` must contain aligned ``hidden`` targets and the named ``score_col``;
+    ``ks`` supplies positive ranking depths.  The return value maps each depth
+    to integer found counts and rounded precision/recall, using stable
+    descending score order.  This is a pure retrospective metric helper with no
+    writes; callers must pass frozen deployable scores and keep the synthetic
+    hidden target outside feature, threshold, and weight selection.
+    """
     hidden = df["hidden"].values
     scores = df[score_col].values
     order = np.argsort(-scores, kind="mergesort")
@@ -205,16 +213,30 @@ def evaluate_daily_simulated_catches(
 
 
 def add_tiebreak(scores, pool):
-    """Add deterministic event-ID jitter without changing rank meaningfully."""
+    """Add deterministic row-order jitter without changing rank meaningfully.
+
+    ``scores`` is the one-dimensional score vector and ``pool`` supplies the
+    aligned row count; the return value is a new floating array with a fixed
+    seed's sub-nanounit jitter added in row order.  This breaks exact ties for
+    stable ranking without materially changing score meaning or metrics, and it
+    writes no artifact.  Callers must preserve the same pool order and must not
+    use the jitter as a feature or as a replacement for an explicit cutoff.
+    """
     rng = np.random.default_rng(42)
     return np.array(scores, dtype=float) + rng.uniform(0, 1e-9, size=len(scores))
 
 def load_pool(corpus_dir, split="test"):
-    """Load the observable event pool and normalize timestamps and split labels.
+    """Load a split-aligned event pool with oracle fields reserved for retrospective evaluation.
 
-    The current flow reads ``event_ground_truth.csv`` here to align rows and
-    carries hidden outcomes for later metrics; feature construction and
-    deployable threshold selection must not consume those oracle-only fields.
+    ``corpus_dir`` selects the synthetic corpus and ``split`` selects one
+    declared train/validation/test partition.  The returned DataFrame is in
+    source row order with normalized UTC ``t`` and label-availability columns,
+    canonical oracle identity/hidden fields for later metrics, and observed
+    record IDs for deployable feature construction.  Ground-truth rows may be
+    loaded early to align event IDs, but hidden outcomes and organization
+    labels cannot affect feature construction, score generation, caught-label
+    fusion, threshold selection, or blend-weight selection.  The function reads
+    CSVs only and raises pandas/file errors for missing or malformed inputs.
     """
     egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id", "false_negative_flag"])
     splits = pd.read_csv(corpus_dir / "train_valid_test_splits.csv", usecols=["entity_id", "split"])
@@ -287,7 +309,17 @@ def _build_oracle(corpus_dir):
     return dict(zip(obs["observed_person_record_id"], obs["canonical_person_id"]))
 
 def stratum_for_pool(pool, corpus_dir):
-    """Assign graph-observability strata from leak-safe structural features."""
+    """Assign retrospective graph-observability strata from synthetic ground truth.
+
+    ``pool`` supplies event rows and may omit ``primary_person_id``; ``corpus_dir``
+    supplies the synthetic event and organization truth used to label each row
+    ``observable``, ``dark``, or ``lone``.  The return value is a Series aligned
+    to the pool index.  These strata are evaluation annotations, not deployable
+    features: oracle organization values must be joined only after score,
+    caught-label fusion, threshold, and weight choices are frozen.  Missing
+    identity columns are recovered by event alignment; malformed joins surface
+    as pandas errors, and no files are written.
+    """
     if "primary_person_id" not in pool.columns:
         egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id"])
         pool = pool.merge(egt, on="event_id", how="left")
@@ -302,7 +334,16 @@ def stratum_for_pool(pool, corpus_dir):
 
 
 def paired_event_bootstrap(a, b, hidden, ks, mask=None, n_boot=2000, seed=0):
-    """Bootstrap paired baseline and hybrid metrics over shared sampled events."""
+    """Bootstrap paired baseline and hybrid metrics over shared sampled events.
+
+    ``a`` and ``b`` are aligned score vectors, ``hidden`` is the retrospective
+    target vector, ``ks`` contains ranking depths, ``mask`` optionally restricts
+    the target to one stratum, and ``n_boot``/``seed`` control resampling.  The
+    return value maps ``found@k`` to mean, confidence interval, and one-sided
+    comparison summaries.  Sampling is paired by shared row index and writes no
+    artifacts; callers must pass frozen deployable scores and must keep hidden
+    labels in this post-freeze evaluation path.
+    """
     rng = np.random.default_rng(seed)
     n = len(hidden)
     diffs = {k: np.empty(n_boot) for k in ks}
@@ -375,7 +416,16 @@ def _diff_summary(d):
             "significant": bool(lo > 0)}
 
 def stratum_metrics(scores, pool, hidden, strata_labels, ks):
-    """Compute per-stratum ranking metrics for one score vector."""
+    """Compute per-stratum ranking metrics for one score vector.
+
+    ``scores`` and ``hidden`` are aligned pool arrays, ``pool`` provides the
+    ranking population, ``strata_labels`` assigns each row to the three known
+    strata, and ``ks`` supplies operational depths.  The return value maps each
+    stratum to hidden denominators and found/recall counts at every depth.
+    Computation is pure and writes no artifacts; hidden labels and synthetic
+    strata are retrospective evaluation inputs and must never be fed back into
+    score or threshold selection.
+    """
     order = np.argsort(-scores, kind="mergesort")
     out = {}
     for st in STRATA:
@@ -844,8 +894,21 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
          baseline_control_limit=10, observability_instrumentation=None):
     """Run the leak-safe baseline-versus-GNN V9 comparison.
 
-    Oracle-only fusion and retrospective evaluation occur only after the
-    deployable outputs and threshold selection are frozen.
+    ``corpus_dir`` and output names select the synthetic inputs/artifacts;
+    ``seeds``, ``epochs``, ``train_bucket``, ``gnn_arm``, and ``valid_sample``
+    configure the graph training; ``ks``, ``daily_ks``, ``simulated_daily_ks``,
+    ``n_boot``, and ``observability_instrumentation`` configure evaluation;
+    ``observability``, narrative/checkpoint options, and the two detail limits
+    control optional evidence publication.  The return value is the comparison
+    result mapping, while score and checkpoint/observability paths are written
+    atomically as requested.  Validation errors are raised before publication.
+
+    Oracle rows may load early for event/split alignment, but hidden and
+    organization oracle values cannot affect deployable feature construction,
+    score generation, caught-label fusion, threshold selection, or weight
+    selection.  Hidden labels first affect oracle fusion and retrospective
+    evaluation after deployable outputs freeze; caught-state replay remains
+    strictly as-of each scoring time.
     """
     if observability and (
         gnn_arm != "sage" or tuple(seeds) != (0, 1, 2)
@@ -869,6 +932,8 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
     cd = corpus_dir or FC.CORPUS_DIR
     train_cutoff, test_deployment_cutoff = _split_label_cutoffs(cd)
     obs2id = _build_oracle(cd)
+    # Oracle rows may load early for alignment. Hidden/org values remain outside
+    # deployable features, score generation, caught-label fusion, and selection.
     pool = load_pool(cd)
     valid_pool = load_pool(cd, split="validation")   # held-out slice for fusion tuning
     # Scoring the full validation split is expensive; a random subsample is ample
@@ -945,8 +1010,8 @@ def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_compariso
         ks,
     )
     hybrid = add_tiebreak(_rank_fuse(base_raw, gnn_test_raw, w_gnn), pool)
-    # Oracle files are opened only after every deployable score and threshold has
-    # frozen; data below this boundary is evaluation-only.
+    # Deployable scores, caught-label fusion, threshold, and blend weight are
+    # frozen above. Hidden labels first affect oracle fusion/evaluation below.
     # Ceiling: tune on the MISSED-carrier oracle label. Not deployable; it shows
     # how much the caught-only tuning costs (the biased-proxy gap).
     w_gnn_oracle = _pick_fusion_weight(

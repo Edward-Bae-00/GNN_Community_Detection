@@ -94,7 +94,16 @@ def caught_feature_names(num_rel):
     )
 
 class RelationSAGEEncoder(torch.nn.Module):
-    """Encode typed person relations with relation-specific GraphSAGE convolutions."""
+    """Encode typed person relations with two relational graph-convolution layers.
+
+    ``in_dim`` is the node-feature width, ``hidden`` and ``out`` are the two
+    embedding widths, and ``num_relations`` defines the integer relation
+    vocabulary used by both ``RGCNConv`` layers.  ``forward`` accepts ``x``
+    shaped ``[N, in_dim]``, a ``[2, E]`` edge index, and an ``[E]`` relation
+    vector, returning ``[N, out]`` embeddings.  The encoder is an in-memory
+    PyTorch module; invalid relation IDs or tensor shapes fail in PyG, while
+    as-of edge filtering remains the caller/builder contract.
+    """
 
     def __init__(self, in_dim, hidden=32, out=32, num_relations=4):
         super().__init__()
@@ -108,7 +117,19 @@ class RelationSAGEEncoder(torch.nn.Module):
         return x
 
 def build_anchor_graph(obs_to_person, corpus_dir, include_assoc=False, include_plate=False):
-    """Build the legacy anchor graph retained for compatibility experiments."""
+    """Build the legacy anchor graph retained for compatibility experiments.
+
+    ``obs_to_person`` maps observed records to canonical IDs, ``corpus_dir``
+    supplies observed records and crossing events, ``include_assoc`` remains a
+    compatibility flag, and ``include_plate`` adds shared-plate relations and
+    their caught-hot variant.  The return value is an edge DataFrame with
+    ``u``, ``v``, ``avail_time``, and ``edge_type`` columns; timestamps represent
+    when the relation became available and are normalized by the typed builder.
+    The function reads but does not write corpus files, and callers must filter
+    returned edges strictly before each scoring time.  Missing mappings/source
+    columns or malformed timestamps surface as pandas/value errors; this legacy
+    constructor does not itself establish a canonical node universe.
+    """
     obs = pd.read_csv(corpus_dir / "observed_person_records.csv", usecols=["observed_person_record_id", "event_id", "event_timestamp_utc", "observed_residence_location_id"])
     obs["identity"] = obs["observed_person_record_id"].map(obs_to_person)
     obs = obs.dropna(subset=["identity"])
@@ -165,7 +186,19 @@ class _RGCN(torch.nn.Module):
         return self.head(z).squeeze(-1)
 
 def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=False):
-    """Build the typed person graph using only observable as-of relations."""
+    """Build the timestamped lifetime person graph on canonical oracle identities.
+
+    ``corpus_dir`` selects the synthetic corpus, ``substrate`` records the
+    caller's identity substrate, and ``include_plate`` enables the two shared-
+    plate relation types.  The return value is ``(edges, node_ids, node_feat)``:
+    a provenance-bearing DataFrame, sorted canonical identity IDs, and a
+    one-value feature vector per node.  The lifetime builder normalizes and
+    preserves availability timestamps for downstream filtering; it does not
+    claim that the returned lifetime edge frame is itself a row-time snapshot.
+    Canonical oracle identity mapping and unknown endpoints are validated, and
+    the caller must apply the strict daily ``avail_time < T`` filter before
+    scoring.  No files are written.
+    """
     from gnn.run_demo import _build_oracle
     corpus_dir = corpus_dir or C.CORPUS_DIR
     obs_to_person = _build_oracle(corpus_dir)
@@ -173,8 +206,8 @@ def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=
                            include_plate=include_plate)  # +SHARED_PLATE(_HOT) if include_plate
     rel_map = REL_PLATE if include_plate else REL
     e = e[e["edge_type"].isin(rel_map.keys())].copy()
-    # Relation timestamps are availability times: an edge at or after the scored
-    # row is excluded even when its underlying real-world event happened earlier.
+    # Availability timestamps are normalized and preserved for downstream
+    # strict as-of filtering.
     e["avail_time"] = pd.to_datetime(e["avail_time"], utc=True, errors="coerce")
     e = e[e["avail_time"].notna()].copy()
     e["rel"] = e["edge_type"].map(rel_map).astype(int)
@@ -302,7 +335,19 @@ def _edge_index_typed(edges, index):
 
 def train_rgcn(edges, node_ids, node_feat, labels, train_mask,
                *, seed=0, epochs=30, lr=1e-2, device="cpu"):
-    """Fit the relational encoder on labels available by the training cutoff."""
+    """Fit the relational encoder on the caller-supplied training mask and labels.
+
+    ``edges``, ``node_ids``, and ``node_feat`` define the typed graph; ``labels``
+    supplies per-node binary values; and ``train_mask`` selects the nodes used
+    by the weighted BCE loss.  ``seed``, ``epochs``, ``lr``, and ``device``
+    configure optimization (the current implementation constructs CPU tensors
+    and does not move them to ``device``).  The return value is an evaluation-mode
+    ``_RGCN`` module with logits for every node.  It mutates only model
+    parameters, writes no artifacts, and requires aligned nonempty supervision;
+    the caller enforces the label-availability cutoff and must not pass future
+    labels or graph state.  Invalid graph/label alignment or an empty mask may
+    raise from tensor construction or loss computation.
+    """
     torch.manual_seed(seed)
     index = {p: i for i, p in enumerate(node_ids)}
     x = _asof_x(node_ids, node_feat, edges)
@@ -324,7 +369,18 @@ def train_rgcn(edges, node_ids, node_feat, labels, train_mask,
     return model
 
 def asof_risk_rgcn(model, edges, node_ids, node_feat, rows):
-    """Score rows from graph state and caught labels available strictly as of each row time."""
+    """Score rows from graph edges available strictly before each row time.
+
+    ``model`` is a trained ``_RGCN``; ``edges`` is the lifetime typed edge frame
+    with UTC ``avail_time`` values; ``node_ids`` and ``node_feat`` define its
+    canonical node universe; and ``rows`` supplies UTC ``t`` plus ``person_id``.
+    The return value is a one-dimensional probability array aligned to
+    ``rows``.  Rows sharing a timestamp reuse one strict ``avail_time < t``
+    graph snapshot, and this function receives no caught-history input: caller
+    supplied ``node_feat`` must therefore not contain outcome or future state.
+    It performs no writes, sets the model to evaluation mode, and raises when
+    timestamps or node references cannot be aligned.
+    """
     index = {p: i for i, p in enumerate(node_ids)}
     out = np.zeros(len(rows))
     rows = rows.reset_index(drop=True)
@@ -332,6 +388,8 @@ def asof_risk_rgcn(model, edges, node_ids, node_feat, rows):
     model.eval()
     with torch.no_grad():
         for t, grp in rows.groupby("_t", sort=True):
+            # Strict as-of scoring excludes edges at or after T, even if their
+            # source event happened earlier.
             sub = edges[edges["avail_time"] < t]
             x = _asof_x(node_ids, node_feat, sub)
             ei, et = _edge_index_typed(sub, index)

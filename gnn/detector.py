@@ -8,7 +8,19 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
 
 def fit_predict(X_train, y_train, X_test, *, model="hgb", seed=42, sample_weight=None):
-    """Fit the tabular detector and return positive-class scores for validation and test rows."""
+    """Fit the tabular detector and return positive-class scores for the supplied rows.
+
+    ``X_train`` and ``y_train`` define the fitting matrix and binary labels;
+    ``X_test`` is the caller-supplied scoring matrix; ``model`` selects the
+    balanced histogram gradient booster or logistic pipeline; ``seed`` controls
+    the tree estimator; and optional ``sample_weight`` is passed to the chosen
+    estimator.  The return value is a one-dimensional ``float`` array containing
+    positive-class probabilities in ``X_test`` row order.  Fitting is in-memory
+    and writes no artifacts; unknown model names or estimator validation errors
+    propagate as ``ValueError``/scikit-learn errors.  Callers must provide only
+    features available at their fitting cutoff—this helper does not enforce
+    temporal or leakage policy itself.
+    """
     y = np.asarray(y_train).astype(int)
     if model == "hgb":
         clf = HistGradientBoostingClassifier(random_state=seed,

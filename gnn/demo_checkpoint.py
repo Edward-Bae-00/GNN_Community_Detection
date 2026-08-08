@@ -202,7 +202,16 @@ def _verify_checkpoint_closure(path, metadata):
 
 @dataclass(frozen=True)
 class WrittenDemoCheckpoint:
-    """Paths and identity metadata for a newly written checkpoint."""
+    """Paths and identity metadata for a newly written checkpoint.
+
+    ``checkpoint_id`` is the content-derived directory name and ``path`` is
+    the atomically published checkpoint directory containing metadata, model
+    tensors, and score arrays.  The frozen dataclass prevents reassignment of
+    the references, but callers should still treat the path as a verified
+    publication contract rather than mutating files behind it.  Writers only
+    return this record after hashes, array alignment, and checkpoint closure
+    checks pass.
+    """
 
     checkpoint_id: str
     path: Path
@@ -210,7 +219,17 @@ class WrittenDemoCheckpoint:
 
 @dataclass(frozen=True)
 class LoadedDemoCheckpoint:
-    """Validated models, scores, and metadata loaded from a checkpoint."""
+    """Validated models, scores, and metadata loaded from a checkpoint.
+
+    ``checkpoint_id`` and ``path`` identify the verified publication;
+    ``metadata`` records the run and corpus contract; ``models_by_seed`` and
+    the two score mappings hold evaluation-mode models and one-dimensional
+    floating score arrays; and the baseline/GNN event-ID arrays preserve row
+    alignment.  Mapping fields are read-only proxies and tensors/arrays are
+    reconstructed from hash-checked payloads, so the loader never trusts
+    unverified model or score content.  Incompatible metadata, shapes, dtypes,
+    hashes, or model registries raise ``ValueError`` before this record exists.
+    """
 
     checkpoint_id: str
     path: Path
@@ -371,7 +390,16 @@ def write_demo_checkpoint(
 
 
 def read_demo_checkpoint_metadata(checkpoint_path):
-    """Read checkpoint metadata without loading model tensors or score arrays."""
+    """Read checkpoint metadata without loading model tensors or score arrays.
+
+    ``checkpoint_path`` names a checkpoint directory; the return value is the
+    parsed JSON metadata mapping, after JSON decoding and basic object-shape
+    checks.  This is intentionally a metadata-only operation for callers that
+    need to inspect run identity or compatibility before loading models, and it
+    performs no publication or mutation.  Missing, malformed, or non-object
+    metadata raises ``ValueError`` so callers cannot silently continue with an
+    incomplete checkpoint.
+    """
     path = Path(checkpoint_path)
     try:
         metadata = json.loads((path / "metadata.json").read_text())

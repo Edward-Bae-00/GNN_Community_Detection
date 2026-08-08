@@ -1656,7 +1656,20 @@ def run_benchmark(
     preflight_runner: Callable | None = None,
     structural_runner: Callable | None = None,
 ):
-    """Measure schema-3 observability memory and publication behavior on the full graph."""
+    """Measure schema-3 observability memory and publication behavior on the full graph.
+
+    ``corpus_dir``, ``checkpoint_path``, and ``output_path`` identify the
+    canonical full-corpus inputs and JSON result; the injectable loaders,
+    component/explanation runners, publication estimator, instrumentation,
+    preflight runner, and structural runner support bounded tests and telemetry.
+    The return value is the validated benchmark result mapping, and the normal
+    path writes it atomically to ``output_path`` while emitting stage telemetry.
+    The verified context must use the production oracle checkpoint, but oracle
+    ground truth is restricted to retrospective benchmark/evidence work after
+    deployable checkpoint outputs are fixed.  Snapshot caches are released in
+    ``finally``; input/contract failures raise rather than publishing a partial
+    result.
+    """
     holder = {}
 
     def capturing_loader(*args):
@@ -1703,7 +1716,16 @@ def run_benchmark(
 
 
 def main(argv=None):
-    """Parse CLI arguments and run the giant observability benchmark."""
+    """Parse CLI arguments and run the giant observability benchmark.
+
+    ``argv`` optionally supplies the command-line vector; otherwise argparse
+    reads ``--corpus``, ``--checkpoint``, and ``--output`` from the process.
+    The function returns the benchmark result and prints its canonical JSON
+    representation, while ``run_benchmark`` owns atomic output publication and
+    cache cleanup.  Missing paths or production-contract violations surface as
+    parser or validation errors; this CLI does not alter deployable model
+    scores, thresholds, or feature construction.
+    """
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark the largest real Hybrid-only V9 explanation from a "
