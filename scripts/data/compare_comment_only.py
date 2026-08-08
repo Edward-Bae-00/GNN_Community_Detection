@@ -107,13 +107,21 @@ def compare(paths: list[str]) -> int:
         raise ValueError("no Python files found in requested paths")
 
     failures = 0
+    compared = len(working & head)
     for relative in sorted(working | head):
         current = root / relative
         if relative not in head:
-            print(f"{relative}: skipped new/nontracked file (no HEAD baseline)")
+            print(
+                f"{relative}: new/nontracked Python file has no HEAD baseline",
+                file=sys.stderr,
+            )
+            failures += 1
             continue
         if relative not in working:
-            print(f"{relative}: tracked HEAD file is missing from the working copy")
+            print(
+                f"{relative}: tracked HEAD file is missing from the working copy",
+                file=sys.stderr,
+            )
             failures += 1
             continue
         try:
@@ -130,10 +138,13 @@ def compare(paths: list[str]) -> int:
             )
             failures += 1
 
+    if compared == 0 and failures == 0:
+        print("no tracked Python files were compared", file=sys.stderr)
+        failures += 1
     if failures:
         print(f"comparison failed for {failures} file(s)", file=sys.stderr)
         return 1
-    print(f"comparison passed for {len(working & head)} tracked Python file(s)")
+    print(f"comparison passed for {compared} tracked Python file(s)")
     return 0
 
 
