@@ -37,6 +37,50 @@ def check(cond, msg):
     (INFO if cond else FAIL).append(("PASS" if cond else "FAIL") + ": " + msg)
 
 
+def _infer_observable_people(org_rows_by_person, event_rows):
+    """Infer V9 observable org members from the generator's raw memberships."""
+    org_by_person = {
+        person_id: row['org_id'] for person_id, row in org_rows_by_person.items()
+    }
+    dark_by_person = {
+        person_id: row['is_dark'] == 'true'
+        for person_id, row in org_rows_by_person.items()
+    }
+    observable_people = set()
+    vehicle_people = defaultdict(set)
+    carrier_people = defaultdict(set)
+
+    for row in event_rows:
+        primary = row['primary_person_id']
+        primary_org = org_by_person.get(primary)
+        if primary_org is None:
+            continue
+        cotravelers = list(filter(None, (row.get('co_traveler_person_ids') or '').split(';')))
+
+        for cotraveler in cotravelers:
+            if (
+                org_by_person.get(cotraveler) == primary_org
+                and not dark_by_person[primary]
+                and not dark_by_person[cotraveler]
+            ):
+                observable_people.add(primary)
+                observable_people.add(cotraveler)
+
+        if row.get('vehicle_id'):
+            for person_id in [primary, *cotravelers]:
+                person_org = org_by_person.get(person_id)
+                if person_org is not None:
+                    vehicle_people[(person_org, row['vehicle_id'])].add(person_id)
+        if row.get('carrier_id'):
+            carrier_people[(primary_org, row['carrier_id'])].add(primary)
+
+    for grouped_people in list(vehicle_people.values()) + list(carrier_people.values()):
+        non_dark_people = {person_id for person_id in grouped_people if not dark_by_person[person_id]}
+        if len(non_dark_people) >= 2:
+            observable_people.update(non_dark_people)
+    return observable_people
+
+
 def _run_validation() -> int:
     print(f"== Validating {DIR.name} ==")
 
@@ -151,26 +195,8 @@ def _run_validation() -> int:
               f"every org spans >=2 families ({cross_family}/{len(org_fam)})")
         check(total_dark > 0,
               f"dark (truly-linked-but-unfindable) members exist ({total_dark:,})")
-        observable_people = set()
-        vehicle_people = defaultdict(set)
-        carrier_people = defaultdict(set)
         with open(DIR/'crossing_events.csv', newline='', encoding='utf-8') as f:
-            for r in csv.DictReader(f):
-                primary = r['primary_person_id']
-                oid = p_org.get(primary)
-                if not oid:
-                    continue
-                for cotraveler in filter(None, (r.get('co_traveler_person_ids') or '').split(';')):
-                    if p_org.get(cotraveler) == oid:
-                        observable_people.add(primary)
-                        observable_people.add(cotraveler)
-                if r.get('vehicle_id'):
-                    vehicle_people[(oid, r['vehicle_id'])].add(primary)
-                if r.get('carrier_id'):
-                    carrier_people[(oid, r['carrier_id'])].add(primary)
-        for grouped_people in list(vehicle_people.values()) + list(carrier_people.values()):
-            if len(grouped_people) >= 2:
-                observable_people.update(grouped_people)
+            observable_people = _infer_observable_people(org_rows_by_person, csv.DictReader(f))
         bad_observable = sum(
             1
             for pid, r in org_rows_by_person.items()
