@@ -215,11 +215,11 @@ def evaluate_daily_simulated_catches(
 def add_tiebreak(scores, pool):
     """Add deterministic row-order jitter without changing rank meaningfully.
 
-    ``scores`` is the one-dimensional score vector and ``pool`` supplies the
-    aligned row count; the return value is a new floating array with a fixed
+    ``scores`` is the one-dimensional score vector and ``pool`` is an unused
+    compatibility context; the return value is a new floating array with a fixed
     seed's sub-nanounit jitter added in row order.  This breaks exact ties for
     stable ranking without materially changing score meaning or metrics, and it
-    writes no artifact.  Callers must preserve the same pool order and must not
+    writes no artifact.  Callers must preserve score order and must not
     use the jitter as a feature or as a replacement for an explicit cutoff.
     """
     rng = np.random.default_rng(42)
@@ -315,10 +315,11 @@ def stratum_for_pool(pool, corpus_dir):
     supplies the synthetic event and organization truth used to label each row
     ``observable``, ``dark``, or ``lone``.  The return value is a Series aligned
     to the pool index.  These strata are evaluation annotations, not deployable
-    features: oracle organization values must be joined only after score,
-    caught-label fusion, threshold, and weight choices are frozen.  Missing
-    identity columns are recovered by event alignment; malformed joins surface
-    as pandas errors, and no files are written.
+    features: oracle organization values may be materialized early for alignment,
+    but are retained exclusively for retrospective metrics and never flow into
+    deployable features, scores, caught-label fusion, threshold selection, or
+    blend-weight selection.  Missing identity columns are recovered by event
+    alignment; malformed joins surface as pandas errors, and no files are written.
     """
     if "primary_person_id" not in pool.columns:
         egt = pd.read_csv(corpus_dir / "event_ground_truth.csv", usecols=["event_id", "primary_person_id"])
@@ -340,9 +341,10 @@ def paired_event_bootstrap(a, b, hidden, ks, mask=None, n_boot=2000, seed=0):
     target vector, ``ks`` contains ranking depths, ``mask`` optionally restricts
     the target to one stratum, and ``n_boot``/``seed`` control resampling.  The
     return value maps ``found@k`` to mean, confidence interval, and one-sided
-    comparison summaries.  Sampling is paired by shared row index and writes no
-    artifacts; callers must pass frozen deployable scores and must keep hidden
-    labels in this post-freeze evaluation path.
+    comparison summaries.  Sampling is paired by shared row index and sized from
+    ``hidden``, not from a pool object, and writes no artifacts; callers must pass
+    frozen deployable scores and must keep hidden labels in this post-freeze
+    evaluation path.
     """
     rng = np.random.default_rng(seed)
     n = len(hidden)

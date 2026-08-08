@@ -126,9 +126,11 @@ def build_anchor_graph(obs_to_person, corpus_dir, include_assoc=False, include_p
     ``u``, ``v``, ``avail_time``, and ``edge_type`` columns; timestamps represent
     when the relation became available and are normalized by the typed builder.
     The function reads but does not write corpus files, and callers must filter
-    returned edges strictly before each scoring time.  Missing mappings/source
-    columns or malformed timestamps surface as pandas/value errors; this legacy
-    constructor does not itself establish a canonical node universe.
+    returned edges strictly before each scoring time.  Missing files or source
+    columns propagate the underlying file/pandas exceptions; unmapped observed
+    IDs are dropped, and malformed event or label timestamps are coerced to
+    ``NaT``.  This legacy constructor does not itself establish a canonical node
+    universe.
     """
     obs = pd.read_csv(corpus_dir / "observed_person_records.csv", usecols=["observed_person_record_id", "event_id", "event_timestamp_utc", "observed_residence_location_id"])
     obs["identity"] = obs["observed_person_record_id"].map(obs_to_person)
@@ -188,16 +190,17 @@ class _RGCN(torch.nn.Module):
 def build_person_graph_typed(corpus_dir=None, substrate="oracle", include_plate=False):
     """Build the timestamped lifetime person graph on canonical oracle identities.
 
-    ``corpus_dir`` selects the synthetic corpus, ``substrate`` records the
-    caller's identity substrate, and ``include_plate`` enables the two shared-
-    plate relation types.  The return value is ``(edges, node_ids, node_feat)``:
+    ``corpus_dir`` selects the synthetic corpus, ``substrate`` is an unused
+    compatibility input, and ``include_plate`` enables the two shared-plate
+    relation types.  The return value is ``(edges, node_ids, node_feat)``:
     a provenance-bearing DataFrame, sorted canonical identity IDs, and a
     one-value feature vector per node.  The lifetime builder normalizes and
     preserves availability timestamps for downstream filtering; it does not
     claim that the returned lifetime edge frame is itself a row-time snapshot.
-    Canonical oracle identity mapping and unknown endpoints are validated, and
-    the caller must apply the strict daily ``avail_time < T`` filter before
-    scoring.  No files are written.
+    The implementation always uses the canonical oracle identity mapping,
+    regardless of ``substrate``; unknown endpoints are validated, and the caller
+    must apply the strict daily ``avail_time < T`` filter before scoring.  No
+    files are written.
     """
     from gnn.run_demo import _build_oracle
     corpus_dir = corpus_dir or C.CORPUS_DIR
@@ -378,8 +381,9 @@ def asof_risk_rgcn(model, edges, node_ids, node_feat, rows):
     ``rows``.  Rows sharing a timestamp reuse one strict ``avail_time < t``
     graph snapshot, and this function receives no caught-history input: caller
     supplied ``node_feat`` must therefore not contain outcome or future state.
-    It performs no writes, sets the model to evaluation mode, and raises when
-    timestamps or node references cannot be aligned.
+    It performs no writes, sets the model to evaluation mode, coerces invalid row
+    timestamps to ``NaT`` (which grouping skips), and leaves unknown person IDs
+    at the initialized zero output.
     """
     index = {p: i for i, p in enumerate(node_ids)}
     out = np.zeros(len(rows))

@@ -1816,12 +1816,12 @@ def validate_schema3_artifact(artifact):
 
     ``artifact`` is the detached schema-3 mapping produced by the streaming
     publication path.  The function returns the same validated mapping after
-    checking policy/seed scope, overlap algebra, cohort counts, run and
-    as-of/corpus identities, pointer references, complete community evidence,
-    narrative grounding, and sidecar hash/byte-count closure.  It performs no
-    writes; malformed mappings raise ``ValueError``.  The validator treats the
-    schema-3 pointer as a durability boundary: deployable scores and selection
-    are already frozen, and oracle/evidence payloads are retrospective only.
+    checking policy/seed scope, overlap and score arithmetic, cohort and
+    selection coverage, run/as-of/corpus identities, detail/community/catalog
+    indexes, generation counters, and run-fingerprint material.  It performs no
+    writes; invalid mappings are rejected during these in-memory checks.  Durable
+    sidecar hashes, byte counts, and publication closure are outside this
+    validator and belong to ``RecoveryBundleWriter``.
     """
     if not isinstance(artifact, Mapping) or artifact.get("schema_version") != SCHEMA3:
         raise ValueError("invalid schema-3 observability artifact version")
@@ -2371,7 +2371,8 @@ def serialize_artifact(
     ``failures``, ``communities``, and ``community_keys_by_case`` supply the
     selected cohorts and inline evidence; ``seed_level_unique_person_recovery``
     records the seed-level diagnostic; and keyword ``seeds``, ``blend_weight``,
-    ``inspections_per_day``, and ``explanation_limit`` preserve the run policy.
+    and ``inspections_per_day`` preserve the run policy.  ``explanation_limit``
+    is accepted as an unused compatibility input.
     The return value is a JSON-compatible schema-2 mapping with inline
     explanations and communities plus coverage diagnostics.  Inputs must
     already be frozen and aligned; missing case/community keys or inconsistent

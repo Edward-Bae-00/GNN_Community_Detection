@@ -94,8 +94,11 @@ def build_baseline_features(rows: pd.DataFrame, corpus_dir, obs_to_identity):
     ``(n_rows, 14)`` floating-point matrix plus the ordered feature-name list.
     Prior crossings and outcome counts use only events strictly before each
     row and only labels whose availability timestamp is also strictly before
-    that row.  The function reads corpus CSVs but does not write artifacts,
-    and raises on malformed timestamps or missing required source columns.
+    that row.  The function reads corpus CSVs but does not write artifacts.
+    Corpus timestamps are coerced to ``NaT``, and history rows missing a
+    resolved identity or event time are dropped; malformed requested-row times
+    can fail during per-row timestamp conversion.  Missing files or source/row
+    columns propagate their native file, pandas, or indexing exceptions.
     """
     hist = _asof_history(corpus_dir, obs_to_identity)
     ctx = _event_context(corpus_dir)

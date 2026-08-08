@@ -396,9 +396,11 @@ def read_demo_checkpoint_metadata(checkpoint_path):
     parsed JSON metadata mapping, after JSON decoding and basic object-shape
     checks.  This is intentionally a metadata-only operation for callers that
     need to inspect run identity or compatibility before loading models, and it
-    performs no publication or mutation.  Missing, malformed, or non-object
-    metadata raises ``ValueError`` so callers cannot silently continue with an
-    incomplete checkpoint.
+    performs no publication or mutation.  Missing or unreadable metadata files
+    are wrapped as ``ValueError`` from their file or JSON-decoding exceptions;
+    unsupported schema versions and invalid checkpoint IDs also raise
+    ``ValueError``.  A decoded non-object JSON value can instead surface its
+    native ``AttributeError`` during mapping validation.
     """
     path = Path(checkpoint_path)
     try:

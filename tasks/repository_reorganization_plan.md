@@ -1358,6 +1358,7 @@ rtk git commit -m "docs: synchronize the V9-first repository layout"
 **Files:**
 
 - Create: `scripts/data/compare_comment_only.py`
+- Create: `tests/test_compare_comment_only.py`
 - Create: `tests/test_gnn_documentation.py`
 - Modify: all `gnn/*.py`
 
@@ -1407,75 +1408,21 @@ def test_public_top_level_gnn_apis_have_docstrings(package):
 
 - [ ] **Step 2: Add a comment-only AST comparator**
 
-Create `scripts/data/compare_comment_only.py` with:
+Create `scripts/data/compare_comment_only.py` as a fail-closed repository-aware
+comparator. It must resolve requested paths beneath the Git root, recursively
+inventory working-tree and tracked-HEAD Python files, and compare their
+attribute-free ASTs after recursively removing only body-leading module, class,
+function, and async-function docstrings. Compare the union of both inventories
+so new/untracked files and tracked deletions fail instead of disappearing from
+the check. Reject outside-repository, missing, non-Python, empty-inventory,
+syntax-error, read-error, and Git-error cases with a nonzero result, and report
+the exact number of tracked Python files compared on success.
 
-```python
-#!/usr/bin/env python3
-"""Compare working-tree Python with HEAD after removing all docstrings."""
-from __future__ import annotations
-
-import argparse
-import ast
-import subprocess
-from pathlib import Path
-
-
-DOCSTRING_OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
-
-
-class StripDocstrings(ast.NodeTransformer):
-    """Remove leading string expressions that Python treats as docstrings."""
-
-    def generic_visit(self, node):
-        node = super().generic_visit(node)
-        if isinstance(node, DOCSTRING_OWNERS) and node.body:
-            first = node.body[0]
-            if (
-                isinstance(first, ast.Expr)
-                and isinstance(first.value, ast.Constant)
-                and isinstance(first.value.value, str)
-            ):
-                node.body = node.body[1:]
-        return node
-
-
-def normalized(source: str) -> str:
-    """Return an attribute-free AST dump after stripping docstrings."""
-    tree = StripDocstrings().visit(ast.parse(source))
-    ast.fix_missing_locations(tree)
-    return ast.dump(tree, include_attributes=False)
-
-
-def compare(path: Path) -> bool:
-    """Return whether one working-tree file differs from its HEAD logic."""
-    relative = path.as_posix()
-    baseline = subprocess.run(
-        ["git", "show", f"HEAD:{relative}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return normalized(baseline) != normalized(path.read_text())
-
-
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("paths", nargs="+", type=Path)
-    args = parser.parse_args(argv)
-    changed = []
-    for supplied in args.paths:
-        candidates = supplied.glob("*.py") if supplied.is_dir() else (supplied,)
-        changed.extend(path.as_posix() for path in candidates if compare(path))
-    if changed:
-        print("logic changed:\n" + "\n".join(sorted(changed)))
-        return 1
-    print("comment/docstring-only AST comparison passed")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-```
+Create `tests/test_compare_comment_only.py` with hermetic temporary Git
+repositories. Cover nested docstring-only edits, nested executable changes,
+new Python files, tracked deletions (including a directly requested deleted
+path), syntax errors, outside-repository paths, and directories with no
+comparable Python files.
 
 - [ ] **Step 3: Run the active documentation contract to verify it fails**
 
@@ -1617,8 +1564,11 @@ Run before committing:
 ```bash
 rtk /Users/edward/Desktop/GNN_Community_Detection/.venv/bin/python \
   scripts/data/compare_comment_only.py gnn
-rtk /Users/edward/Desktop/GNN_Community_Detection/.venv/bin/python -m pytest -q \
-  tests/test_gnn_documentation.py -k active \
+rtk /Users/edward/Desktop/GNN_Community_Detection/.venv/bin/python -m pytest \
+  -p no:cacheprovider tests/test_gnn_documentation.py -q -k active
+rtk /Users/edward/Desktop/GNN_Community_Detection/.venv/bin/python -m pytest \
+  -p no:cacheprovider -q \
+  tests/test_compare_comment_only.py \
   tests/test_demo_baseline.py \
   tests/test_df_graphmodel_rgcn.py \
   tests/test_run_demo_smoke.py \
@@ -1636,7 +1586,7 @@ Run:
 
 ```bash
 rtk git add gnn scripts/data/compare_comment_only.py \
-  tests/test_gnn_documentation.py
+  tests/test_compare_comment_only.py tests/test_gnn_documentation.py
 rtk git commit -m "docs: document active GNN invariants and APIs"
 ```
 
