@@ -128,6 +128,16 @@ against the frozen diagnostic, the architecture comparison, and the published
 checkpoint metadata by `tests/test_v9_release_provenance.py`. Changing the
 experimental defaults does not change what `release` replays.
 
+`release` writes to the ignored `gnn/diagnostics/demo_comparison_v9_release.json`,
+never to the committed `demo_comparison_v9.json`, so verifying a rebuild cannot
+overwrite the pinned artifact you are checking against. Use `--out-name` to
+choose a different filename.
+
+A full three-seed replay takes roughly three hours on CPU. A same-machine run
+reproduced the committed artifact to within 0.0014 absolute on every recall
+depth, with the baseline arm bit-identical; the GNN arm varies in the fourth
+decimal from ordinary float non-determinism in training.
+
 ## Run tests
 
 ```bash

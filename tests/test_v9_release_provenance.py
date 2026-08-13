@@ -195,4 +195,45 @@ def test_release_subcommand_runs_the_published_settings_not_the_defaults():
     finally:
         run_demo.main = original
 
-    assert captured == dict(run_demo.PUBLISHED_RELEASE)
+    assert {k: captured[k] for k in run_demo.PUBLISHED_RELEASE} == dict(
+        run_demo.PUBLISHED_RELEASE
+    )
+
+
+def test_release_never_overwrites_the_committed_frozen_diagnostic():
+    from gnn import run_demo
+
+    captured = {}
+    original = run_demo.main
+    run_demo.main = lambda **kwargs: captured.update(kwargs)
+    try:
+        run_demo._cli(["release"])
+    finally:
+        run_demo.main = original
+
+    # The frozen diagnostic is tracked; a verification run must not clobber it.
+    assert captured["out_name"] == run_demo.RELEASE_OUT_NAME
+    assert captured["out_name"] != DEMO_ARTIFACT.name
+    assert run_demo.RELEASE_OUT_NAME != DEMO_ARTIFACT.name
+
+    # And the default output must not be a tracked file.
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", f"gnn/diagnostics/{run_demo.RELEASE_OUT_NAME}"],
+        cwd=ROOT,
+        check=False,
+    )
+    assert result.returncode == 0, "release output must land on an ignored path"
+
+
+def test_release_out_name_is_overridable():
+    from gnn import run_demo
+
+    captured = {}
+    original = run_demo.main
+    run_demo.main = lambda **kwargs: captured.update(kwargs)
+    try:
+        run_demo._cli(["release", "--out-name", "custom_run.json"])
+    finally:
+        run_demo.main = original
+
+    assert captured["out_name"] == "custom_run.json"

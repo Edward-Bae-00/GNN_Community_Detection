@@ -909,6 +909,11 @@ PUBLISHED_RELEASE = {
     "valid_sample": 20000,
 }
 
+# Where `release` writes by default.  Deliberately NOT demo_comparison_v9.json:
+# that file is tracked and pinned by the provenance tests, so a verification
+# run must not overwrite it.  This name stays on an ignored diagnostics path.
+RELEASE_OUT_NAME = "demo_comparison_v9_release.json"
+
 
 def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_comparison_v9.json",
          epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS,
@@ -1390,10 +1395,11 @@ def _cli(argv=None):
 
     parser = argparse.ArgumentParser(prog="gnn.run_demo")
     subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser(
+    release = subparsers.add_parser(
         "release",
         help="replay the exact settings that produced the published artifacts",
     )
+    release.add_argument("--out-name", default=RELEASE_OUT_NAME)
     observability = subparsers.add_parser(
         "observability",
         help="generate recovery observability from a verified checkpoint",
@@ -1410,7 +1416,7 @@ def _cli(argv=None):
     observability.add_argument("--baseline-control-limit", type=int, default=10)
     args = parser.parse_args(argv)
     if args.command == "release":
-        return main(**PUBLISHED_RELEASE)
+        return main(out_name=args.out_name, **PUBLISHED_RELEASE)
     if args.command != "observability":
         return main()
     return resume_observability(
