@@ -8,6 +8,7 @@ has produced `dashboard_data.json`.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
@@ -50,6 +51,9 @@ V9_UNSUPERVISED_ARTIFACT = "unsupervised_ad_results_v9.json"
 GENERIC_UNSUPERVISED_ARTIFACT = "unsupervised_ad_results.json"
 V9_CORPUS_NAME = "synthetic_cbp_graph_corpus_v9"
 V9_GNN_ARCHITECTURE_IDS = ("sage", "rgcn", "gat", "gin", "kpiaa")
+V9_GNN_ARCHITECTURE_RELEASE_SHA256 = (
+    "d4b5d349532ca949f11a3c1df59f27b4323189e06ae6099d7310dac3fc7ad35a"
+)
 OUT_DIR = os.fspath(V9_DASHBOARD_PATH)
 
 
@@ -448,7 +452,9 @@ def _validate_daily_metrics(metrics, daily_ks, hidden_total, pool_size, path):
             raise ValueError(f"{path}.daily_found_by_day@{k} does not sum to daily_found@{k}")
 
 
-def _validate_v9_gnn_architecture_artifact(artifact):
+def _validate_v9_gnn_architecture_artifact(
+    artifact, *, allow_pinned_legacy_corpus_identity=False
+):
     """Validate the producer's schema locally without importing model code."""
     if not isinstance(artifact, dict):
         raise ValueError("artifact must be an object")
@@ -472,7 +478,10 @@ def _validate_v9_gnn_architecture_artifact(artifact):
     identity = artifact["corpus_identity"]
     if not Path(identity).is_absolute() or str(Path(identity).resolve()) != identity:
         raise ValueError("corpus_identity must be an absolute normalized resolved path")
-    if os.path.realpath(identity) != os.path.realpath(V9_CORPUS):
+    if (
+        os.path.realpath(identity) != os.path.realpath(V9_CORPUS)
+        and not allow_pinned_legacy_corpus_identity
+    ):
         raise ValueError("artifact corpus_identity does not match V9 corpus")
     if artifact["seeds"] != [0, 1, 2]:
         raise ValueError("artifact seeds must be exactly [0, 1, 2]")
@@ -558,10 +567,23 @@ def _load_v9_gnn_architecture_artifact(path):
         p(f"[v9-dashboard] WARNING: GNN architecture comparison {path} not found.")
         return None
     try:
-        with open(path) as handle:
-            artifact = json.load(handle, object_pairs_hook=_reject_duplicate_json_keys)
-        _validate_v9_gnn_architecture_artifact(artifact)
-    except (OSError, json.JSONDecodeError, RecursionError, TypeError, ValueError) as error:
+        raw = Path(path).read_bytes()
+        raw_digest = hashlib.sha256(raw).hexdigest()
+        artifact = json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
+        _validate_v9_gnn_architecture_artifact(
+            artifact,
+            allow_pinned_legacy_corpus_identity=(
+                raw_digest == V9_GNN_ARCHITECTURE_RELEASE_SHA256
+            ),
+        )
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as error:
         p(f"[v9-dashboard] WARNING: invalid GNN architecture comparison: {error}")
         return None
     return artifact

@@ -896,6 +896,20 @@ def _train_pool_and_labels(corpus_dir, train_cutoff):
     )
 
 
+# Settings that produced the published V9 release artifacts.  ``main`` keeps
+# its own experimental defaults (30 epochs, monthly buckets) so ordinary runs
+# are unaffected; the ``release`` subcommand replays exactly the configuration
+# recorded in the frozen ``demo_comparison_v9.json``, the architecture
+# comparison, and the published checkpoint metadata.
+PUBLISHED_RELEASE = {
+    "seeds": (0, 1, 2),
+    "epochs": 18,
+    "train_bucket": "Q",
+    "gnn_arm": "sage",
+    "valid_sample": 20000,
+}
+
+
 def main(corpus_dir=None, seeds=(0, 1, 2), n_boot=2000, out_name="demo_comparison_v9.json",
          epochs=30, train_bucket="M", ks=KS, daily_ks=DAILY_KS,
          simulated_daily_ks=SIMULATED_DAILY_KS, gnn_arm="sage",
@@ -1366,7 +1380,9 @@ def resume_observability(
 def _cli(argv=None):
     """Run the demo, or generate observability from a verified checkpoint.
 
-    Bare invocation keeps the documented `python -m gnn.run_demo` behavior.
+    Bare invocation keeps the documented `python -m gnn.run_demo` behavior
+    with its experimental defaults.  The `release` subcommand instead replays
+    `PUBLISHED_RELEASE`, the configuration behind the committed artifacts.
     The `observability` subcommand is the only entry point that can request
     the balanced schema-3 workspace, which is why it defaults to `3.0`.
     """
@@ -1374,6 +1390,10 @@ def _cli(argv=None):
 
     parser = argparse.ArgumentParser(prog="gnn.run_demo")
     subparsers = parser.add_subparsers(dest="command")
+    subparsers.add_parser(
+        "release",
+        help="replay the exact settings that produced the published artifacts",
+    )
     observability = subparsers.add_parser(
         "observability",
         help="generate recovery observability from a verified checkpoint",
@@ -1389,6 +1409,8 @@ def _cli(argv=None):
     observability.add_argument("--hybrid-detail-limit", type=int, default=20)
     observability.add_argument("--baseline-control-limit", type=int, default=10)
     args = parser.parse_args(argv)
+    if args.command == "release":
+        return main(**PUBLISHED_RELEASE)
     if args.command != "observability":
         return main()
     return resume_observability(

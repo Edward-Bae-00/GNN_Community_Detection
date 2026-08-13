@@ -179,6 +179,22 @@ def _canonical_json(value) -> bytes:
     ).encode("utf-8")
 
 
+def _verify_corpus_compatibility(metadata, corpus_dir):
+    """Verify corpus content against the checkpoint, independent of location.
+
+    The checkpoint records ``corpus.identity`` (the absolute path the release
+    was produced from) purely as provenance, and that string is inside the
+    hash preimage of ``checkpoint_id`` -- so it cannot be rewritten without
+    invalidating the published checkpoint.  Compatibility is decided by the
+    per-file content fingerprints alone, which lets a downloaded corpus be
+    replayed from any location while any CSV mutation still fails closed.
+    """
+    actual = corpus_fingerprints(corpus_dir)
+    if metadata.get("corpus", {}).get("fingerprints") != actual:
+        raise ValueError("corpus fingerprints do not match checkpoint metadata")
+    return actual
+
+
 def _load_verified_context(corpus_dir, checkpoint_path) -> BenchmarkContext:
     _stage_log("context_start")
     corpus_dir = Path(corpus_dir).resolve()
@@ -194,12 +210,7 @@ def _load_verified_context(corpus_dir, checkpoint_path) -> BenchmarkContext:
         raise ValueError(
             "checkpoint path identity does not match checkpoint metadata"
         )
-    recorded_corpus = Path(metadata.get("corpus", {}).get("identity", ""))
-    if recorded_corpus.resolve() != corpus_dir:
-        raise ValueError("corpus path identity does not match checkpoint metadata")
-    actual_fingerprints = corpus_fingerprints(corpus_dir)
-    if metadata.get("corpus", {}).get("fingerprints") != actual_fingerprints:
-        raise ValueError("corpus fingerprints do not match checkpoint metadata")
+    actual_fingerprints = _verify_corpus_compatibility(metadata, corpus_dir)
     _stage_log("checkpoint_metadata_verified")
 
     pool = load_pool(corpus_dir)
@@ -226,7 +237,6 @@ def _load_verified_context(corpus_dir, checkpoint_path) -> BenchmarkContext:
             "valid_sample": run["valid_sample"],
             "gnn_arm": run["gnn_arm"],
             "substrate": run["substrate"],
-            "corpus_identity": str(corpus_dir),
             "corpus_fingerprints": actual_fingerprints,
             "feature_schema": {
                 "baseline": list(FEATURE_NAMES),

@@ -125,19 +125,29 @@ not allowed to see future catches, hidden org labels, or lifetime outcomes.
 
 ## Current Results
 
-The canonical V9 result log is `docs/research/changes_3.md`, and its historical
-measured summaries are authoritative. The published 5/10/25 dashboard uses
-the committed frozen reproducibility input
-`gnn/diagnostics/demo_comparison_v9.json`. All other files under
-`gnn/diagnostics/` are generated and ignored, including `demo_smoke.json`,
-`unsupervised_ad_results.json`, the preferred
-`unsupervised_ad_results_v9.json`, and `gnn_architecture_comparison_v9.json`.
-The unsupervised producer emits both unsupervised filenames, while the
-dashboard prefers the corpus-qualified `unsupervised_ad_results_v9.json`; both
-are generated and ignored. The unsupervised result uses Isolation Forest to
-model each border region's definition of "normal"; the architecture comparison
-is an expensive separate run. Neither generated output should be treated as a
-versioned source of published measurements.
+The canonical V9 result log is `docs/research/changes_3.md`.
+GraphSAGE remains the active runtime default; the committed 40,578-row RGCN architecture artifact is frozen-artifact verifiable, not exactly retrainable.
+The current demo diagnostic is the committed
+`gnn/diagnostics/demo_comparison_v9.json`. The committed
+`gnn/diagnostics/gnn_architecture_comparison_v9.json` is the current
+architecture comparison artifact; no RGCN checkpoint or score arrays survive.
+
+The current cross-artifact RGCN reference is:
+
+| K | Baseline recall | RGCN found | RGCN recall |
+| ---: | ---: | ---: | ---: |
+| 500 | 0.0149 | 144 | 0.0535 |
+| 2,000 | 0.0710 | 538 | 0.1999 |
+| 5,000 | 0.1557 | 1,030 | 0.3828 |
+
+The Baseline values come from the demo artifact and the RGCN values from the
+architecture artifact; old bootstrap significance is not transferred. The
+38,948-row RGCN-era table in `changes_3.md` is explicitly historical evidence
+with its artifact unavailable. Other files under `gnn/diagnostics/` remain
+generated and ignored, including `demo_smoke.json`, `unsupervised_ad_results.json`,
+and the preferred `unsupervised_ad_results_v9.json`. The unsupervised producer
+emits both unsupervised filenames, while the dashboard prefers the
+corpus-qualified file; both are generated and ignored.
 
 Regenerate local diagnostics when needed:
 
@@ -147,24 +157,27 @@ python -m gnn.unsupervised_ad
 python -m gnn.gnn_architecture_bakeoff  # optional; expensive separate run
 ```
 
+`python -m gnn.run_demo` uses the current experimental defaults (30 epochs,
+monthly buckets). The committed artifacts were produced with seeds `0/1/2`,
+18 epochs, and quarterly buckets; replay that exact configuration with
+`python -m gnn.run_demo release`.
+
 Full-scale V9 result summary from `docs/research/changes_3.md`:
 
-- Corpus: 120K persons / 200K events.
-- Test pool: 38,948 events.
+- Corpus: 120K persons / 200K events; current test pool: 40,578 events.
+- The historical 38,948-row RGCN-era run remains available only as labeled
+  historical evidence in `docs/research/changes_3.md`.
 - Hidden carriers: 2,691 total, including 708 observable, 234 dark, and 1,749
   lone.
 - Demo graph relations: 113,293 `COTRAVEL`, 169,315 `RESIDENCE`, 14,385
   `SHARED_PLATE`, and 5,355 `SHARED_PLATE_HOT`.
-- At operational depth, the GNN recovers about 2.3-2.9x more hidden carriers
-  than the strong tabular baseline on whole-pool recall, with decisive paired
-  bootstrap results for K >= 500.
-- On the observable/findable slice, the GNN recovers nearly all findable hidden
-  carriers by K=5000 in the logged full run.
+- Current RGCN whole-pool recalls are 0.0535, 0.1999, and 0.3828 at K=500,
+  2,000, and 5,000; these are frozen artifact fields, not a retraining claim.
 
 Important caveats:
 
-- Top-K is a wash at K <= 100; the baseline can pick off obvious repeat
-  offenders using own-history features.
+- The current cross-artifact RGCN comparison has no paired-bootstrap inference;
+  the historical K<=100 wash statement is not transferred to the current release.
 - The GNN win is concentrated in the connected subpopulation. Lone and dark
   carriers have little or no relational signal.
 - Co-travel is the load-bearing rail. Tests now assert that co-travel reaches
@@ -243,11 +256,11 @@ model claims.
   smoke runs.
 
 After a fresh clone is hydrated with Git LFS, the dashboard can render canonical
-corpus content plus the committed schema-3 explanation evidence. The generated
-demo, anomaly-ranking, and GNN-architecture sections may be absent or sparse
-until their ignored diagnostics are regenerated with the commands above. The
-HTML snapshot is versioned through Git LFS, while its generated data and
-recovery sidecars remain ignored.
+corpus content plus the committed schema-3 explanation evidence and the current
+architecture comparison release input. Only generated anomaly-ranking and
+other local diagnostic sections may be absent or sparse until regenerated with
+the commands above. The HTML snapshot is versioned through Git LFS, while its
+generated data and recovery sidecars remain ignored.
 
 Rebuild the current dashboard after generating any desired local diagnostics:
 

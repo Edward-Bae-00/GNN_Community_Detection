@@ -43,6 +43,20 @@ def _committed_dashboard_data():
     return json.loads(match.group(1))
 
 
+def test_committed_dashboard_embeds_real_rgcn_architecture_artifact():
+    artifact = json.loads(
+        (ROOT / "gnn/diagnostics/gnn_architecture_comparison_v9.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    embedded = _committed_dashboard_data()["v9GNNArchitectureComparison"]
+    assert embedded == artifact
+    rgcn = embedded["architectures"]["rgcn"]["ensemble"]
+    assert rgcn["overall"]["found@500"] == 144
+    assert rgcn["overall"]["recall@2000"] == 0.1999
+    assert rgcn["daily"]["daily_found@25"] == 1129
+
+
 def test_committed_dashboard_embeds_published_daily_budget_contract():
     demo = _committed_dashboard_data()["v9Demo"]
 
@@ -1603,6 +1617,25 @@ def test_load_v9_data_rejects_duplicate_architecture_identifier_json(
     assert "v9GNNArchitectureComparison" not in data
     assert data["unrelated"] == preserved["unrelated"]
     assert "duplicate" in capsys.readouterr().out.lower()
+
+
+def test_loader_accepts_exact_pinned_architecture_with_legacy_corpus_identity():
+    path = ROOT / "gnn/diagnostics/gnn_architecture_comparison_v9.json"
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    assert Path(artifact["corpus_identity"]).resolve() != Path(BUILDER.V9_CORPUS).resolve()
+    loaded = BUILDER._load_v9_gnn_architecture_artifact(str(path))
+    assert loaded == artifact
+
+
+def test_loader_rejects_semantically_unchanged_reencoding_of_legacy_artifact(tmp_path, capsys):
+    source = ROOT / "gnn/diagnostics/gnn_architecture_comparison_v9.json"
+    artifact = json.loads(source.read_text(encoding="utf-8"))
+    rewritten = tmp_path / source.name
+    rewritten.write_text(json.dumps(artifact, separators=(",", ":")), encoding="utf-8")
+    assert rewritten.read_bytes() != source.read_bytes()
+    loaded = BUILDER._load_v9_gnn_architecture_artifact(str(rewritten))
+    assert loaded is None
+    assert "corpus_identity does not match V9 corpus" in capsys.readouterr().out
 
 
 def test_load_v9_data_warns_and_continues_for_deeply_nested_invalid_json(

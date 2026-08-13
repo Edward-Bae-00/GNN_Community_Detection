@@ -712,3 +712,24 @@ Durable decisions and deviations from the written plan:
   `a43d2b63ea43058d503ce0c3043636462b6564b1ee97fa06f3ad2567b5604066`.
   Never rebuild or version release HTML from the canonical-corpus K=5 fallback;
   verify this diagnostic hash and the embedded `[5, 10, 25]` contract first.
+
+## 2026-08-12: current RGCN release evidence boundary
+
+- GraphSAGE remains the active V9 runtime default. Current RGCN measurements
+  come from the 40,578-row `gnn_architecture_comparison_v9.json` artifact,
+  SHA-256 `d4b5d349532ca949f11a3c1df59f27b4323189e06ae6099d7310dac3fc7ad35a`;
+  it is frozen-artifact verifiable, not exactly retrainable, because no RGCN
+  checkpoint or score arrays survive.
+- Baseline/RGCN is cross-artifact sharing only the tested logical corpus,
+  oracle substrate, pool/hidden counts, strata, seeds, epochs, and bucket.
+  The older 38,948-row table is historical and unrecoverable; its significance
+  must not transfer to the current release.
+- Dashboard legacy identity is accepted only for the exact pinned digest;
+  re-encoding is rejected. Active and bundled trees have 11 AST-identical core
+  modules, nine divergences pinned on both sides by normalized AST SHA, and
+  active-only `paths.py`. The old “documentation-only proof” phrase refers
+  only to within-tree preservation and is not evidence of cross-tree equality;
+  the historical entry remains unchanged.
+- The regenerated dashboard index embeds the artifact and has SHA-256
+  `bb61a1ddb22f2ed908677ac0c851893167aae67917895707878ba6aa0f46d4b5`.
+  The known 19/20 exact Hybrid-explanation limitation remains.

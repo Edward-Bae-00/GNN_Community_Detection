@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -271,6 +272,193 @@ def test_data_guide_describes_active_graphsage_rank_fusion_arm():
         "optional RGCN model",
     ):
         assert required_phrase in guide
+
+
+def _contains_artifact_contradiction(text: str) -> bool:
+    normalized = " ".join(text.split())
+    contradiction_context = (
+        r"(?:architecture(?:\s+comparison)?|rgcn|dashboard\s+(?:payload|data)|"
+        r"release\s+input|(?:comparison\s+)?artifact)"
+    )
+    contradiction = (
+        r"(?:absent|ignored|generated(?:[-\s]+(?:only|and[-\s]+ignored))?|"
+        r"(?:needs?|requires?|requiring)\s+regeneration|cannot\s+render)"
+    )
+    protected = re.sub(
+        rf"(?i)\bnot\s+{contradiction}\b", "", normalized
+    )
+    return re.search(
+        rf"(?i)(?:{contradiction_context})[^.!?]{{0,120}}{contradiction}"
+        rf"|{contradiction}[^.!?]{{0,120}}(?:{contradiction_context})",
+        protected,
+    ) is not None
+
+
+@pytest.mark.parametrize(
+    ("text", "is_contradiction"),
+    (
+        ("The architecture artifact is not ignored.", False),
+        ("The release input is not generated-only.", False),
+        ("The artifact is not requiring regeneration.", False),
+        ("The architecture artifact is absent.", True),
+        ("The architecture artifact is ignored.", True),
+        ("The release input is generated-only.", True),
+        ("The release input is generated-and-ignored.", True),
+        ("The release input is generated and ignored.", True),
+        ("The release input is not generated-and-ignored.", False),
+        ("The release input is not unrelated and ignored.", True),
+        ("The dashboard payload requires regeneration.", True),
+        ("The comparison artifact cannot render.", True),
+        ("The architecture\nartifact is not ignored.", False),
+    ),
+)
+def test_artifact_contradiction_probe_is_negation_aware(
+    text: str, is_contradiction: bool
+):
+    assert _contains_artifact_contradiction(text) is is_contradiction
+
+
+def test_results_docs_publish_current_rgcn_and_preserve_historical_table():
+    changes = (REPOSITORY_ROOT / "docs/research/changes_3.md").read_text(
+        encoding="utf-8"
+    )
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    guide = (REPOSITORY_ROOT / "docs/data/DATA_GUIDE.md").read_text(
+        encoding="utf-8"
+    )
+    current_marker = "### Current artifact-backed RGCN result (40,578-row release)"
+    historical_marker = (
+        "### Historical RGCN-era result (38,948-row run; artifact unavailable)"
+    )
+    assert current_marker in changes
+    assert historical_marker in changes
+    current_start = changes.index(current_marker)
+    historical_start = changes.index(historical_marker)
+    assert current_start < historical_start
+    historical_tail = changes[historical_start + len(historical_marker) :]
+    next_result_heading = re.search(r"^#{1,3}\s+", historical_tail, re.MULTILINE)
+    assert next_result_heading is not None
+    current = changes[current_start + len(current_marker) : historical_start]
+    historical = historical_tail[: next_result_heading.start()]
+
+    def table_rows(section: str, header: str) -> list[str]:
+        lines = section.splitlines()
+        header_index = lines.index(header)
+        assert re.fullmatch(r"\|\s*:?-+:?\s*\|.*", lines[header_index + 1])
+        rows = []
+        for line in lines[header_index + 2 :]:
+            if not line.startswith("|"):
+                break
+            rows.append(line)
+        return rows
+
+    assert table_rows(
+        current, "| K | Baseline recall | RGCN found | RGCN recall |"
+    ) == [
+        "| 500 | 0.0149 | 144 | 0.0535 |",
+        "| 2,000 | 0.0710 | 538 | 0.1999 |",
+        "| 5,000 | 0.1557 | 1,030 | 0.3828 |",
+    ]
+    assert table_rows(
+        historical, "| K | baseline R@K | GNN R@K | GNN found − base (p) |"
+    ) == [
+        "| 500  | 0.039 | 0.056 | +49  (p=0) |",
+        "| 2000 | 0.091 | **0.261** | +455 (p=0) |",
+        "| 5000 | 0.175 | **0.403** | +609 (p=0) |",
+    ]
+
+    current_normalized = " ".join(current.split())
+    for required_phrase in (
+        "gnn/diagnostics/demo_comparison_v9.json",
+        "gnn/diagnostics/gnn_architecture_comparison_v9.json",
+        "corpus logical name, oracle substrate, pool=40,578, hidden=2,691, strata 708/234/1749, seeds 0/1/2, epochs18, Q bucket",
+        "d4b5d349532ca949f11a3c1df59f27b4323189e06ae6099d7310dac3fc7ad35a",
+        "no checkpoint or score arrays",
+        "cross-artifact comparison",
+        "GraphSAGE remains the active runtime default",
+        "frozen-artifact verifiable, not exactly retrainable",
+    ):
+        assert required_phrase in current_normalized
+    assert "p=0" not in current_normalized
+    assert (
+        "No p-values or bootstrap significance transfer from the historical run."
+        in current_normalized
+    )
+
+    required_sentence = (
+        "GraphSAGE remains the active runtime default; the committed 40,578-row "
+        "RGCN architecture artifact is frozen-artifact verifiable, not exactly retrainable."
+    )
+    diagnostic_paths = (
+        "gnn/diagnostics/demo_comparison_v9.json",
+        "gnn/diagnostics/gnn_architecture_comparison_v9.json",
+    )
+    readme_evidence = readme.split("## Current V9 evidence", 1)[1].split(
+        "## Repository layout", 1
+    )[0]
+    guide_results = guide.split("## Current Results", 1)[1].split(
+        "## Data Realism And Interdiction Rates", 1
+    )[0]
+    for document, evidence in ((readme, readme_evidence), (guide, guide_results)):
+        normalized = " ".join(document.split())
+        evidence_normalized = " ".join(evidence.split())
+        assert required_sentence in normalized
+        assert (
+            "current demo diagnostic is the committed "
+            "`gnn/diagnostics/demo_comparison_v9.json`"
+        ) in evidence_normalized
+        assert (
+            "`gnn/diagnostics/gnn_architecture_comparison_v9.json` is the current "
+            "architecture comparison artifact"
+        ) in evidence_normalized
+        assert "38,948-row" in document
+        assert "historical" in normalized.lower()
+        assert "artifact unavailable" in normalized.lower()
+
+    assert table_rows(
+        guide_results, "| K | Baseline recall | RGCN found | RGCN recall |"
+    ) == [
+        "| 500 | 0.0149 | 144 | 0.0535 |",
+        "| 2,000 | 0.0710 | 538 | 0.1999 |",
+        "| 5,000 | 0.1557 | 1,030 | 0.3828 |",
+    ]
+    dashboard_diagnostics = guide.split(
+        "## Dashboard And Explorer Artifacts", 1
+    )[1].split("## Current Regression Coverage", 1)[0]
+    dashboard_normalized = " ".join(dashboard_diagnostics.split())
+    assert (
+        "After a fresh clone is hydrated with Git LFS, the dashboard can render "
+        "canonical corpus content plus the committed schema-3 explanation evidence "
+        "and the current architecture comparison release input."
+    ) in dashboard_normalized
+    assert not _contains_artifact_contradiction(dashboard_normalized)
+
+    readme_normalized = " ".join(readme.split())
+    guide_normalized = " ".join(guide.split())
+    changes_normalized = " ".join(changes.split())
+    assert "V8 is historical honest-track context only." in readme
+    assert "V8 remains important because it is the honest, realistic track. V9 does not replace it." in guide_normalized
+    assert "graph edges and caught labels used for a row are available before that row's time `T`" in readme_normalized
+    assert "Edges and caught labels are only used when available strictly before the scoring time." in guide_normalized
+    assert "V8 remains historical context; its corpus is absent from the organized checkout." in changes_normalized
+    assert "strict as-of fail-closed behavior" in changes_normalized
+    assert "degraded 19-of-20 archive and is not fully passing or coverage-gated." in readme_normalized
+
+
+def test_current_results_guide_does_not_transfer_historical_top_k_inference():
+    guide = (REPOSITORY_ROOT / "docs" / "data" / "DATA_GUIDE.md").read_text(
+        encoding="utf-8"
+    )
+    current_results = guide.split("## Current Results", 1)[1].split(
+        "## Data Realism And Interdiction Rates", 1
+    )[0]
+    normalized = " ".join(current_results.split())
+    assert "Top-K is a wash at K <= 100;" not in normalized
+    assert (
+        "The current cross-artifact RGCN comparison has no paired-bootstrap inference; "
+        "the historical K<=100 wash statement is not transferred to the current release."
+        in normalized
+    )
 
 
 def _python_files(package_root: Path) -> list[Path]:

@@ -7,6 +7,16 @@ from gnn.demo_baseline import build_baseline_features, FEATURE_NAMES
 from gnn.paths import V9DEV_CORPUS_DIR
 
 CD = V9DEV_CORPUS_DIR
+EXPECTED_GRAPH_FREE_BASELINE_FEATURES = [
+    "prior_crossings", "prior_secondary", "prior_seizure", "prior_arrests",
+    "hour", "age_bucket", "sex", "citizenship_country", "residence_country",
+    "region", "mode_of_transportation", "travel_category",
+    "declared_trip_purpose", "day_of_week",
+]
+
+
+def test_graph_free_baseline_has_an_independent_exact_feature_allowlist():
+    assert FEATURE_NAMES == EXPECTED_GRAPH_FREE_BASELINE_FEATURES
 
 
 def test_realistic_baseline_shape_and_asof_counts():

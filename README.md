@@ -33,6 +33,16 @@ recover more hidden carriers at operational depth when relational signal is
 actually present; it does not claim that V9 supersedes the historical V8
 honest-track caveat.
 
+## Current V9 evidence
+
+GraphSAGE remains the active runtime default; the committed 40,578-row RGCN architecture artifact is frozen-artifact verifiable, not exactly retrainable.
+The current demo diagnostic is the committed `gnn/diagnostics/demo_comparison_v9.json`; the committed
+`gnn/diagnostics/gnn_architecture_comparison_v9.json` is the current
+architecture comparison artifact; no RGCN checkpoint or score arrays survive.
+The 38,948-row RGCN-era table in `docs/research/changes_3.md` is
+clearly labeled historical evidence with its artifact unavailable; its old
+significance claims do not transfer to the current release.
+
 ## Repository layout
 
 ```text
@@ -94,12 +104,29 @@ python -m gnn.run_demo
 
 Results are written to the generated `gnn/diagnostics/` tree. The published
 5/10/25 dashboard rebuild uses the committed frozen diagnostic
-`gnn/diagnostics/demo_comparison_v9.json`; other diagnostics remain generated
-and ignored. To use an intentional compatible override:
+`gnn/diagnostics/demo_comparison_v9.json`; the committed architecture
+comparison is a separate current RGCN evidence input, while other diagnostics
+remain generated and ignored. To use an intentional compatible override:
 
 ```bash
 CBP_CORPUS_DIR=/path/to/compatible/corpus python -m gnn.run_demo
 ```
+
+### Reproduce the published release
+
+The bare command above runs the current experimental defaults (30 epochs,
+monthly training buckets), which are deliberately *not* the settings behind the
+committed artifacts. To replay exactly what produced them — seeds `0/1/2`,
+18 epochs, quarterly buckets, GraphSAGE — use:
+
+```bash
+python -m gnn.run_demo release
+```
+
+Those settings are pinned as `gnn.run_demo.PUBLISHED_RELEASE` and are asserted
+against the frozen diagnostic, the architecture comparison, and the published
+checkpoint metadata by `tests/test_v9_release_provenance.py`. Changing the
+experimental defaults does not change what `release` replays.
 
 ## Run tests
 
@@ -159,11 +186,18 @@ Colab shell/magic cell:
 ```
 
 The notebook installs the requirements, prepares local runtime storage, verifies
-the checkpoint/corpus identity, starts Ollama, validates the exact
-`gemma4:12b` tag, and runs `run_schema3_observability.py`. Keep the corpus,
-checkpoint, SQLite/catalog scratch, and generated output on local storage
-during the run; Drive FUSE is too slow for hot writes. The Colab-local `/content`
-sequence above is also the manual runner path.
+the checkpoint closure and the corpus content fingerprints, starts Ollama,
+validates the exact `gemma4:12b` tag, and runs
+`run_schema3_observability.py`. Keep the corpus, checkpoint, SQLite/catalog
+scratch, and generated output on local storage during the run; Drive FUSE is
+too slow for hot writes. The Colab-local `/content` sequence above is also the
+manual runner path.
+
+The runner replays the corpus packaged with the handoff in place, wherever that
+handoff is unpacked — checkpoint compatibility is decided by the per-file
+content fingerprints recorded in the checkpoint, not by the absolute path the
+release was produced from. Pass `--corpus-dir` to point at a different copy;
+any CSV mutation still fails closed.
 
 The committed archive can be verified and used without rerunning Colab. A
 Colab rerun is only needed to reproduce or replace the evidence artifact.
@@ -192,6 +226,15 @@ under `artifacts/v9/dashboard/`, including `data_v9.json` and recovery
 sidecars, remain generated and ignored. Serve the directory over HTTP so
 sidecar-backed pages can fetch their data.
 
+On a fresh clone the builder reproduces the committed `index.html` byte for
+byte from the committed frozen diagnostics alone. It warns that no
+unsupervised AD artifact was found and that the anomaly-ranking tab will be
+sparse — that is the expected state, because the unsupervised artifacts are
+generated and ignored, and the committed snapshot was built without them.
+Running `python -m gnn.unsupervised_ad` first populates that tab and therefore
+produces a *different* `index.html`; rebuild from a clean diagnostics tree when
+you intend to reproduce the committed bytes.
+
 ## Research papers
 
 The seven Git LFS-backed papers are:
@@ -207,7 +250,8 @@ The seven Git LFS-backed papers are:
 ## Generated and local-only files
 
 Generated diagnostics under `gnn/diagnostics/`, except for the committed
-frozen `demo_comparison_v9.json`, extracted explanation trees under
+frozen `demo_comparison_v9.json` and current
+`gnn_architecture_comparison_v9.json`, extracted explanation trees under
 `artifacts/v9/explanations/extracted/`, dashboard data and recovery sidecars
 under `artifacts/v9/dashboard/`, Python caches, pytest caches, and local
 scratch/log files are ignored or local-only. The generated dashboard HTML

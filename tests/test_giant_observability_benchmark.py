@@ -1566,3 +1566,48 @@ def test_case_community_materializes_communityscope_target_local_view(monkeypatc
         SimpleNamespace(community=lambda person_id, day: dict_view), case
     )
     assert passthrough is dict_view
+
+
+def _portable_corpus(root):
+    """Write a byte-identical canonical corpus tree at an arbitrary location."""
+    corpus = Path(root) / "synthetic_cbp_graph_corpus_v9"
+    corpus.mkdir(parents=True)
+    (corpus / "persons.csv").write_text("person_id\nP-1\n", encoding="utf-8")
+    (corpus / "labels.csv").write_text("event_id,label\nE-1,0\n", encoding="utf-8")
+    return corpus
+
+
+def test_corpus_verification_accepts_relocated_corpus_with_identical_bytes(tmp_path):
+    from gnn.demo_checkpoint import corpus_fingerprints
+    from gnn.giant_observability_benchmark import _verify_corpus_compatibility
+
+    recorded = _portable_corpus(tmp_path / "recorded")
+    metadata = {
+        "corpus": {
+            "identity": str(recorded),
+            "fingerprints": corpus_fingerprints(recorded),
+        }
+    }
+    relocated = _portable_corpus(tmp_path / "relocated")
+
+    fingerprints = _verify_corpus_compatibility(metadata, relocated)
+
+    assert fingerprints == metadata["corpus"]["fingerprints"]
+
+
+def test_corpus_verification_rejects_mutated_csv_at_any_location(tmp_path):
+    from gnn.demo_checkpoint import corpus_fingerprints
+    from gnn.giant_observability_benchmark import _verify_corpus_compatibility
+
+    recorded = _portable_corpus(tmp_path / "recorded")
+    metadata = {
+        "corpus": {
+            "identity": str(recorded),
+            "fingerprints": corpus_fingerprints(recorded),
+        }
+    }
+    relocated = _portable_corpus(tmp_path / "relocated")
+    (relocated / "persons.csv").write_text("person_id\nP-2\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="corpus fingerprints"):
+        _verify_corpus_compatibility(metadata, relocated)

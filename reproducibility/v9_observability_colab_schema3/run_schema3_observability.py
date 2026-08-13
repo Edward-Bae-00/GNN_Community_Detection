@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Run the fixed V9 schema-3 observability producer in Colab.
 
-The checkpoint records the original absolute corpus path as part of its
-identity.  Colab therefore receives a local copy at that exact path before
-the normal checkpoint loader is called.  Hot files stay on local scratch;
-``--export-dir`` is only touched after the final artifact validates.
+The packaged corpus is replayed in place from wherever this handoff is
+unpacked: checkpoint compatibility is decided by the per-file content
+fingerprints, not by the absolute path the release happened to be produced
+from.  Hot files stay on local scratch; ``--export-dir`` is only touched
+after the final artifact validates.
 """
 from __future__ import annotations
 
@@ -22,10 +23,7 @@ from pathlib import Path
 CHECKPOINT_ID = (
     "17d5ee9fe23234ab33b0ba33e36800ab21bd25101b32ff51bb787b259e4f3c52"
 )
-RECORDED_CORPUS = Path(
-    "/Users/edward/Desktop/GNN_Community_Detection/Documents/Data/"
-    "synthetic_cbp_graph_corpus_v9"
-)
+CORPUS_NAME = "synthetic_cbp_graph_corpus_v9"
 
 
 def _package_root() -> Path:
@@ -46,18 +44,13 @@ def _atomic_json(path: Path, payload: object) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _ensure_recorded_corpus(source: Path, target: Path) -> Path:
+def _resolve_corpus(source: Path) -> Path:
     source = Path(source).resolve()
-    target = Path(target)
     if not source.is_dir():
         raise FileNotFoundError(f"package corpus is missing: {source}")
-    if target.exists():
-        if not target.is_dir():
-            raise ValueError(f"recorded corpus path is not a directory: {target}")
-        return target.resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, target)
-    return target.resolve()
+    if source.name != CORPUS_NAME:
+        raise ValueError(f"corpus directory must be named {CORPUS_NAME}: {source}")
+    return source
 
 
 def _sha256(path: Path) -> str:
@@ -488,10 +481,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="local Colab scratch root, never a Drive FUSE path",
     )
     parser.add_argument(
-        "--recorded-corpus",
+        "--corpus-dir",
         type=Path,
-        default=RECORDED_CORPUS,
-        help="must remain the absolute path recorded by the checkpoint",
+        default=None,
+        help=(
+            "corpus to replay; defaults to the copy packaged with this "
+            "handoff. Any location works as long as the file contents match "
+            "the checkpoint fingerprints"
+        ),
     )
     parser.add_argument(
         "--export-dir",
@@ -543,12 +540,13 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint = (
         package_root / "checkpoint" / CHECKPOINT_ID
     ).resolve()
-    source_corpus = (
-        package_root / "corpus" / "synthetic_cbp_graph_corpus_v9"
-    ).resolve()
     if checkpoint.name != CHECKPOINT_ID or not checkpoint.is_dir():
         raise FileNotFoundError(f"verified checkpoint is missing: {checkpoint}")
-    recorded_corpus = _ensure_recorded_corpus(source_corpus, args.recorded_corpus)
+    corpus = _resolve_corpus(
+        args.corpus_dir
+        if args.corpus_dir is not None
+        else package_root / "corpus" / CORPUS_NAME
+    )
 
     output = work_root / "hybrid_recovery_explanations_v9.json"
     progress = work_root / "progress.json"
@@ -557,13 +555,13 @@ def main(argv: list[str] | None = None) -> int:
         {
             "stage": "inputs_ready",
             "checkpoint": str(checkpoint),
-            "recorded_corpus": str(recorded_corpus),
+            "corpus": str(corpus),
             "hybrid_detail_limit": args.hybrid_detail_limit,
             "baseline_control_limit": args.baseline_control_limit,
         },
     )
     print(f"checkpoint={checkpoint}", flush=True)
-    print(f"recorded_corpus={recorded_corpus}", flush=True)
+    print(f"corpus={corpus}", flush=True)
     print(f"output={output}", flush=True)
 
     from gnn.run_demo import resume_observability
@@ -572,7 +570,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         artifact = resume_observability(
             checkpoint,
-            corpus_dir=recorded_corpus,
+            corpus_dir=corpus,
             observability_out_name=output,
             schema_version="3.0",
             hybrid_detail_limit=args.hybrid_detail_limit,

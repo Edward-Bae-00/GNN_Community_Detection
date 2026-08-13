@@ -4,10 +4,10 @@
 baseline-vs-GNN demonstration built on it. It is a **separate track** from the
 honest V5–V8 work. The historical `changes_2.md` V8 note was intentionally
 removed from this checkout. Nothing here changes the V8 findings.
-Headline: on the designed
-V9 corpus the GNN catches **2.3–2.9× more hidden carriers at operational depth** than a
-strong 14-feature tabular baseline (p=0 for K≥500), via as-of guilt-by-association — a wash
-only at the razor top (K≤100). See Results.
+Headline: the committed 40,578-row architecture artifact reports the current RGCN
+measurements for the V9 positive-control comparison; GraphSAGE remains the active
+runtime default. The older 38,948-row RGCN-era table is preserved as historical
+evidence, not current generated output. See Results.
 
 ## 2026-08-06: evidence-first explanation graph
 
@@ -209,6 +209,41 @@ and the focused source suite passed before the full run.
 
 This observability block is explicitly single-seed diagnostics. It does not
 replace or alter any three-seed V9 headline metric.
+
+### Current artifact-backed RGCN result (40,578-row release)
+
+GraphSAGE remains the active runtime default. The current RGCN measurements come
+from the committed architecture-only artifact
+`gnn/diagnostics/gnn_architecture_comparison_v9.json` (SHA-256
+`d4b5d349532ca949f11a3c1df59f27b4323189e06ae6099d7310dac3fc7ad35a`). It records
+the logical V9 corpus, oracle substrate, pool=40,578, hidden=2,691, strata
+708/234/1749, seeds 0/1/2, epochs18, and Q bucket.
+
+The Baseline reference below comes separately from the committed frozen
+`gnn/diagnostics/demo_comparison_v9.json`; the architecture run did not refit
+the Baseline. The exact shared fields are corpus logical name, oracle substrate, pool=40,578, hidden=2,691, strata 708/234/1749, seeds 0/1/2, epochs18, Q bucket. This is a cross-artifact comparison: baseline recalls are from the demo
+artifact, while RGCN values are exact frozen architecture fields. The
+RGCN JSON contains no checkpoint or score arrays, so it is frozen-artifact
+verifiable, not exactly retrainable. No p-values or bootstrap significance
+transfer from the historical run.
+
+| K | Baseline recall | RGCN found | RGCN recall |
+| ---: | ---: | ---: | ---: |
+| 500 | 0.0149 | 144 | 0.0535 |
+| 2,000 | 0.0710 | 538 | 0.1999 |
+| 5,000 | 0.1557 | 1,030 | 0.3828 |
+
+On the 708-person observable slice, RGCN found 111, 407, and 700 at those
+depths (recall 0.1568, 0.5749, and 0.9887). At 25 inspections/day it recorded
+1,129 found, precision 0.1654, recall 0.4195, and F1 0.2373.
+
+### Historical RGCN-era result (38,948-row run; artifact unavailable)
+
+The following table and interpretation are preserved verbatim as historical
+research evidence. No matching corpus fingerprint, result JSON, checkpoint,
+score arrays, or complete invocation survived, so these values are not a
+current reproducibility claim and must not be combined with the 40,578-row
+release.
 
 Full-scale V9 (120K persons / 200K events), oracle-identity substrate (shared by both
 arms, so ER is not the variable), 3 seeds, paired-event bootstrap (1,500 resamples),
@@ -492,9 +527,12 @@ Suite after the change: 830 passed, 1 skipped.
 
 The standalone command `.venv/bin/python -m gnn.gnn_architecture_bakeoff` resolved
 the full-V9 configuration: seeds `0/1/2`, 18 epochs, `train_bucket='Q'`, global
-`K=50/100/200/500/1000/2000/5000`, and daily `K=5/10/25/50`. It wrote
-the ignored local `gnn/diagnostics/gnn_architecture_comparison_v9.json`; no
-Baseline or Hybrid arm was executed or written by this command.
+`K=50/100/200/500/1000/2000/5000`, and daily `K=5/10/25/50`. Its selected output
+is now the committed `gnn/diagnostics/gnn_architecture_comparison_v9.json`, pinned
+by SHA-256
+`d4b5d349532ca949f11a3c1df59f27b4323189e06ae6099d7310dac3fc7ad35a`. No Baseline
+or Hybrid arm was executed or written by this command, and no RGCN checkpoint or
+score arrays survive for exact retraining.
 
 The full artifact validated five arms: GraphSAGE, full-graph RGCN, GAT attention,
 GIN, and KPI-AA approximation. At global K=500, whole-pool and observable
