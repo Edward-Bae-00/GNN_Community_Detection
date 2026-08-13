@@ -148,6 +148,38 @@ LFS payloads are hydrated.
 
 ## Run schema-3 observability in Colab
 
+> **Hardware disclaimer — RAM is the binding constraint.**
+>
+> Regenerating the explanation evidence is the only part of this repository
+> with a real hardware floor. Everything else — the test suite, the dashboard
+> rebuild, verifying the committed archive — runs comfortably on an ordinary
+> laptop.
+>
+> Measured figures from the giant-benchmark run behind the committed artifact
+> (checkpoint `17d5ee9f`, 120,000 nodes / 2,639,472 typed edges, largest
+> Hybrid-only community 6,952 nodes):
+>
+> - **Peak resident memory ~5.2 GiB** for the producer, and only because
+>   per-scoring-day snapshots are released as it goes. Without that release the
+>   run OOMs (exit 137).
+> - A **16 GiB machine is not enough**: a 16 GiB Mac reached roughly 7 GiB
+>   resident plus 2.8 GiB of swap before publication and had to be abandoned.
+>   Treat **32 GiB as the practical minimum**, which is why the instructions
+>   below specify a high-RAM Colab runtime.
+> - The narrative stage additionally loads `gemma4:12b` through Ollama, about
+>   **8.1 GiB on top** of the producer's own footprint.
+> - Disk: the handoff package is ~1.4 GB (almost all corpus), and the run needs
+>   local scratch for the recovery bundle on top of that.
+>
+> **On GPUs.** The scoring path genuinely does not need one — there is no CUDA
+> path in the package and it scores from a verified checkpoint rather than
+> training. The *narrative* stage is a different story: `gemma4:12b` on CPU was
+> measured at 4.8 tokens/s, taking 179.6s on a real fact packet against a
+> hardcoded 180s timeout (`explanation_narrative.py`). That is a 0.4s margin,
+> and a single timeout degrades the case to a narrative fallback, which the
+> post-run coverage gate then rejects for the whole export. Use a GPU runtime
+> for the narrative stage unless you intend to pass `--allow-shortfall`.
+
 The handoff package is
 `reproducibility/v9_observability_colab_schema3/`. Upload that whole directory
 to `MyDrive/v9_observability_colab_schema3`, open a high-RAM Colab runtime, and

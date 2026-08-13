@@ -16,10 +16,21 @@ The production policy is:
 
 1. Upload this whole `v9_observability_colab_schema3` folder to
    `MyDrive/v9_observability_colab_schema3` (~1.4 GB, almost all corpus).
-2. Open a **high-RAM** runtime. A GPU is *not* required and only costs compute
-   units: there is no CUDA path in this package (the sole device reference is
-   `device="cpu"` in `gnn/graphmodel_rgcn.py`) and this path scores from a
-   verified checkpoint rather than training. RAM is the real constraint.
+2. Open a **high-RAM** runtime. RAM is the binding constraint: peak resident
+   memory is ~5.2 GiB for the producer (and only because per-day snapshots are
+   released as it goes; without that release it OOMs with exit 137), plus
+   ~8.1 GiB for `gemma4:12b`. A 16 GiB machine is not enough — a 16 GiB Mac
+   reached ~7 GiB resident plus 2.8 GiB swap before publication. Treat 32 GiB
+   as the practical minimum.
+
+   **Scoring** needs no GPU: there is no CUDA path in this package (the sole
+   device reference is `device="cpu"` in `gnn/graphmodel_rgcn.py`) and this
+   path scores from a verified checkpoint rather than training. The
+   **narrative** stage is different. `gemma4:12b` on CPU was measured at
+   4.8 tokens/s, taking 179.6s on a real fact packet against the hardcoded
+   180s timeout — a 0.4s margin. One timeout degrades that case to a narrative
+   fallback, which the post-run coverage gate then rejects for the whole
+   export unless you pass `--allow-shortfall`. Prefer a GPU runtime.
 3. Open `v9_schema3_observability.ipynb` and run all cells. Run all
    automatically replaces only the VM-local
    `/content/v9_observability_colab_schema3` copy before copying from Drive.
